@@ -1,0 +1,87 @@
+# ── 全局配置 ──────────────────────────────────────────────
+cosmos:
+  # ── 日志系统 ──────────────────────────────────────────
+  logger:
+    debug: true                        # 全局调试模式
+    level: debug                       # 日志级别: debug/info/warning/error
+    structured: false                  # 是否启用 JSON 结构化日志
+    console:
+      color: true                      # 控制台彩色输出
+      enabled: true                    # 启用控制台日志
+    file:
+      enabled: true                    # 启用文件日志
+      path: data/logs/cosmos.log       # 日志文件路径
+      max_bytes: 10485760              # 单文件最大字节数（10MB）
+      backup_count: 30                 # 保留备份文件数
+      buffer_size: 100                 # 缓冲行数
+      flush_interval: 5.0              # 刷新间隔（秒）
+      max_queue_size: 10000            # 异步队列最大长度
+      rotate: session                  # 轮转策略: session/date/size
+      when: midnight                   # 按日轮转触发时间
+
+  # ── 服务配置 ──────────────────────────────────────────
+  service:
+    # ── GRAG 图记忆系统 ────────────────────────────────
+    grag:
+      enabled: true                    # 启用记忆系统
+      auto_extract: true               # 自动提取五元组
+      context_length: 10               # 上下文窗口长度
+      similarity_threshold: 0.7        # 语义相似度阈值（0-1）
+      neo4j:
+        uri: bolt://localhost:7687      # Neo4j 连接地址
+        user: neo4j                     # 用户名
+        password: Aliya_neo4j           # 密码
+        database: neo4j                 # 数据库名
+      extractor:
+        max_retries: 2                 # 五元组提取最大重试次数
+        timeout: 30                    # 提取超时（秒）
+      task_manager:
+        max_workers: 3                 # 并发工作协程数
+        max_queue_size: 100            # 任务队列最大长度
+        task_timeout: 30               # 单任务超时（秒）
+        auto_cleanup_hours: 24         # 自动清理已完成任务的间隔（小时）
+
+    # ── LLM 大语言模型 ────────────────────────────────
+    llm:
+      providers:
+        name: deepseek                 # 当前使用的提供商名
+        config_path: data/config/LLMProviders.json  # 提供商配置文件
+      history_max_chars: 90000         # 消息历史字符数阈值，超限时移除最旧消息
+
+    # ── TTS 语音合成 ──────────────────────────────────
+    tts:
+      providers:
+        name: astra                    # 当前使用的提供商名
+        config_path: data/config/TTSProviders.json   # 提供商配置文件
+      voice:
+        languages: [zh, en]            # 支持的语言列表
+        speed: 1.0                     # 语速倍率（0.5-2.0）
+      service:
+        prefetch_queue_size: 16        # 预取队列大小（分段数）
+        max_concurrent_creates: 10     # 最大并发创建会话数
+      player:
+        sample_rate: 32000             # 采样率（Hz）
+        channels: 1                    # 声道数（1=单声道）
+        pcm_format: float32            # PCM 格式
+        frames_per_buffer: 1024        # 缓冲区帧数
+        play_queue_size: 32            # 播放队列大小（段数）
+        queue_timeout: 300.0           # 播放队列超时（秒）
+
+    # ── Agent 引擎 ────────────────────────────────────
+    agent:
+      ws_server:
+        host: 127.0.0.1               # WebSocket 监听地址
+        port: 8765                     # WebSocket 监听端口
+        timeout: 60                    # 接收消息超时（秒，须大于心跳间隔）
+        reconnect_timeout: 120         # 断连后会话保留时间（秒），超时后清理
+      loop:
+        max_turns: null                # 最大对话轮数（null=无限）
+      grag:
+        enabled: true                  # 启用记忆检索/存储
+        top_k: 5                       # 检索返回记忆条数
+      tools:
+        timeout_seconds: 120           # 工具执行超时（秒，0=无限制）
+      brain:
+        max_iterations: 5              # Brain 多轮推理最大轮数
+      log:
+        level: INFO                    # Agent 模块日志级别
