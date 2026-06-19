@@ -59,10 +59,11 @@ data/            ← 配置文件和数据目录
 - `skills/` — 可扩展的 Skill 行为指令目录
 
 **core/llm — LLM 服务**
-- `service.py` — `ConversationService` 管理对话生命周期、自动消息历史管理、指数退避重试（最多 3 次）、上下文注入机制（`set_context_injection`）
+- `service.py` — `ConversationService` 管理对话生命周期、自动消息历史管理（`history_max_chars` 控制字符数阈值）、指数退避重试（最多 3 次）、上下文注入机制（`set_context_injection`）
 - `providers/` — 多提供商支持：`OllamaProvider`、`DeepSeekProvider`、`LMStudioProvider`、`OpenAICompatibleProvider`
 - `cache.py` / `cache_backend.py` — 对话上下文缓存
 - `models.py` — `ChatRequest`、`ChatResponse`、`ConversationContext`、`Message` 数据模型
+- `config_validator.py` — 配置合法性校验（必需字段、key 范围）
 
 **core/tts — TTS 语音服务**
 - `service.py` — `TTSService` 语音合成服务，支持预取队列
@@ -79,7 +80,7 @@ data/            ← 配置文件和数据目录
 - `task_manager.py` — 异步任务管理器，支持并发五元组提取
 
 **core/config — 配置管理**
-- `manager.py` — `ConfigManager` 从 YAML 加载配置，支持点路径读写（`get("cosmos.service.llm.max_tokens")`）和热重载
+- `manager.py` — `ConfigManager` 从 YAML 加载配置，支持点路径读写（`get("cosmos.service.llm.history_max_chars")`）和热重载
 
 **docker/**  
 - `compose.yml` — 编排 Neo4j（图谱数据库）和 AstraTTS（自建 TTS 服务）

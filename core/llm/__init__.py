@@ -58,7 +58,12 @@ def create_service(
     _cache = cache or ContextCache()
 
     if system_prompt_file is not None:
-        system_prompt = Path(system_prompt_file).read_text(encoding="utf-8")
+        try:
+            system_prompt = Path(system_prompt_file).read_text(encoding="utf-8")
+        except FileNotFoundError:
+            raise ProviderNotFoundError(
+                f"系统提示词文件不存在: {system_prompt_file}"
+            )
 
     return ConversationService(
         provider=provider,

@@ -124,12 +124,14 @@ class OpenAICompatibleProvider(LLMProvider):
                 stream_options={"include_usage": True},
                 **self._filter_extra(request.extra),
             ) as stream:
+                content_len = 0
                 async for chunk in stream:
                     token = chunk.choices[0].delta.content if chunk.choices else ""
                     if token:
+                        content_len += len(token)
                         yield token
                 usage = extract_openai_usage(await stream.get_final_usage())
-                self._log_response("stop", 0, usage, stream=True)
+                self._log_response("stop", content_len, usage, stream=True)
         except OPENAI_COMMON_EXCEPTIONS as exc:
             raise LLMRequestError(
                 provider=self.provider_name,
