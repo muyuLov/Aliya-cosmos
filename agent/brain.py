@@ -54,7 +54,7 @@ class BrainEngine:
     async def __aenter__(self) -> Self:
         return self
 
-    async def __aexit__(self, *_: object) -> None:
+    async def __aexit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
         await self.aclose()
 
     async def aclose(self) -> None:
@@ -69,7 +69,7 @@ class BrainEngine:
         tool_results: str = "",
     ) -> AgentResponse:
         t_start = time.monotonic()
-        self._conversation_service.reset_usage()
+        await self._conversation_service.reset_usage()
 
         skill_text = self._build_skill_text(user_input)
         memory_context = self._merge_tool_results(memory_context, tool_results)
@@ -102,7 +102,7 @@ class BrainEngine:
                 except Exception:
                     logger.exception("Brain 第%d轮 LLM 调用失败", i + 1)
                     if pending_agent_tools:
-                        return AgentResponse("我遇到了一些问题，让我重新想想……", pending_agent_tools, **_usage(self))
+                        return AgentResponse("我遇到了一些问题，让我重新想想……", pending_agent_tools, **await _usage(self))
                     raise
 
                 round_ms = (time.monotonic() - t_round) * 1000
@@ -110,7 +110,7 @@ class BrainEngine:
                 if not response.tool_calls:
                     logger.info("Brain 第%d轮 完成 | tools=none | reply=%.60s | %dms",
                                 i + 1, response.reply_text, round_ms)
-                    return AgentResponse(response.reply_text, pending_agent_tools, **_usage(self))
+                    return AgentResponse(response.reply_text, pending_agent_tools, **await _usage(self))
 
                 has_internal = any(
                     tc.tool_name in self._internal_tools for tc in response.tool_calls
@@ -121,12 +121,12 @@ class BrainEngine:
                     current_signature = compute_tool_signature(external)
                     if prev_tool_signature == current_signature and external:
                         logger.warning("Brain 检测到循环工具调用 | signature=%s", current_signature[:100])
-                        return AgentResponse("我需要重新考虑一下这个问题……", [], **_usage(self))
+                        return AgentResponse("我需要重新考虑一下这个问题……", [], **await _usage(self))
                     prev_tool_signature = current_signature
                     pending_agent_tools.extend(external)
                     logger.info("Brain 第%d轮 完成 | tools=%s | reply=%.60s | %dms",
                                 i + 1, [tc.tool_name for tc in external], response.reply_text, round_ms)
-                    return AgentResponse(response.reply_text, pending_agent_tools, **_usage(self))
+                    return AgentResponse(response.reply_text, pending_agent_tools, **await _usage(self))
 
                 await self._execute_internal_tools(response, pending_agent_tools, injected_counts)
 
@@ -141,7 +141,7 @@ class BrainEngine:
                            self._max_iterations,
                            [tc.tool_name for tc in pending_agent_tools],
                            total_ms)
-            return AgentResponse("让我再想想……", pending_agent_tools, **_usage(self))
+            return AgentResponse("让我再想想……", pending_agent_tools, **await _usage(self))
 
         finally:
             # 内部工具（如 MemoryQuery）注入的消息仅用于本轮迭代辅助 LLM 推理，
@@ -214,6 +214,6 @@ class BrainEngine:
         return matched
 
 
-def _usage(brain: BrainEngine) -> dict:
-    u = brain._conversation_service.usage
+async def _usage(brain: BrainEngine) -> dict:
+    u = await brain._conversation_service.get_usage()
     return dict(prompt_tokens=u.prompt_tokens, completion_tokens=u.completion_tokens, total_tokens=u.total_tokens)

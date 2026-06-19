@@ -120,7 +120,7 @@ class LLMProvider(ABC):
     async def __aenter__(self) -> "LLMProvider":
         return self
 
-    async def __aexit__(self, *_: object) -> None:
+    async def __aexit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
         await self.aclose()
 
 

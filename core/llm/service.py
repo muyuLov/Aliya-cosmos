@@ -76,6 +76,7 @@ class ConversationService:
         self._emotion_patch: str = ""
         self._context_injection: str = ""
 
+        self._closed: bool = False
         self._context = self._cache.get(self.conversation_id) or ConversationContext(
             conversation_id=self.conversation_id,
             system_prompt=system_prompt,
@@ -83,30 +84,41 @@ class ConversationService:
         )
         if system_prompt is not None:
             self._context.system_prompt = system_prompt
+            self._save()
 
     # ── 上下文管理器协议 ──────────────────────────────────────────────────────
 
     async def __aenter__(self) -> "ConversationService":
         return self
 
-    async def __aexit__(self, *_: object) -> None:
+    async def __aexit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
         await self.aclose()
 
     @property
     def usage(self) -> TokenUsage:
         return self._usage
 
-    def reset_usage(self) -> None:
+    async def get_usage(self) -> TokenUsage:
+        """持锁获取累计 token 用量。"""
+        async with self._lock:
+            return TokenUsage(**self._usage.model_dump())
+
+    async def reset_usage(self) -> None:
         """重置累计 token 用量统计。"""
-        self._usage = TokenUsage()
+        async with self._lock:
+            self._usage = TokenUsage()
 
     async def aclose(self) -> None:
         """
         释放底层 LLM 提供商资源。
 
         保存当前对话上下文到缓存后，调用 provider.aclose() 释放连接等资源。
+        幂等：多次调用安全，第二次起无操作。
         推荐使用 ``async with`` 自动管理，手动调用时确保不在持锁状态下执行。
         """
+        if self._closed:
+            return
+        self._closed = True
         async with self._lock:
             self._save()
         await self._provider.aclose()
@@ -391,6 +403,7 @@ class ConversationService:
         async with self._lock:
             self._context.messages.append(Message(role=role, content=content, metadata=metadata))
             self._context.updated_at = time.time()
+            self._trim_history()
             self._save()
 
     async def discard_messages(self, content_marker: str, max_count: int) -> None:
