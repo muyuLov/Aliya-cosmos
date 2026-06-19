@@ -13,5 +13,4 @@ DEFAULT_PREFETCH_WINDOW = 3  # 滑动窗口预取段数（减少资源浪费，�
 # AudioPlayer 配置
 DEFAULT_PLAY_QUEUE_SIZE = 32  # 播放队列大小
 DEFAULT_FRAMES_PER_BUFFER = 1024  # pyaudio 每次写入帧数
-WAV_HEADER_SIZE = 44  # 标准 WAV 头字节数（无扩展 chunk）
 WAV_DETECT_SIZE = 4096  # WAV 头部检测缓冲区上限（含扩展 chunk）

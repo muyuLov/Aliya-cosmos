@@ -6,7 +6,6 @@ from core.tts.player.format_detector import (
     RIFF_MAGIC,
     WavHeaderParseError,
     find_wav_data_offset,
-    is_wav_format,
     parse_wav_header,
 )
 
@@ -19,6 +18,5 @@ __all__ = [
     "RIFF_MAGIC",
     "WavHeaderParseError",
     "find_wav_data_offset",
-    "is_wav_format",
     "parse_wav_header",
 ]

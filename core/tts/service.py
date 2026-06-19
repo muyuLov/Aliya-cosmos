@@ -102,11 +102,11 @@ class TTSService:
         try:
             # 单句直接合成，跳过分段开销；多句走并发流水线
             segments = split_text(merged.text)
-            source: AsyncGenerator[bytes, None]
+            source: AsyncIterator[bytes]
             if len(segments) == 1:
-                source = self._synthesize_single(merged)  # type: ignore[assignment]
+                source = self._synthesize_single(merged)
             else:
-                source = self._synthesize_segmented(merged)  # type: ignore[assignment]
+                source = self._synthesize_segmented(merged)
 
             try:
                 source_iter = source.__aiter__()
@@ -158,7 +158,7 @@ class TTSService:
                     time.monotonic() - start_time,
                 )
 
-    async def _synthesize_single(self, request: TTSRequest) -> AsyncIterator[bytes]:  # type: ignore[override, misc]
+    async def _synthesize_single(self, request: TTSRequest) -> AsyncGenerator[bytes, None]:
         """
         单句直接合成，跳过分段与队列开销。
 
@@ -189,7 +189,7 @@ class TTSService:
                     e,
                 )
 
-    async def _synthesize_segmented(self, request: TTSRequest) -> AsyncIterator[bytes]:  # type: ignore[misc]
+    async def _synthesize_segmented(self, request: TTSRequest) -> AsyncGenerator[bytes, None]:
         """
         分段流水线合成：滑动窗口预取，减少资源浪费，支持快速打断。
 

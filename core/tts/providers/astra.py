@@ -147,7 +147,7 @@ class AstraTTSProvider(TTSProvider):
             cause=last_exc,
         ) from last_exc
 
-    async def consume_session(self, session_id: str) -> AsyncGenerator[bytes, None]:  # type: ignore[override]
+    async def consume_session(self, session_id: str) -> AsyncGenerator[bytes, None]:
         """流式消费音频数据，边接收边 yield。"""
         try:
             async with self._client.stream("GET", f"{self._stream_base_url}/{session_id}") as resp:
@@ -204,46 +204,6 @@ class AstraTTSProvider(TTSProvider):
             raise
         except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as e:
             raise TTSSessionError(session_id, f"释放会话失败: {e}", cause=e) from e
-
-    def _validate_config(self, config: dict[str, Any]) -> None:
-        """
-        验证提供商配置的有效性。
-
-        Raises:
-            TTSConfigError: 配置无效时抛出。
-        """
-        from core.tts.exceptions import TTSConfigError
-
-        # 验证 api_url 必填且非空
-        api_url = config.get("api_url", "").strip()
-        if not api_url:
-            raise TTSConfigError(
-                "api_url",
-                "AstraTTS 提供商的 api_url 参数为必填项，不能为空",
-            )
-
-        # 验证 api_url 格式（必须以 http:// 或 https:// 开头）
-        if not (api_url.startswith("http://") or api_url.startswith("https://")):
-            raise TTSConfigError(
-                "api_url",
-                f"api_url 必须以 http:// 或 https:// 开头，当前值: {api_url}",
-            )
-
-        # 验证 chunk_size：至少 512 字节，最多 1MB
-        chunk_size = config.get("chunk_size", 4096)
-        if not isinstance(chunk_size, int) or not (512 <= chunk_size <= 1024 * 1024):
-            raise TTSConfigError(
-                "chunk_size",
-                f"chunk_size 必须在 512-1048576 字节范围内，当前值: {chunk_size}",
-            )
-
-        # 验证 timeout（0 或 null 表示无超时）
-        timeout = config.get("timeout", 60)
-        if timeout is not None and not isinstance(timeout, (int, float)):
-            raise TTSConfigError(
-                "timeout",
-                f"timeout 必须是数字或 null，当前类型: {type(timeout).__name__}",
-            )
 
     async def aclose(self) -> None:
         """关闭 AsyncClient，释放连接池资源。"""

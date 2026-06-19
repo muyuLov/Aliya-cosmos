@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import threading
+from typing import Any
 
 from pydantic import BaseModel, Field, PrivateAttr
 
@@ -35,17 +35,15 @@ class VoiceConfig(BaseModel):
     g2p_priority_mode: int | None = None
     languages: list[str] | None = None
 
-    # 缓存 model_dump 结果，避免每次 apply_to_request 都重新序列化
+    # 预计算的 model_dump 结果，避免每次 apply_to_request 都重新序列化
     _dump_cache: dict | None = PrivateAttr(default=None)
-    _cache_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
+
+    def model_post_init(self, __context: Any) -> None:
+        """初始化后预计算 model_dump 缓存。"""
+        self._dump_cache = self.model_dump(exclude_none=True)
 
     def apply_to_request(self, request: TTSRequest) -> TTSRequest:
         """将配置中的默认值填充到请求中 None 的字段，返回新实例。"""
-        # 双重检查锁定模式（Double-Checked Locking）
-        if self._dump_cache is None:
-            with self._cache_lock:
-                if self._dump_cache is None:
-                    self._dump_cache = self.model_dump(exclude_none=True)
         overrides = {k: v for k, v in self._dump_cache.items() if getattr(request, k, None) is None}
         return request.model_copy(update=overrides) if overrides else request
 

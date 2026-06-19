@@ -417,6 +417,49 @@ class AudioPlayer:
             self._start_pcm()
             return len(data)
 
+    def _probe_mp3(self, mp3_data: bytes) -> tuple[int, int]:
+        """探查 MP3 的采样率和声道数，失败时回退到 24000 Hz / 1 声道。"""
+        import json
+        import os
+        import subprocess as sp
+
+        ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
+        ffprobe_path = ffmpeg_path.replace("ffmpeg", "ffprobe")
+        # Windows 下处理 .exe 后缀
+        if not os.path.exists(ffprobe_path):
+            base, ext = os.path.splitext(ffmpeg_path)
+            ffprobe_path = f"{base.replace('ffmpeg', 'ffprobe')}{ext}"
+
+        try:
+            proc = sp.Popen(
+                [
+                    ffprobe_path,
+                    "-hide_banner",
+                    "-loglevel", "error",
+                    "-print_format", "json",
+                    "-show_streams",
+                    "-i", "pipe:0",
+                ],
+                stdin=sp.PIPE,
+                stdout=sp.PIPE,
+                stderr=sp.PIPE,
+            )
+            stdout, _ = proc.communicate(input=mp3_data, timeout=10)
+            if proc.returncode != 0:
+                raise ValueError("ffprobe 返回非零")
+
+            info = json.loads(stdout)
+            # 找到第一个音频流
+            for stream in info.get("streams", []):
+                if stream.get("codec_type") == "audio":
+                    sr = int(stream.get("sample_rate", 24000))
+                    ch = int(stream.get("channels", 1))
+                    return sr, ch
+            raise ValueError("未找到音频流")
+        except Exception as e:
+            _logger.warning("MP3 探查失败，回退到默认值 | reason=%s", e)
+            return 24000, 1
+
     def _decode_mp3_stream(self, mp3_data: bytes) -> bytes | None:
         """使用 ffmpeg (imageio-ffmpeg) 解码 MP3 数据为 PCM。"""
         if not mp3_data:
@@ -455,10 +498,15 @@ class AudioPlayer:
             _logger.debug("MP3 解码成功 | mp3_bytes=%d | pcm_bytes=%d", len(mp3_data), len(pcm_data))
 
             if self._stream is None:
-                sample_rate = 24000
+                sample_rate, channels = self._probe_mp3(mp3_data)
                 sample_width = 2  # s16le = 16-bit = 2 bytes
                 self._mp3_sample_width = sample_width
-                self._open_stream(sample_rate, 1, sample_width, "int16")
+                _logger.debug(
+                    "MP3 流参数 | sample_rate=%d | channels=%d",
+                    sample_rate,
+                    channels,
+                )
+                self._open_stream(sample_rate, channels, sample_width, "int16")
 
             return pcm_data
         except sp.TimeoutExpired:

@@ -105,15 +105,3 @@ def parse_wav_header(data: bytes) -> FormatInfo:
         pa_format=pa_format,
     )
 
-
-def is_wav_format(data: bytes) -> bool:
-    """
-    检查字节数据前 4 字节是否为 RIFF 魔数（WAV 文件标识）。
-
-    Args:
-        data: 至少 4 字节的二进制数据。
-
-    Returns:
-        是否为 WAV 格式（以 RIFF 开头）。
-    """
-    return len(data) >= 4 and data[:4] == RIFF_MAGIC

@@ -66,11 +66,14 @@ data/            ← 配置文件和数据目录
 - `config_validator.py` — 配置合法性校验（必需字段、key 范围）
 
 **core/tts — TTS 语音服务**
-- `service.py` — `TTSService` 语音合成服务，支持预取队列
-- `providers/` — `EdgeTTSProvider`（edge-tts）、`AstraTTSProvider`（自建 Docker 服务）
-- `player/` — 音频播放器（基于 sounddevice），支持 PCM 格式检测、音量控制
-- `text_splitter.py` — 长文本分片处理
-- `cache.py` — TTS 缓存机制
+- `service.py` — `TTSService` 语音合成服务，滑动窗口预取流水线
+- `providers/` — `EdgeTTSProvider`（edge-tts）、`AstraTTSProvider`（自建 Docker 服务），统一继承 `TTSProvider` 基类
+- `player/` — 音频播放器（sounddevice），自动检测 WAV/PCM/MP3 格式
+- `models.py` — `TTSRequest`、`VoiceConfig` 数据模型
+- `validation.py` — TTS 配置集中参数校验（`TTSConfigError`）
+- `exceptions.py` — 结构化异常（TTS_001~TTS_005）：连接失败、请求失败、会话错误、配置错误
+- `text_splitter.py` — 长文本分片与动作描写过滤
+- `cache.py` — TTS 音频缓存（本地文件 + 可选 Redis）
 
 **memory — GRAG 图记忆系统**
 - `memory_manager.py` — `GRAGMemoryManager` 统一接口
@@ -127,4 +130,3 @@ GUI 悬浮窗与 Agent 通过 WebSocket（默认 127.0.0.1:8765）通信，消�
 - Neo4j Schema：`(:Entity:Person|Location|Object|Concept|Event|Time)` 节点 + `[:REL_TYPE]` 关系
 - LLM 输出格式：JSON 包含 `reply` + `tool_calls` 字段
 - 工具接口规范：每个 `BaseTool` 子类定义 `input_schema`（JSON Schema 格式参数描述），通过 `validate_args()` 预校验参数类型；`ToolResult` 含 `error_code` 结构化错误码（如 `TIMEOUT`/`INVALID_ARGS`/`TOOL_NOT_FOUND`）
-- 工具分两类：`BaseTool`（外部 dispatch，结果不反馈 LLM）和 `InternalTool`（结果注入对话历史，LLM 继续推理），后者通过 `brain._internal_tools` 注册

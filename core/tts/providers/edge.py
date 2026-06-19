@@ -15,11 +15,6 @@ from core.tts.providers.base import TTSProvider
 
 _logger = get_logger(__name__)
 
-# EdgeTTS 支持的常用音色（中文 + 英文）
-DEFAULT_VOICES = {
-    "zh-CN": "zh-CN-XiaoxiaoNeural",
-    "en-US": "en-US-AriaNeural",
-}
 
 # 速率格式转换：float → edge-tts rate 字符串
 def _speed_to_rate(speed: float) -> str:
@@ -153,34 +148,6 @@ class EdgeTTSProvider(TTSProvider):
         comm = self._sessions.pop(session_id, None)
         if comm is not None:
             _logger.debug("EdgeTTS 会话已释放 | session_id=%s", session_id)
-
-    def _validate_config(self, config: dict[str, Any]) -> None:
-        """验证提供商配置的有效性。"""
-        from core.tts.exceptions import TTSConfigError
-
-        # 验证 voice 格式（可选）
-        voice = config.get("voice", "")
-        if voice and not isinstance(voice, str):
-            raise TTSConfigError(
-                "voice",
-                f"voice 必须是字符串，当前类型: {type(voice).__name__}",
-            )
-
-        # 验证 rate 格式（可选，必须是百分比字符串）
-        rate = config.get("rate", "")
-        if rate and not isinstance(rate, str):
-            raise TTSConfigError(
-                "rate",
-                f"rate 必须是字符串（如 '+0%'），当前类型: {type(rate).__name__}",
-            )
-
-        # 验证 timeout
-        timeout = config.get("timeout", 60)
-        if timeout is not None and not isinstance(timeout, (int, float)):
-            raise TTSConfigError(
-                "timeout",
-                f"timeout 必须是数字或 null，当前类型: {type(timeout).__name__}",
-            )
 
     async def aclose(self) -> None:
         """关闭所有会话并清理资源。"""
