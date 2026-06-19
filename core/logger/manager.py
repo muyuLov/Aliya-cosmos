@@ -166,7 +166,6 @@ class LogManager:
         effective_level = logging.DEBUG if debug_mode else level
 
         self._root_logger.setLevel(effective_level)
-        self._root_logger.propagate = False
 
         # 压制第三方库的冗余日志（如 httpx 的每条 HTTP 请求记录）
         # 仅在非 debug 模式下生效，debug 模式保留所有日志便于排查

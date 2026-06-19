@@ -168,7 +168,6 @@ class MonitoredQueueHandler(logging.handlers.QueueHandler):
             warn_threshold: 告警阈值（队列使用率），超过此值输出警告
         """
         super().__init__(log_queue)
-        self._log_queue = log_queue  # 保留具体类型引用，避免通过 self.queue 访问时类型丢失
         self._max_queue_size = max_queue_size
         self._warn_threshold = warn_threshold
         self._drop_count = 0
@@ -178,7 +177,7 @@ class MonitoredQueueHandler(logging.handlers.QueueHandler):
         """重写入队逻辑，添加队列监控"""
         try:
             # 检查队列深度
-            qsize = self._log_queue.qsize()
+            qsize = self.queue.qsize()
             usage_ratio = qsize / self._max_queue_size if self._max_queue_size > 0 else 0
 
             # 超过告警阈值，输出警告（限流：每 60 秒最多一次）
@@ -194,13 +193,13 @@ class MonitoredQueueHandler(logging.handlers.QueueHandler):
             # 队列满时丢弃最旧的记录
             if qsize >= self._max_queue_size:
                 try:
-                    self._log_queue.get_nowait()  # 移除最旧的记录
+                    self.queue.get_nowait()  # 移除最旧的记录
                     self._drop_count += 1
                 except queue.Empty:
                     pass
 
             # 非阻塞入队
-            self._log_queue.put_nowait(record)
+            self.queue.put_nowait(record)
         except queue.Full:
             # 理论上不会到达（已预先清理），但保留兜底逻辑
             self._drop_count += 1
@@ -210,8 +209,8 @@ def _generate_session_log_path(base_path: str | Path) -> Path:
     """
     生成带时间戳的会话日志文件路径。
 
-    格式：原文件名_YYYYMMDD_HHMMSS.log
-    例如：app.log -> app_20260427_123045.log
+    格式：原文件名_YYYYMMDD_HHMMSS_ffffff.log
+    例如：app.log -> app_20260427_123045_123456.log
 
     Args:
         base_path: 基础日志文件路径
@@ -220,7 +219,7 @@ def _generate_session_log_path(base_path: str | Path) -> Path:
         带时间戳的日志文件路径
     """
     path = Path(base_path)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     stem = path.stem  # 文件名（不含扩展名）
     suffix = path.suffix  # 扩展名
     new_name = f"{stem}_{timestamp}{suffix}"

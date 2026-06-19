@@ -39,16 +39,17 @@ def setup(config: dict[str, Any] | str | None = None) -> LogManager:
     """
     global _manager
 
-    if isinstance(config, str):
+    if isinstance(config, str) or config is None:
         from core.config import get_config_instance
 
-        config_dict: dict[str, Any] | None = get_config_instance(config).get("cosmos.logger")
-    elif config is None:
-        from core.config import get_config_instance
-
-        config_dict = get_config_instance(_DEFAULT_CONFIG_PATH).get("cosmos.logger")
+        config_dict: dict[str, Any] | None = get_config_instance(
+            _DEFAULT_CONFIG_PATH if config is None else config
+        ).get("cosmos.logger")
     else:
         config_dict = config
+
+    if _manager is not None:
+        _manager.shutdown()
 
     _manager = LogManager(config_dict)
     return _manager

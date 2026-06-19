@@ -16,7 +16,7 @@ cosmos:
       buffer_size: 100                 # 缓冲行数
       flush_interval: 5.0              # 刷新间隔（秒）
       max_queue_size: 10000            # 异步队列最大长度
-      rotate: session                  # 轮转策略: session/date/size
+      rotate: session                  # 轮转策略: session/timed/sized
       when: midnight                   # 按日轮转触发时间
 
   # ── 服务配置 ──────────────────────────────────────────

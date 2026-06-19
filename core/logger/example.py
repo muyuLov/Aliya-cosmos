@@ -1,10 +1,6 @@
 """LogManager 使用示例"""
 
-import sys
-from pathlib import Path
-
-# 确保从任意位置直接运行时都能找到项目根目录
-sys.path.insert(0, str(Path(__file__).parents[2]))
+# 运行方式：在项目根目录执行 `uv run python -m core.logger.example`
 
 from core.logger import get_logger, get_manager, setup
 
