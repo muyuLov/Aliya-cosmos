@@ -73,13 +73,11 @@ class SkillLoader:
         if not isinstance(description, str):
             raise ValueError(f"Skill description 字段必须是字符串: {file_path}")
 
-        raw_trigger_words = meta.get("trigger_words")
-        if isinstance(raw_trigger_words, list) and all(isinstance(w, str) for w in raw_trigger_words):
-            trigger_words = [w.strip().lower() for w in raw_trigger_words if w.strip()]
-        else:
-            trigger_words = [token.strip().lower() for token in description.split() if token.strip()]
+        when_to_use = meta.get("when_to_use", "")
+        if not isinstance(when_to_use, str):
+            when_to_use = ""
 
-        skill = Skill(
+        return Skill(
             name=meta["name"],
             description=description,
             version=meta.get("version", "1.0.0"),
@@ -87,13 +85,8 @@ class SkillLoader:
             priority=priority,
             instructions=body,
             file_path=file_path,
-            trigger_words=trigger_words,
+            when_to_use=when_to_use,
         )
-        # 预编译触发词正则，避免在 brain._activate_skills 中重复编译
-        skill.trigger_patterns = [
-            re.compile(rf"\b{re.escape(word)}\b") for word in trigger_words
-        ]
-        return skill
 
     def _parse_frontmatter(self, raw_meta: str) -> dict[str, object]:
         if yaml is None:

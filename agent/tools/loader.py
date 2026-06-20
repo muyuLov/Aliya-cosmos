@@ -74,7 +74,7 @@ class ToolLoader:
             timeout_seconds: 工具执行超时秒数。
             injections: 运行时依赖字典，可包含 tts_service、audio_player、memory_manager 等。
         """
-        from agent.tools.builtin import ReplyTool, TTSTool
+        from agent.tools.builtin import ReplyTool, SkillTool, TTSTool
         from agent.tools.utility import DateTimeTool
 
         # 按需启用的高级工具（取消注释即可）
@@ -85,7 +85,7 @@ class ToolLoader:
         loader = cls()
 
         # 注册默认启用的工具
-        loader.register_tool(ReplyTool())
+        loader.register_tool(ReplyTool(output_channel=injections.get("output_channel")))
         loader.register_tool(
             TTSTool(
                 tts_service=injections.get("tts_service"),
@@ -93,6 +93,7 @@ class ToolLoader:
             )
         )
         loader.register_tool(DateTimeTool())
+        loader.register_tool(SkillTool())
 
         # 注册内部工具（结果注入对话，供 LLM 继续推理）
         memory_manager = injections.get("memory_manager")
@@ -107,6 +108,5 @@ class ToolLoader:
         #     cache_ttl=60.0,
         # ))
         # loader.register_tool(WebSearchTool(search_api_url=""))
-        # loader.register_tool(CodeExecutionTool(sandbox_env={}))
 
         return loader.build_registry(timeout_seconds=timeout_seconds)

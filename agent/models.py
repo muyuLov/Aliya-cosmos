@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -47,6 +46,15 @@ def compute_tool_signature(tool_calls: list[ToolCall], skip_names: frozenset[str
 
 
 @dataclass(slots=True)
+class ToolProgress:
+    tool_name: str
+    progress_type: str  # 进度类型标识，如 "synthesizing"、"searching"
+    message: str = ""
+    progress: float | None = None  # 0.0 ~ 1.0
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
 class Skill:
     name: str
     description: str
@@ -55,6 +63,11 @@ class Skill:
     file_path: Path
     enabled: bool = True
     priority: int = 100
-    trigger_words: list[str] = field(default_factory=list)
-    # 预编译的触发词正则（由 SkillLoader 在加载时生成）
-    trigger_patterns: list[re.Pattern] = field(default_factory=list, repr=False, init=False)
+    when_to_use: str = ""  # LLM 判断何时使用的说明
+
+    @property
+    def listing(self) -> str:
+        """生成技能列表中展示给 LLM 的文本。"""
+        if self.when_to_use:
+            return f"- {self.name}: {self.description} - {self.when_to_use}"
+        return f"- {self.name}: {self.description}"

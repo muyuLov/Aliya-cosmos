@@ -36,32 +36,50 @@ class FileContentCache:
         with self._lock:
             if key not in self._cache:
                 return None
-
             content, mtime, cached_at = self._cache[key]
 
         current_mtime = self._get_mtime(path)
         now = time.time()
+        expired = now - cached_at > self.ttl
+        changed = mtime != current_mtime
 
-        if now - cached_at > self.ttl:
+        if expired or changed:
             with self._lock:
-                # 二次检查防止并发删除
-                if key in self._cache and self._cache[key][2] == cached_at:
+                if self._cache.get(key, (None, None, None))[1:] == (mtime, cached_at):
                     del self._cache[key]
-                    self._order.remove(key)
-            return None
-
-        if mtime != current_mtime:
-            with self._lock:
-                if key in self._cache and self._cache[key][1] == mtime:
+                    try:
+                        self._order.remove(key)
+                    except ValueError:
+                        pass
+                    return None
+                # 另一个线程已刷新缓存，读取新值
+                entry = self._cache.get(key)
+                if entry is not None:
+                    new_content, new_mtime, new_cached_at = entry
+                    if now - new_cached_at <= self.ttl and new_mtime == current_mtime:
+                        try:
+                            self._order.remove(key)
+                        except ValueError:
+                            pass
+                        self._order.append(key)
+                        return new_content
+                    # 新条目也已过期，清除
                     del self._cache[key]
-                    self._order.remove(key)
+                    try:
+                        self._order.remove(key)
+                    except ValueError:
+                        pass
             return None
 
         with self._lock:
-            if key not in self._cache:
+            if key in self._cache:
+                try:
+                    self._order.remove(key)
+                except ValueError:
+                    pass
+                self._order.append(key)
+            else:
                 return None
-            self._order.remove(key)
-            self._order.append(key)
         return content
 
     def set(self, path: Path, content: str) -> None:
@@ -70,7 +88,10 @@ class FileContentCache:
 
         with self._lock:
             if key in self._cache:
-                self._order.remove(key)
+                try:
+                    self._order.remove(key)
+                except ValueError:
+                    pass
             elif len(self._cache) >= self.max_size:
                 oldest_key = self._order.pop(0)
                 del self._cache[oldest_key]
@@ -88,7 +109,10 @@ class FileContentCache:
         with self._lock:
             if key in self._cache:
                 del self._cache[key]
-                self._order.remove(key)
+                try:
+                    self._order.remove(key)
+                except ValueError:
+                    pass
 
 
 class FileTool(BaseTool):
@@ -101,6 +125,9 @@ class FileTool(BaseTool):
         "path": {"type": "string", "description": "文件路径"},
         "content": {"type": "string", "description": "写入内容（仅 write 操作需要）"},
     }
+
+    def is_concurrency_safe(self, arguments: dict[str, Any]) -> bool:
+        return arguments.get("action") in ("read", "exists")
 
     _MAX_READ_BYTES = 5 * 1024 * 1024  # 5 MB 上限，防止大文件撑爆内存
 

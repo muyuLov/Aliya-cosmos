@@ -41,6 +41,8 @@ _check_venv()
 from agent.agent import AliyaAgent
 from agent.brain import BrainEngine
 from agent.tools import ToolLoader
+from agent.tools.advanced import MemoryQueryTool
+from agent.tools.base import ToolCategory
 from agent.ws_server import handle_connection
 from core.config import get_config_instance
 from core.logger import get_logger
@@ -51,16 +53,15 @@ logger = get_logger(__name__)
 
 
 class ConsoleOutput:
-    """终端输出适配器，模拟 WebSocket.send_json 供 AliyaAgent 使用。"""
+    """终端输出适配器。作为同步可调用对象供 AliyaAgent 使用。"""
 
-    async def send_json(self, data: dict) -> None:
+    def send_json(self, data: dict) -> None:
         msg_type = data.get("type")
-        if msg_type == "brain_complete":
-            print(f"\nAliya: {data.get('reply', '')}")
-        elif msg_type == "brain_refine":
-            print(f"\nAliya: {data.get('reply', '')}")
+        if msg_type == "brain_complete" or msg_type == "brain_refine" or msg_type == "reply":
+            text = data.get("reply") or data.get("text") or ""
         elif msg_type == "tool_start":
             print(f"  [工具] {data.get('tool')} 执行中...")
+            return
         elif msg_type == "tool_complete":
             status = data.get("status")
             tool = data.get("tool")
@@ -69,16 +70,24 @@ class ConsoleOutput:
             else:
                 err = data.get("error", "")
                 print(f"  [工具] {tool} 失败: {err}")
+            return
         elif msg_type == "brain_error":
             print(f"\n[错误] {data.get('message', '')}")
+            return
         elif msg_type == "tool_summary":
             ok = data.get("success", 0)
             fail = data.get("fail", 0)
             if fail:
                 print(f"  [工具] 完成: {ok} 成功, {fail} 失败")
+            return
         elif msg_type == "confirm_required":
             print(f"\n[确认] {data.get('message', '')}")
-        # 其他类型静默
+            return
+        else:
+            return
+        print(f"\nAliya: {text}")
+
+    __call__ = send_json
 
 
 def _init_components(config_path: str = "data/config/main.yml"):
@@ -97,11 +106,16 @@ def _init_components(config_path: str = "data/config/main.yml"):
             "memory_manager": memory_manager,
         },
     )
+    visible_categories = {ToolCategory.CORE}
     brain = BrainEngine.from_config(
         config_path=config_path,
-        tool_descriptions=registry.format_descriptions(),
+        tool_descriptions=registry.format_descriptions(category_filter=visible_categories),
         memory_manager=memory_manager,
         max_iterations=int(config.get("cosmos.service.agent.brain.max_iterations", 5)),
+        internal_tools={
+            "memory_query": MemoryQueryTool(memory_manager),
+        } if memory_manager is not None else {},
+        visible_categories=visible_categories,
     )
     return registry, brain, memory_manager, tts_service, audio_player, top_k
 
@@ -116,7 +130,7 @@ async def chat_loop():
             brain=brain,
             tool_registry=registry,
             memory_manager=memory_manager,
-            websocket=console,
+            output=console,
             top_k=top_k,
         )
         print("Aliya 聊天模式（输入 /exit 退出, /clear 清空历史）\n")

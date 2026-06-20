@@ -4,11 +4,12 @@ import asyncio
 import datetime
 import time
 from enum import Enum
+from collections.abc import Callable
 from typing import Any, TYPE_CHECKING
 
 from agent.brain import BrainEngine
 from agent.cache import MemoryRetrievalCache, PerformanceMetrics, format_memory_list
-from agent.models import AgentResponse, ToolCall, ToolResult, compute_tool_signature
+from agent.models import AgentResponse, ToolCall, ToolProgress, ToolResult, compute_tool_signature
 from core.logger import get_logger
 
 if TYPE_CHECKING:
@@ -23,13 +24,13 @@ class AliyaAgent:
         brain: BrainEngine,
         tool_registry: Any,
         memory_manager: GRAGMemoryManager,
-        websocket: Any,
+        output: Callable[[dict], None] | None = None,
         top_k: int = 5,
     ) -> None:
         self._brain = brain
         self._tool_registry = tool_registry
         self._memory_manager = memory_manager
-        self._websocket = websocket
+        self._output = output or (lambda _: None)
         self._top_k = top_k
         self._current_turn_task: asyncio.Task | None = None
         self._memory_cache = MemoryRetrievalCache(max_size=50, ttl=300.0)
@@ -72,7 +73,7 @@ class AliyaAgent:
 
     async def handle_clear_history(self, confirm: bool = False) -> None:
         if not confirm:
-            await self._websocket.send_json(
+            self._output(
                 {
                     "type": "confirm_required",
                     "action": "clear_history",
@@ -81,13 +82,13 @@ class AliyaAgent:
             )
             return
         await self._brain.clear_history()
-        await self._websocket.send_json({"type": "history_cleared", "message": "对话历史已清空"})
+        self._output({"type": "history_cleared", "message": "对话历史已清空"})
 
     async def handle_ping(self) -> None:
-        await self._websocket.send_json({"type": "pong"})
+        self._output({"type": "pong"})
 
     async def handle_get_stats(self) -> None:
-        await self._websocket.send_json(
+        self._output(
             {"type": "performance_stats", "metrics": self._metrics.to_dict()}
         )
 
@@ -95,12 +96,12 @@ class AliyaAgent:
     def _safe_data(data: Any, _depth: int = 0, _seen: set[int] | None = None) -> Any:
         """递归将 data 转换为 JSON 安全类型，防止 send_json 因不可序列化对象抛异常。"""
         if _depth > 50:
-            return str(data)
+            return repr(data)
         if _seen is None:
             _seen = set()
         obj_id = id(data)
         if obj_id in _seen:
-            return str(data)
+            return repr(data)
         _seen.add(obj_id)
 
         if data is None or isinstance(data, (bool, int, float, str)):
@@ -112,10 +113,16 @@ class AliyaAgent:
         if isinstance(data, bytes):
             return data.hex()
         if isinstance(data, dict):
-            return {k: AliyaAgent._safe_data(v, _depth + 1, _seen) for k, v in data.items()}
+            result: dict[str, Any] = {}
+            for k, v in data.items():
+                sk = str(k)
+                if sk in result:
+                    sk = f"{sk}_{type(k).__name__}"
+                result[sk] = AliyaAgent._safe_data(v, _depth + 1, _seen)
+            return result
         if isinstance(data, (list, tuple)):
             return [AliyaAgent._safe_data(v, _depth + 1, _seen) for v in data]
-        return str(data)
+        return repr(data)
 
     # ── Turn 处理主流程 ───────────────────────────────────────────────────────
 
@@ -123,9 +130,9 @@ class AliyaAgent:
         t_start = time.monotonic()
         logger.info("==== Turn开始 | input=%.60s", user_input)
 
-        await self._websocket.send_json({"type": "brain_start", "user_input": user_input})
+        self._output({"type": "brain_start", "user_input": user_input})
         memory_context = await self._retrieve_memory(user_input)
-        await self._websocket.send_json(
+        self._output(
             {
                 "type": "brain_progress",
                 "step": "memory_retrieved",
@@ -145,6 +152,13 @@ class AliyaAgent:
             await self._send_brain_complete(response, turn_total)
 
             if not response.tool_calls:
+                if turn_total > 0:
+                    self._output({
+                        "type": "token_usage",
+                        "prompt_tokens": turn_prompt,
+                        "completion_tokens": turn_completion,
+                        "total_tokens": turn_total,
+                    })
                 logger.info("==== Turn完成 | tools=none | reply=%.60s | %dms",
                             response.reply_text, (time.monotonic() - t_start) * 1000)
                 self._track_background_task(
@@ -152,20 +166,20 @@ class AliyaAgent:
                 )
                 return
 
-            final_reply, turn_prompt, turn_completion, turn_total = await self._dispatch_and_refine(
+            final_reply, turn_prompt, turn_completion, turn_total, tool_count = await self._dispatch_and_refine(
                 user_input, memory_context, response, turn_prompt, turn_completion, turn_total
             )
 
             total_ms = (time.monotonic() - t_start) * 1000
             if turn_total > 0:
-                await self._websocket.send_json({
+                self._output({
                     "type": "token_usage",
                     "prompt_tokens": turn_prompt,
                     "completion_tokens": turn_completion,
                     "total_tokens": turn_total,
                 })
             logger.info("==== Turn完成 | tools=%d | reply=%.60s | %dms | tokens=%d",
-                        len(response.tool_calls), final_reply, total_ms, turn_total)
+                        tool_count, final_reply, total_ms, turn_total)
             self._track_background_task(
                 asyncio.create_task(self._store_memory_async(user_input, final_reply))
             )
@@ -191,7 +205,7 @@ class AliyaAgent:
             return None
 
     async def _send_brain_complete(self, response: AgentResponse, turn_total: int) -> None:
-        await self._websocket.send_json(
+        self._output(
             {
                 "type": "brain_complete",
                 "reply": response.reply_text,
@@ -201,13 +215,6 @@ class AliyaAgent:
                 ],
             }
         )
-        if turn_total > 0:
-            await self._websocket.send_json({
-                "type": "token_usage",
-                "prompt_tokens": response.prompt_tokens,
-                "completion_tokens": response.completion_tokens,
-                "total_tokens": response.total_tokens,
-            })
 
     async def _dispatch_and_refine(
         self,
@@ -217,25 +224,34 @@ class AliyaAgent:
         turn_prompt: int,
         turn_completion: int,
         turn_total: int,
-    ) -> tuple[str, int, int, int]:
-        """并行分发工具并触发精炼循环，返回 (final_reply, prompt, completion, total)。"""
+    ) -> tuple[str, int, int, int, int]:
+        """并行分发工具并触发精炼循环，返回 (final_reply, prompt, completion, total, tool_count)。"""
         await self._send_tool_start(response.tool_calls)
 
-        results = await self._tool_registry.dispatch(response.tool_calls)
+        def _on_tool_progress(p: ToolProgress) -> None:
+            self._output({
+                "type": "tool_progress",
+                "tool": p.tool_name,
+                "progress_type": p.progress_type,
+                "message": p.message,
+                "progress": p.progress,
+            })
+
+        results = await self._tool_registry.dispatch(response.tool_calls, on_progress=_on_tool_progress)
         await self._send_tool_results_and_summary(results)
 
         final_reply = response.reply_text
         if not self._has_valid_tool_feedback(results):
-            return final_reply, turn_prompt, turn_completion, turn_total
+            return final_reply, turn_prompt, turn_completion, turn_total, len(response.tool_calls)
 
         return await self._run_refine_loop(
             user_input, memory_context, response.reply_text, results,
-            turn_prompt, turn_completion, turn_total,
+            turn_prompt, turn_completion, turn_total, _on_tool_progress,
         )
 
     async def _send_tool_start(self, tool_calls: list[ToolCall]) -> None:
         for call in tool_calls:
-            await self._websocket.send_json(
+            self._output(
                 {"type": "tool_start", "tool": call.tool_name, "arguments": call.arguments}
             )
 
@@ -259,7 +275,7 @@ class AliyaAgent:
                 fail_count += 1
                 code_tag = f" [{result.error_code}]" if result.error_code else ""
                 error_summary.append(f"{result.tool_name}:{code_tag} {result.error}")
-            await self._websocket.send_json(payload)
+            self._output(payload)
 
         summary: dict[str, Any] = {
             "type": "tool_summary",
@@ -269,7 +285,7 @@ class AliyaAgent:
         }
         if error_summary:
             summary["errors"] = error_summary
-        await self._websocket.send_json(summary)
+        self._output(summary)
 
     @staticmethod
     def _has_valid_tool_feedback(results: list[ToolResult]) -> bool:
@@ -303,12 +319,14 @@ class AliyaAgent:
         turn_prompt: int,
         turn_completion: int,
         turn_total: int,
-    ) -> tuple[str, int, int, int]:
-        """工具结果反馈循环（最多 3 轮），逐步优化回复。"""
+        _on_tool_progress: Callable[[ToolProgress], None] | None = None,
+    ) -> tuple[str, int, int, int, int]:
+        """工具结果反馈循环（最多 3 轮），返回 (final_reply, prompt, completion, total, tool_count)。"""
         max_refine_rounds = 3
         final_reply = initial_reply
         all_feedbacks: list[str] = []
         prev_tool_signature: str | None = None
+        tool_count = len(dispatch_results)
 
         for refine_round in range(max_refine_rounds):
             feedback = self._build_tool_feedback(dispatch_results)
@@ -335,21 +353,21 @@ class AliyaAgent:
                                [tc.tool_name for tc in refined.tool_calls])
                 if refined.reply_text != final_reply:
                     final_reply = refined.reply_text
-                    await self._websocket.send_json({"type": "brain_refine", "reply": final_reply})
+                    self._output({"type": "brain_refine", "reply": final_reply})
                 break
             prev_tool_signature = curr_sig
 
             if not refined.tool_calls:
                 if refined.reply_text != final_reply:
                     final_reply = refined.reply_text
-                    await self._websocket.send_json({"type": "brain_refine", "reply": final_reply})
+                    self._output({"type": "brain_refine", "reply": final_reply})
                     logger.info("Refine完成: reply=%.60s", final_reply)
                 break
 
             if refine_round == max_refine_rounds - 1:
                 if refined.reply_text != final_reply:
                     final_reply = refined.reply_text
-                    await self._websocket.send_json({"type": "brain_refine", "reply": final_reply})
+                    self._output({"type": "brain_refine", "reply": final_reply})
                 remaining = [tc for tc in refined.tool_calls if tc.tool_name != "reply"]
                 if remaining:
                     logger.warning("Refine达到上限 %s | 未执行: %s",
@@ -363,11 +381,13 @@ class AliyaAgent:
             logger.info("Refine第%d轮: 新工具 %s",
                         refine_round + 1, [tc.tool_name for tc in next_tool_calls])
 
+            tool_count += len(next_tool_calls)
+
             for call in next_tool_calls:
-                await self._websocket.send_json({
+                self._output({
                     "type": "tool_start", "tool": call.tool_name, "arguments": call.arguments,
                 })
-            next_results = await self._tool_registry.dispatch(next_tool_calls)
+            next_results = await self._tool_registry.dispatch(next_tool_calls, on_progress=_on_tool_progress)
             for result in next_results:
                 payload: dict[str, Any] = {
                     "type": "tool_complete",
@@ -381,11 +401,11 @@ class AliyaAgent:
                     payload["error"] = str(result.error)
                     if result.error_code:
                         payload["error_code"] = result.error_code
-                await self._websocket.send_json(payload)
+                self._output(payload)
 
             dispatch_results = next_results
 
-        return final_reply, turn_prompt, turn_completion, turn_total
+        return final_reply, turn_prompt, turn_completion, turn_total, tool_count
 
     # ── 记忆与任务管理 ─────────────────────────────────────────────────────────
 
@@ -432,7 +452,7 @@ class AliyaAgent:
         return format_memory_list(memories, empty_text="(无相关记忆)")
 
     async def _send_error(self, code: str, step: str, message: str) -> None:
-        await self._websocket.send_json(
+        self._output(
             {
                 "type": "brain_error",
                 "code": code,

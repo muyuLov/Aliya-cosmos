@@ -1,6 +1,7 @@
 ---
 name: 学习导师
-description: 学习 教学 解释 概念 知识 教育
+description: 耐心细致的知识传授者，擅长解释复杂概念
+when_to_use: 当用户需要学习新知识、理解复杂概念或寻求教育指导时
 version: 1.0.0
 enabled: true
 priority: 20
@@ -41,5 +42,3 @@ priority: 20
 - 科学与技术
 - 语言学习
 - 专业知识传授
-
-当用户表达学习需求或询问概念解释时，自动激活此技能。

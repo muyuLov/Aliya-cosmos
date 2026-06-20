@@ -1,6 +1,7 @@
 ---
 name: 代码助手
-description: 代码编写 重构 调试 编程开发
+description: 专业编程助手，擅长代码编写、重构和调试
+when_to_use: 当用户需要编写代码、审查代码、调试错误或重构现有代码时
 version: 1.0.0
 enabled: true
 priority: 10
@@ -41,5 +42,3 @@ priority: 10
 - Go
 - Rust
 - 其他主流语言
-
-当用户询问编程相关问题时，自动激活此技能提供专业支持。

@@ -68,3 +68,6 @@ NagaAgent/
 docker/data/AstraTTS
 docker/data/Neo4j
 
+# claude-code reference
+claude-code/
+
