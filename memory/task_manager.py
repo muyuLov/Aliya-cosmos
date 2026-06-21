@@ -246,6 +246,8 @@ class QuintupleTaskManager:
             return task_id
 
         except asyncio.TimeoutError:
+            if task.future and not task.future.done():
+                task.future.cancel()
             async with self.lock:  # type: ignore[union-attr]
                 if task_id in self.tasks:
                     del self.tasks[task_id]
@@ -521,3 +523,13 @@ async def stop_task_manager() -> None:
     mgr = get_task_manager()
     if mgr.is_running:
         await mgr.shutdown()
+
+
+__all__ = [
+    "TaskStatus",
+    "ExtractionTask",
+    "QuintupleTaskManager",
+    "get_task_manager",
+    "start_task_manager",
+    "stop_task_manager",
+]

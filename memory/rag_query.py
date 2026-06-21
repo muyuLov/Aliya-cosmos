@@ -12,12 +12,12 @@ RAG 查询路径：
 from __future__ import annotations
 
 import asyncio
-import json
 from typing import List, Optional, Tuple
 
 from core.llm.models import ChatRequest, Message
 from core.logger import get_logger
 
+from memory._utils import parse_json_array
 from memory.config import get_grag_config
 from memory import graph
 from memory._providers import get_memory_provider
@@ -197,28 +197,9 @@ class RAGQueryEngine:
 
     def _parse_keywords(self, content: str) -> List[str]:
         """解析关键词响应"""
-        content = content.strip()
-
-        # 尝试直接解析 JSON
-        try:
-            keywords = json.loads(content)
-            if isinstance(keywords, list):
-                return [str(k).strip() for k in keywords if k]
-        except json.JSONDecodeError:
-            pass
-
-        # 尝试提取 JSON 数组
-        if "[" in content and "]" in content:
-            start = content.index("[")
-            end = content.rindex("]") + 1
-            try:
-                keywords = json.loads(content[start:end])
-                if isinstance(keywords, list):
-                    return [str(k).strip() for k in keywords if k]
-            except json.JSONDecodeError:
-                pass
-
-        logger.warning(f"无法解析关键词响应: {content[:200]}")
+        data = parse_json_array(content, "关键词响应")
+        if data is not None:
+            return [str(k).strip() for k in data if k]
         return []
 
     async def _generate_answer(
@@ -280,3 +261,12 @@ def query_knowledge(question: str) -> Optional[str]:
 async def query_knowledge_async(question: str) -> Optional[str]:
     """全局查询函数（异步）"""
     return await get_rag_engine().query_async(question)
+
+
+__all__ = [
+    "RAGQueryEngine",
+    "get_rag_engine",
+    "set_context",
+    "query_knowledge",
+    "query_knowledge_async",
+]

@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any, Tuple
 
@@ -120,7 +121,6 @@ def create_memory_service(
     ext = get_extractor()
 
     # 启动任务管理器
-    import asyncio
     try:
         loop = asyncio.get_running_loop()
         loop.create_task(start_task_manager())

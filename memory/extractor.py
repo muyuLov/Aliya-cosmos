@@ -8,12 +8,12 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from typing import List, Tuple
 
 from core.llm.models import ChatRequest, Message
 from core.logger import get_logger
 
+from memory._utils import parse_json_array
 from memory.config import get_grag_config
 from memory._providers import get_memory_provider
 from memory.exceptions import (
@@ -177,26 +177,9 @@ class QuintupleExtractor:
 
     def _parse_response(self, content: str) -> List[QuintupleType]:
         """解析 LLM 响应，提取五元组"""
-        content = content.strip()
-
-        # 尝试直接解析 JSON
-        try:
-            data = json.loads(content)
+        data = parse_json_array(content, "五元组响应")
+        if data is not None:
             return self._validate_quintuples(data)
-        except json.JSONDecodeError:
-            pass
-
-        # 尝试提取 JSON 块
-        if "[" in content and "]" in content:
-            start = content.index("[")
-            end = content.rindex("]") + 1
-            try:
-                data = json.loads(content[start:end])
-                return self._validate_quintuples(data)
-            except json.JSONDecodeError:
-                pass
-
-        logger.warning("无法解析五元组响应: %.200s", content)
         return []
 
     def _validate_quintuples(self, data) -> List[QuintupleType]:
@@ -250,3 +233,11 @@ def extract_quintuples_sync(text: str) -> List[QuintupleType]:
         五元组列表
     """
     return asyncio.run(get_extractor().extract_async(text))
+
+
+__all__ = [
+    "QuintupleExtractor",
+    "get_extractor",
+    "extract_quintuples",
+    "extract_quintuples_sync",
+]

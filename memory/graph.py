@@ -7,9 +7,9 @@ Schema 设计（v3）：
         约束: name 唯一约束（保证实体不重复）
         索引: entity_type 索引（加速类型过滤）
 
-  关系：(e1)-[r:REL_TYPE]->(e2)
-        属性: source_text(str), session_id(str), confidence(float),
-              created_at(float), updated_at(float), occurrence(int)
+  关系：(e1)-[r:PREDICATE]->(e2)，PREDICATE 为五元组谓语（如 工作于、居住在）
+         属性: source_text(str), session_id(str), confidence(float),
+               created_at(float), updated_at(float), occurrence(int)
 
 特性：
   - 连接失败后 60 秒冷却期，冷却结束后允许自动重试
@@ -51,12 +51,14 @@ try:
     from py2neo.errors import ServiceUnavailable
 
     PY2NEO_AVAILABLE = True
+    _GRAPH_TYPE = Graph
 except ImportError:
     Graph = None          # type: ignore[assignment,misc]
     Node = None           # type: ignore[assignment,misc]
     Relationship = None   # type: ignore[assignment,misc]
     ServiceUnavailable = Exception  # type: ignore[assignment,misc]
     PY2NEO_AVAILABLE = False
+    _GRAPH_TYPE = object  # type: ignore[assignment,misc]
 
 
 class GraphStore:
@@ -85,7 +87,7 @@ class GraphStore:
 
     # ── 内部连接管理 ──────────────────────────────────────────────────────
 
-    def _get_graph(self) -> Optional[object]:
+    def _get_graph(self) -> Optional[_GRAPH_TYPE]:
         """获取 Neo4j 图谱连接（延迟加载 + 冷却重试）
 
         连接失败后等待 self._reconnect_cooldown 秒才允许重试，
@@ -170,7 +172,7 @@ class GraphStore:
         src = (source_text or "")[:200]
         success_count = 0
 
-        cypher = """
+        node_cypher = """
         MERGE (h:Entity {name: $head})
           ON CREATE SET h.entity_type = $head_type,
                         h.aliases     = $head,
@@ -198,18 +200,6 @@ class GraphStore:
                             THEN t.aliases
                           ELSE t.aliases + ';' + $tail
                         END
-
-        WITH h, t
-        MERGE (h)-[r:RELATED]->(t)
-          ON CREATE SET r.source_text = $source_text,
-                        r.session_id  = $session_id,
-                        r.confidence  = $confidence,
-                        r.created_at  = $now,
-                        r.updated_at  = $now,
-                        r.occurrence  = 1,
-                        r.relation_type = $rel_type
-          ON MATCH  SET r.updated_at  = $now,
-                        r.occurrence  = r.occurrence + 1
         """
 
         for head, head_type, rel, tail, tail_type in new_quintuples:
@@ -221,14 +211,27 @@ class GraphStore:
                 logger.warning("非法关系类型，跳过: %s", rel)
                 continue
 
+            # Cypher 不支持参数化关系类型，使用校验过的 rel 字符串插值
+            relation_cypher = f"""
+            WITH h, t
+            MERGE (h)-[r:{rel}]->(t)
+              ON CREATE SET r.source_text = $source_text,
+                            r.session_id  = $session_id,
+                            r.confidence  = $confidence,
+                            r.created_at  = $now,
+                            r.updated_at  = $now,
+                            r.occurrence  = 1
+              ON MATCH  SET r.updated_at  = $now,
+                            r.occurrence  = r.occurrence + 1
+            """
+
             try:
                 g.run(
-                    cypher,
+                    node_cypher + relation_cypher,
                     head=head,
                     head_type=head_type,
                     tail=tail,
                     tail_type=tail_type,
-                    rel_type=rel,
                     source_text=src,
                     session_id=session_id,
                     confidence=confidence,
@@ -369,10 +372,11 @@ class GraphStore:
     def get_graph_stats(self) -> dict:
         """获取图谱统计信息（同步）"""
         try:
-            self._get_graph()
-            connected = True
+            g = self._get_graph()
+            connected = g is not None
         except GraphConnectionError:
             connected = False
+            g = None
 
         stats: dict = {
             "neo4j_connected": connected,
@@ -382,21 +386,18 @@ class GraphStore:
             "relation_count": 0,
         }
 
-        if connected:
-            graph = self._get_graph()
-            if graph is None:
-                return stats
+        if g is not None:
             try:
-                entity_count = graph.run(  # type: ignore[attr-defined]
+                entity_count = g.run(  # type: ignore[attr-defined]
                     "MATCH (n:Entity) RETURN count(n) AS count"
                 ).data()
-                rel_count = graph.run(  # type: ignore[attr-defined]
+                rel_count = g.run(  # type: ignore[attr-defined]
                     "MATCH ()-[r]->() RETURN count(r) AS count"
                 ).data()
                 stats["entity_count"] = entity_count[0]["count"] if entity_count else 0
                 stats["relation_count"] = rel_count[0]["count"] if rel_count else 0
 
-                type_counts = graph.run(  # type: ignore[attr-defined]
+                type_counts = g.run(  # type: ignore[attr-defined]
                     """
                     MATCH (e:Entity)
                     RETURN e.entity_type AS etype, count(e) AS cnt
@@ -563,3 +564,21 @@ async def get_graph_stats_async() -> dict:
 
 async def clear_all_quintuples_async() -> bool:
     return await get_graph_store().clear_all_quintuples_async()
+
+
+__all__ = [
+    "GraphStore",
+    "get_graph_store",
+    "set_graph_store",
+    "reset_graph_store",
+    "store_quintuples",
+    "query_graph_by_keywords",
+    "get_all_quintuples",
+    "clear_all_quintuples",
+    "get_graph_stats",
+    "store_quintuples_async",
+    "query_graph_by_keywords_async",
+    "get_all_quintuples_async",
+    "clear_all_quintuples_async",
+    "get_graph_stats_async",
+]

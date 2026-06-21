@@ -9,8 +9,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import threading
-import traceback
-import weakref
+from collections import deque
 from typing import Any, Dict, List, Optional, Tuple
 
 from core.logger import get_logger
@@ -58,17 +57,11 @@ class GRAGMemoryManager:
             logger.info("GRAG 记忆系统已禁用")
             return
 
+        # 回调缓冲队列（当事件循环不可用时暂存回调结果）
+        self._pending_buffer: deque = deque()
+
         try:
             logger.info("GRAG 记忆系统初始化成功（Neo4j 连接保持惰性）")
-
-            # 保存主事件循环引用，用于跨线程回调
-            try:
-                self._main_loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
-            except RuntimeError:
-                self._main_loop = None
-
-            # 设置任务完成回调（使用 weakref 避免循环引用）
-            self._weak_ref = weakref.ref(self)
             task_manager_module.get_task_manager().on_task_completed = (
                 self._on_task_completed_wrapper
             )
@@ -96,6 +89,8 @@ class GRAGMemoryManager:
         """
         if not self.enabled:
             return False
+
+        await self._flush_pending_buffer()
 
         try:
             # 拼接本轮内容
@@ -182,25 +177,21 @@ class GRAGMemoryManager:
     def _on_task_completed_wrapper(
         self, task_id: str, quintuples: List[QuintupleType]
     ) -> None:
-        """任务完成回调包装（处理跨线程调用）"""
-        instance = self._weak_ref()
-        if not instance:
-            return
-
-        loop = instance._main_loop
-        if loop is None:
-            logger.warning(f"任务回调无主事件循环，丢弃五元组: {task_id}")
-            instance.active_tasks.discard(task_id)
+        """任务完成回调包装"""
+        self.active_tasks.discard(task_id)
+        if not quintuples:
             return
 
         try:
-            asyncio.run_coroutine_threadsafe(
-                instance._on_task_completed(task_id, quintuples),
-                loop,
-            )
-        except Exception as e:
-            logger.error(f"任务回调调度失败: {e}")
-            instance.active_tasks.discard(task_id)
+            asyncio.create_task(self._on_task_completed(task_id, quintuples))
+        except RuntimeError:
+            self._pending_buffer.append((task_id, quintuples))
+
+    async def _flush_pending_buffer(self) -> None:
+        """处理缓冲队列中的回调结果"""
+        while self._pending_buffer:
+            task_id, quintuples = self._pending_buffer.popleft()
+            await self._on_task_completed(task_id, quintuples)
 
     async def _on_task_completed(
         self, task_id: str, quintuples: List[QuintupleType]
@@ -242,6 +233,8 @@ class GRAGMemoryManager:
         """
         if not self.enabled:
             return None
+
+        await self._flush_pending_buffer()
 
         try:
             # 更新 RAG 上下文
@@ -374,5 +367,12 @@ def get_memory_manager() -> GRAGMemoryManager:
             if _memory_manager_instance is None:
                 _memory_manager_instance = GRAGMemoryManager()
     return _memory_manager_instance
+
+
+__all__ = [
+    "GRAGMemoryManager",
+    "get_memory_manager",
+    "DEFAULT_AI_NAME",
+]
 
 
