@@ -112,6 +112,10 @@ class GRAGMemoryManager:
             logger.error(f"添加对话记忆失败: {e}")
             return False
 
+    @staticmethod
+    def _hash_text(text: str) -> str:
+        return hashlib.sha256(text.encode()).hexdigest()
+
     async def _submit_extraction_task(
         self, text: str, session_id: str = ""
     ) -> None:
@@ -125,7 +129,7 @@ class GRAGMemoryManager:
                 await asyncio.sleep(0.5)
 
             # 检查是否已提取过
-            text_hash = hashlib.sha256(text.encode()).hexdigest()
+            text_hash = self._hash_text(text)
             if text_hash in self.extraction_cache:
                 logger.debug(f"跳过已处理的文本: {text[:50]}...")
                 return
@@ -145,7 +149,7 @@ class GRAGMemoryManager:
     ) -> bool:
         """同步提取并存储五元组（回退方案）"""
         try:
-            text_hash = hashlib.sha256(text.encode()).hexdigest()
+            text_hash = self._hash_text(text)
 
             if text_hash in self.extraction_cache:
                 return True
@@ -211,9 +215,9 @@ class GRAGMemoryManager:
                 logger.info(f"成功存储 {len(quintuples)} 个五元组到图谱")
                 # 更新提取缓存（与 _extract_and_store_sync 保持一致）
                 mgr = task_manager_module.get_task_manager()
-                task_obj = mgr.tasks.get(task_id)
-                if task_obj:
-                    self.extraction_cache.add(task_obj.text_hash)
+                text_hash = mgr.get_task_text_hash(task_id)
+                if text_hash:
+                    self.extraction_cache.add(text_hash)
 
             # 更新 RAG 上下文
             rag_query.set_context(self.recent_context)

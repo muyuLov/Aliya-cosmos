@@ -85,7 +85,7 @@ class QuintupleTaskManager:
         self.tasks: Dict[str, ExtractionTask] = {}
 
         # 异步对象（延迟到 start() 中创建）
-        self.task_queue: Optional[asyncio.Queue] = None
+        self.task_queue: Optional[asyncio.Queue[ExtractionTask]] = None
         self.lock: Optional[asyncio.Lock] = None
 
         # 工作协程管理
@@ -413,6 +413,12 @@ class QuintupleTaskManager:
             logger.info(f"清理了 {removed_count} 个过期任务")
 
         return removed_count
+
+    def get_task_text_hash(self, task_id: str) -> str | None:
+        """获取任务的文本哈希（线程安全）"""
+        assert self.lock is not None
+        task = self.tasks.get(task_id)
+        return task.text_hash if task else None
 
     def get_task_status(self, task_id: str) -> Optional[Dict[str, Any]]:
         """获取任务状态"""

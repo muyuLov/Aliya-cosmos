@@ -75,6 +75,17 @@ logger = get_logger(__name__)
 QuintupleType = Tuple[str, str, str, str, str]
 
 
+def _safe_start_task_manager():
+    """安全启动任务管理器，异常时不破坏事件循环"""
+    async def _wrapper():
+        try:
+            await start_task_manager()
+        except Exception as e:
+            logger.warning("启动任务管理器失败: %s", e)
+
+    return _wrapper()
+
+
 def create_memory_service(
     config_path: str | Path = "data/config/main.yml",
 ) -> Tuple[Any, Any, Any, Any, Any]:
@@ -123,7 +134,7 @@ def create_memory_service(
     # 启动任务管理器
     try:
         loop = asyncio.get_running_loop()
-        loop.create_task(start_task_manager())
+        loop.create_task(_safe_start_task_manager())
     except RuntimeError:
         # 没有运行中的事件循环，延迟启动
         pass

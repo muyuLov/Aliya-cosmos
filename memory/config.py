@@ -53,11 +53,10 @@ _config_lock = threading.Lock()
 
 def _on_config_change(path: str, value: object) -> None:
     """配置变更回调，清除缓存"""
-    global _config, _config_initialized
+    global _config
     with _config_lock:
         if path.startswith("cosmos.service.grag"):
             _config = None
-            _config_initialized = False
 
 
 def init_config_listener() -> None:
@@ -146,3 +145,14 @@ def reload_config() -> GRAGConfig:
     with _config_lock:
         _config = None
     return get_grag_config()
+
+
+__all__ = [
+    "GRAGConfig",
+    "Neo4jConfig",
+    "ExtractorConfig",
+    "TaskManagerConfig",
+    "get_grag_config",
+    "reload_config",
+    "init_config_listener",
+]

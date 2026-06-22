@@ -224,7 +224,11 @@ class RAGQueryEngine:
                 max_tokens=1000,
             )
 
-            response = await self.provider.async_chat_completion(request)
+            cfg = get_grag_config()
+            response = await asyncio.wait_for(
+                self.provider.async_chat_completion(request),
+                timeout=cfg.extractor.timeout,
+            )
             return response.content.strip()
 
         except Exception as e:

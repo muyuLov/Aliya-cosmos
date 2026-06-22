@@ -94,8 +94,8 @@ class QuintupleExtractor:
             timeout:     超时时间（秒），None 时从配置读取
         """
         cfg = get_grag_config()
-        self.max_retries = max_retries or cfg.extractor.max_retries
-        self.timeout = timeout or cfg.extractor.timeout
+        self.max_retries = max_retries if max_retries is not None else cfg.extractor.max_retries
+        self.timeout = timeout if timeout is not None else cfg.extractor.timeout
 
     @property
     def provider(self):
@@ -144,7 +144,8 @@ class QuintupleExtractor:
                     self.provider.async_chat_completion(request),
                     timeout=self.timeout,
                 )
-                quintuples = self._parse_response(response.content.strip())
+                content = response.content.strip() if response.content else ""
+                quintuples = self._parse_response(content)
                 logger.info("提取到 %d 个五元组", len(quintuples))
                 return quintuples
 
