@@ -153,13 +153,13 @@ class QuintupleExtractor:
                 last_exc = asyncio.TimeoutError(f"LLM 调用超时 ({self.timeout}s)")
                 logger.warning("提取超时 (尝试 %d)", attempt + 1)
                 if attempt < self.max_retries:
-                    await asyncio.sleep(1 + attempt)
+                    await asyncio.sleep(min(2 ** attempt, 10))
 
             except Exception as e:
                 last_exc = e
                 logger.warning("提取失败 (尝试 %d): %s", attempt + 1, e)
                 if attempt < self.max_retries:
-                    await asyncio.sleep(1 + attempt)
+                    await asyncio.sleep(min(2 ** attempt, 10))
 
         # 所有重试均失败
         assert last_exc is not None

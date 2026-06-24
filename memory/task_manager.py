@@ -44,6 +44,8 @@ class ExtractionTask:
     task_id: str
     text: str
     text_hash: str
+    source_text: str = ""
+    session_id: str = ""
     status: TaskStatus = TaskStatus.PENDING
     created_at: float = field(default_factory=time.time)
     started_at: Optional[float] = None
@@ -97,7 +99,7 @@ class QuintupleTaskManager:
         self.failed_tasks: int = 0
 
         # 回调函数
-        self.on_task_completed: Optional[Callable] = None
+        self.on_task_completed: Optional[Callable[[ExtractionTask], None]] = None
         self.on_task_failed: Optional[Callable] = None
 
         # 自动清理任务
@@ -186,12 +188,16 @@ class QuintupleTaskManager:
         """生成文本哈希值"""
         return hashlib.sha256(text.encode()).hexdigest()
 
-    async def add_task(self, text: str) -> str:
+    async def add_task(
+        self, text: str, source_text: str = "", session_id: str = ""
+    ) -> str:
         """
         添加新的提取任务
 
         Args:
-            text: 待提取的文本
+            text:        待提取的文本
+            source_text: 原始来源文本（用于图谱关系元属性）
+            session_id:  会话 ID（用于图谱关系元属性）
 
         Returns:
             任务 ID
@@ -227,6 +233,8 @@ class QuintupleTaskManager:
             task_id=task_id,
             text=text,
             text_hash=text_hash,
+            source_text=source_text,
+            session_id=session_id,
             status=TaskStatus.PENDING,
             created_at=time.time(),
             future=asyncio.get_running_loop().create_future(),
@@ -314,7 +322,7 @@ class QuintupleTaskManager:
                     self.task_queue.task_done()  # type: ignore[union-attr]
                     continue
 
-                # 更新任务状态
+                # 标记为运行中（单 writer：仅本 worker 处理此任务）
                 task.status = TaskStatus.RUNNING
                 task.started_at = time.time()
 
@@ -326,26 +334,35 @@ class QuintupleTaskManager:
                         extractor.extract_quintuples(task.text),
                         timeout=self.task_timeout,
                     )
-                    task.status = TaskStatus.COMPLETED
-                    task.result = result
-                    self.completed_tasks += 1
+                    final_status = TaskStatus.COMPLETED
 
                 except asyncio.TimeoutError:
                     error = "任务执行超时"
-                    task.status = TaskStatus.FAILED
-                    task.error = error
-                    self.failed_tasks += 1
+                    final_status = TaskStatus.FAILED
 
                 except Exception as e:
                     error = str(e)
-                    task.status = TaskStatus.FAILED
-                    task.error = error
-                    self.failed_tasks += 1
+                    final_status = TaskStatus.FAILED
                     logger.error(f"{worker_id} 任务失败: {task.task_id}: {error}")
 
-                task.completed_at = time.time()
+                # 锁内原子写入最终状态，与 cancel_task 互斥
+                assert self.lock is not None
+                async with self.lock:
+                    if task.status == TaskStatus.CANCELLED:
+                        # 提取期间被取消，丢弃结果
+                        self.task_queue.task_done()
+                        continue
 
-                # 设置 future 结果
+                    task.status = final_status
+                    task.completed_at = time.time()
+                    if final_status == TaskStatus.COMPLETED:
+                        task.result = result
+                        self.completed_tasks += 1
+                    else:
+                        task.error = error
+                        self.failed_tasks += 1
+
+                # 设置 future 结果（状态已确定，无需锁）
                 if task.future and not task.future.done():
                     if task.status == TaskStatus.COMPLETED:
                         task.future.set_result(result)
@@ -355,7 +372,7 @@ class QuintupleTaskManager:
                 # 触发回调
                 if task.status == TaskStatus.COMPLETED and self.on_task_completed:
                     try:
-                        self.on_task_completed(task.task_id, result)
+                        self.on_task_completed(task)
                     except Exception as e:
                         logger.error(f"任务回调失败: {e}")
                 elif task.status == TaskStatus.FAILED and self.on_task_failed:
@@ -415,13 +432,20 @@ class QuintupleTaskManager:
         return removed_count
 
     def get_task_text_hash(self, task_id: str) -> str | None:
-        """获取任务的文本哈希（线程安全）"""
-        assert self.lock is not None
+        """获取任务的文本哈希
+
+        Note: 在单个事件循环的非并发同步上下文中调用是安全的。
+              跨协程并发读取时，调用方须自行确保 happens-before 关系。
+        """
         task = self.tasks.get(task_id)
         return task.text_hash if task else None
 
     def get_task_status(self, task_id: str) -> Optional[Dict[str, Any]]:
-        """获取任务状态"""
+        """获取任务状态（快照读取，无锁）
+
+        Note: 返回的任务状态是读取时刻的快照，可能已过时。
+              在单事件循环下不会读到损坏数据，但字段之间可能不一致。
+        """
         task = self.tasks.get(task_id)
         if not task:
             return None
@@ -438,11 +462,19 @@ class QuintupleTaskManager:
         }
 
     def get_all_tasks(self) -> List[Dict[str, Any]]:
-        """获取所有任务状态"""
+        """获取所有任务状态（快照读取，无锁）
+
+        Note: 遍历期间其他协程可能修改 tasks 字典。
+              在单事件循环下不会读到损坏数据，但列表可能不完整。
+        """
         return [s for tid in self.tasks if (s := self.get_task_status(tid))]
 
     def get_stats(self) -> Dict[str, Any]:
-        """获取任务管理器统计信息"""
+        """获取任务管理器统计信息（快照读取，无锁）
+
+        Note: 计数器（completed_tasks / failed_tasks）与 tasks 字典状态
+              分别读取，两者可能不严格对应同一时刻的快照。
+        """
         queue_size = self.task_queue.qsize() if self.task_queue else 0
         return {
             "is_running": self.is_running,
@@ -462,7 +494,15 @@ class QuintupleTaskManager:
         }
 
     async def cancel_task(self, task_id: str) -> bool:
-        """取消任务"""
+        """取消任务
+
+        取消 PENDING / RUNNING 状态的任务。已开始执行的 LLM 调用
+        无法被中断（Python asyncio 限制），但 worker 在提取完成后会
+        检测到 CANCELLED 状态并丢弃结果。
+
+        Returns:
+            是否成功将任务标记为取消
+        """
         assert self.lock is not None
         async with self.lock:
             task = self.tasks.get(task_id)

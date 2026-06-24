@@ -66,7 +66,11 @@ ANSWER_PROMPT_TEMPLATE = """基于以下从知识图谱检索到的五元组关�
 
 
 class RAGQueryEngine:
-    """RAG 知识查询引擎"""
+    """RAG 知识查询引擎
+
+    上下文可通过 set_context() 预置或通过 query_async() 的 context 参数传入。
+    参数传入优先于预置上下文。
+    """
 
     def __init__(self) -> None:
         """初始化 RAG 查询引擎"""
@@ -79,7 +83,7 @@ class RAGQueryEngine:
 
     def set_context(self, texts: List[str]) -> None:
         """
-        设置对话上下文
+        设置对话上下文（预置方式；参数传入方式优先）
 
         Args:
             texts: 上下文文本列表
@@ -89,20 +93,23 @@ class RAGQueryEngine:
         self._recent_context = texts[:context_length]
         logger.debug(f"更新查询上下文: {len(self._recent_context)} 条记录")
 
-    def query(self, question: str) -> Optional[str]:
+    def query(self, question: str, context: List[str] | None = None) -> Optional[str]:
         """
         同步查询知识（供无事件循环的上下文使用）。
 
         内部驱动 query_async，调用方须在无运行中事件循环的上下文中使用。
         """
-        return asyncio.run(self.query_async(question))
+        return asyncio.run(self.query_async(question, context=context))
 
-    async def query_async(self, question: str) -> Optional[str]:
+    async def query_async(
+        self, question: str, context: List[str] | None = None
+    ) -> Optional[str]:
         """
         异步查询知识，不阻塞事件循环。
 
         Args:
             question: 用户问题
+            context:  对话上下文；为 None 时使用 set_context() 预置的上下文
 
         Returns:
             回答文本，无结果时返回 None
@@ -114,7 +121,7 @@ class RAGQueryEngine:
             cfg = get_grag_config()
 
             # 1. 提取关键词（LLM call #1）
-            keywords = await self._extract_keywords(question)
+            keywords = await self._extract_keywords(question, context=context)
             if not keywords:
                 logger.warning("未提取到关键词")
                 return None
@@ -143,11 +150,12 @@ class RAGQueryEngine:
                 cause=e,
             )
 
-    async def _extract_keywords(self, question: str) -> List[str]:
+    async def _extract_keywords(
+        self, question: str, context: List[str] | None = None
+    ) -> List[str]:
         """异步提取查询关键词（含自我认知增强）"""
-        context_str = (
-            "\n".join(self._recent_context) if self._recent_context else "无上下文"
-        )
+        ctx = context if context is not None else self._recent_context
+        context_str = "\n".join(ctx) if ctx else "无上下文"
 
         prompt = KEYWORD_EXTRACT_PROMPT.format(
             context=context_str,
@@ -257,14 +265,16 @@ def set_context(texts: List[str]) -> None:
     get_rag_engine().set_context(texts)
 
 
-def query_knowledge(question: str) -> Optional[str]:
+def query_knowledge(question: str, context: List[str] | None = None) -> Optional[str]:
     """全局查询函数（同步，内部驱动异步路径）"""
-    return asyncio.run(get_rag_engine().query_async(question))
+    return asyncio.run(get_rag_engine().query_async(question, context=context))
 
 
-async def query_knowledge_async(question: str) -> Optional[str]:
+async def query_knowledge_async(
+    question: str, context: List[str] | None = None
+) -> Optional[str]:
     """全局查询函数（异步）"""
-    return await get_rag_engine().query_async(question)
+    return await get_rag_engine().query_async(question, context=context)
 
 
 __all__ = [

@@ -135,7 +135,9 @@ class GRAGMemoryManager:
                 return
 
             # 提交任务
-            task_id = await mgr.add_task(text)
+            task_id = await mgr.add_task(
+                text, source_text=text, session_id=session_id
+            )
             self.active_tasks.add(task_id)
             logger.info(f"已提交五元组提取任务: {task_id}")
 
@@ -178,52 +180,51 @@ class GRAGMemoryManager:
             logger.error(f"同步提取存储失败: {e}")
             return False
 
-    def _on_task_completed_wrapper(
-        self, task_id: str, quintuples: List[QuintupleType]
-    ) -> None:
+    def _on_task_completed_wrapper(self, task: task_manager_module.ExtractionTask) -> None:
         """任务完成回调包装"""
-        self.active_tasks.discard(task_id)
-        if not quintuples:
+        self.active_tasks.discard(task.task_id)
+        if not task.result:
             return
 
         try:
-            asyncio.create_task(self._on_task_completed(task_id, quintuples))
+            asyncio.create_task(self._on_task_completed(task))
         except RuntimeError:
-            self._pending_buffer.append((task_id, quintuples))
+            self._pending_buffer.append(task)
 
     async def _flush_pending_buffer(self) -> None:
         """处理缓冲队列中的回调结果"""
         while self._pending_buffer:
-            task_id, quintuples = self._pending_buffer.popleft()
-            await self._on_task_completed(task_id, quintuples)
+            task = self._pending_buffer.popleft()
+            await self._on_task_completed(task)
 
     async def _on_task_completed(
-        self, task_id: str, quintuples: List[QuintupleType]
+        self, task: task_manager_module.ExtractionTask
     ) -> None:
         """任务完成回调"""
         try:
-            self.active_tasks.discard(task_id)
-            logger.info(f"任务完成: {task_id}, 五元组数: {len(quintuples)}")
+            self.active_tasks.discard(task.task_id)
+            logger.info(
+                "任务完成: %s, 五元组数: %d", task.task_id, len(task.result or [])
+            )
 
-            if not quintuples:
-                logger.debug(f"任务 {task_id} 未提取到五元组")
+            if not task.result:
+                logger.debug("任务 %s 未提取到五元组", task.task_id)
                 return
 
-            # 存储到图谱（使用异步接口）
-            success = await graph.store_quintuples_async(quintuples)
+            # 存储到图谱（使用异步接口，携带 source_text 和 session_id）
+            success = await graph.store_quintuples_async(
+                task.result,
+                source_text=task.source_text,
+                session_id=task.session_id,
+            )
             if success:
-                logger.info(f"成功存储 {len(quintuples)} 个五元组到图谱")
+                logger.info("成功存储 %d 个五元组到图谱", len(task.result))
                 # 更新提取缓存（与 _extract_and_store_sync 保持一致）
-                mgr = task_manager_module.get_task_manager()
-                text_hash = mgr.get_task_text_hash(task_id)
-                if text_hash:
-                    self.extraction_cache.add(text_hash)
-
-            # 更新 RAG 上下文
-            rag_query.set_context(self.recent_context)
+                text_hash = task.text_hash
+                self.extraction_cache.add(text_hash)
 
         except Exception as e:
-            logger.error(f"任务完成回调处理失败: {e}")
+            logger.error("任务完成回调处理失败: %s", e)
 
     async def query_memory(self, question: str) -> Optional[str]:
         """
@@ -241,13 +242,12 @@ class GRAGMemoryManager:
         await self._flush_pending_buffer()
 
         try:
-            # 更新 RAG 上下文
-            rag_query.set_context(self.recent_context)
+            # 执行查询（直接传入上下文，不再预置到 RAG 引擎）
+            result = await rag_query.query_knowledge_async(
+                question, context=self.recent_context
+            )
 
-            # 执行查询
-            result = await rag_query.query_knowledge_async(question)
-
-            if result and "未在知识图谱中找到相关信息" not in result:
+            if result is not None:
                 logger.info("从记忆中找到相关信息")
                 return result
 

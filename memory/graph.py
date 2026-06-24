@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import difflib
 import re
+import threading
 import time
 from typing import List, Optional, Tuple
 
@@ -72,6 +73,7 @@ class GraphStore:
         self._connection_failed: bool = False
         self._last_failure_time: float = 0.0
         self._reconnect_cooldown: float = reconnect_cooldown
+        self._connect_lock = threading.Lock()
 
     # ── 连接状态查询 ──────────────────────────────────────────────────────
 
@@ -92,55 +94,75 @@ class GraphStore:
 
         连接失败后等待 self._reconnect_cooldown 秒才允许重试，
         避免每次查询都触发无效连接尝试。
-        """
-        # 冷却期内不重试
-        if self._connection_failed:
-            elapsed = time.monotonic() - self._last_failure_time
-            if elapsed < self._reconnect_cooldown:
-                return None
-            # 冷却结束，重置状态允许重试
-            logger.info("Neo4j 连接冷却结束（%.0fs），尝试重连...", elapsed)
-            self._connection_failed = False
-            self._graph = None
 
+        使用 threading.Lock 保护连接创建临界区，防止多个
+        asyncio.to_thread 并发调用时创建重复连接。
+        """
+        # 快速路径：连接已存在且有效
         if self._graph is not None:
             return self._graph
 
-        if not PY2NEO_AVAILABLE:
-            raise GraphConnectionError("py2neo 未安装，图谱功能已禁用")
+        with self._connect_lock:
+            # 双重检查：锁内再次确认
+            if self._graph is not None:
+                return self._graph
 
-        try:
-            cfg = get_grag_config()
-            if not cfg.enabled:
-                raise GraphConnectionError("GRAG 记忆系统未启用")
-            if not cfg.neo4j.password:
-                raise GraphConnectionError("Neo4j 密码未配置")
+            # 冷却期内不重试
+            if self._connection_failed:
+                elapsed = time.monotonic() - self._last_failure_time
+                if elapsed < self._reconnect_cooldown:
+                    return None
+                # 冷却结束，重置状态允许重试
+                logger.info("Neo4j 连接冷却结束（%.0fs），尝试重连...", elapsed)
+                self._connection_failed = False
+                self._graph = None
 
-            self._graph = Graph(
-                cfg.neo4j.uri,
-                auth=(cfg.neo4j.user, cfg.neo4j.password),
-                name=cfg.neo4j.database,
-            )
-            # 验证连接（触发实际握手）
-            self._graph.service.kernel_version  # type: ignore[attr-defined]
-            logger.info("成功连接到 Neo4j: %s", cfg.neo4j.uri)
-            _ensure_indexes(self._graph)
-            return self._graph
+            if not PY2NEO_AVAILABLE:
+                raise GraphConnectionError("py2neo 未安装，图谱功能已禁用")
 
-        except GraphConnectionError:
-            raise
-        except ServiceUnavailable:
-            logger.warning("Neo4j 连接失败 (ServiceUnavailable)，进入冷却期")
+            try:
+                cfg = get_grag_config()
+                if not cfg.enabled:
+                    raise GraphConnectionError("GRAG 记忆系统未启用")
+                if not cfg.neo4j.password:
+                    raise GraphConnectionError("Neo4j 密码未配置")
+
+                self._graph = Graph(
+                    cfg.neo4j.uri,
+                    auth=(cfg.neo4j.user, cfg.neo4j.password),
+                    name=cfg.neo4j.database,
+                )
+                # 验证连接（触发实际握手）
+                self._graph.service.kernel_version  # type: ignore[attr-defined]
+                logger.info("成功连接到 Neo4j: %s", cfg.neo4j.uri)
+                _ensure_indexes(self._graph)
+                return self._graph
+
+            except GraphConnectionError:
+                raise
+            except ServiceUnavailable:
+                logger.warning("Neo4j 连接失败 (ServiceUnavailable)，进入冷却期")
+                self._graph = None
+                self._connection_failed = True
+                self._last_failure_time = time.monotonic()
+                return None
+            except Exception as e:
+                logger.warning("Neo4j 连接失败: %s，进入冷却期", e)
+                self._graph = None
+                self._connection_failed = True
+                self._last_failure_time = time.monotonic()
+                return None
+
+    def dispose(self) -> None:
+        """释放 Neo4j 连接资源，供应用退出前调用。
+
+        调用后 _get_graph 会重新尝试连接（惰性重连）。
+        """
+        if self._graph is not None:
+            logger.info("释放 Neo4j 连接")
             self._graph = None
-            self._connection_failed = True
-            self._last_failure_time = time.monotonic()
-            return None
-        except Exception as e:
-            logger.warning("Neo4j 连接失败: %s，进入冷却期", e)
-            self._graph = None
-            self._connection_failed = True
-            self._last_failure_time = time.monotonic()
-            return None
+        self._connection_failed = False
+        self._last_failure_time = 0.0
 
     # ── 同步操作 ──────────────────────────────────────────────────────────
 
@@ -252,7 +274,7 @@ class GraphStore:
     ) -> List[QuintupleType]:
         """根据关键词查询图谱（同步）
 
-        对每个关键词进行全字段模糊匹配（节点 name/entity_type、关系类型）。
+        使用全文索引 + name IN 精确过滤，不依赖 CONTAINS 模糊匹配。
         当 similarity_threshold > 0 时，对结果进行文本相似度过滤。
         """
         try:
@@ -271,50 +293,69 @@ class GraphStore:
             if not kw:
                 continue
 
-            query = """
-            MATCH (e1:Entity)-[r]->(e2:Entity)
-            WHERE e1.name CONTAINS $keyword
-               OR e2.name CONTAINS $keyword
-               OR e1.entity_type CONTAINS $keyword
-               OR e2.entity_type CONTAINS $keyword
-            RETURN e1.name AS head, e1.entity_type AS head_type,
-                   type(r) AS relation,
-                   e2.name AS tail, e2.entity_type AS tail_type
-            ORDER BY r.occurrence DESC, r.updated_at DESC
-            LIMIT $limit
-            """
+            records = self._query_by_keyword(graph, kw, limit)
 
-            try:
-                records = graph.run(query, keyword=kw, limit=limit).data()  # type: ignore[attr-defined]
-                for record in records:
-                    head = record["head"]
-                    tail = record["tail"]
-                    relation = record["relation"]
-                    key = (head, relation, tail)
-                    if key in seen:
+            for record in records:
+                head = record["head"]
+                tail = record["tail"]
+                relation = record["relation"]
+                if not head or not tail or not relation:
+                    continue
+
+                key = (head, relation, tail)
+                if key in seen:
+                    continue
+
+                if similarity_threshold > 0:
+                    head_sim = difflib.SequenceMatcher(None, head.lower(), kw.lower()).ratio()
+                    tail_sim = difflib.SequenceMatcher(None, tail.lower(), kw.lower()).ratio()
+                    best_sim = max(head_sim, tail_sim)
+                    if best_sim < similarity_threshold:
                         continue
 
-                    if similarity_threshold > 0:
-                        head_sim = difflib.SequenceMatcher(None, head.lower(), kw.lower()).ratio()
-                        tail_sim = difflib.SequenceMatcher(None, tail.lower(), kw.lower()).ratio()
-                        best_sim = max(head_sim, tail_sim)
-                        if best_sim < similarity_threshold:
-                            continue
-
-                    seen.add(key)
-                    results.append(
-                        (
-                            head,
-                            record["head_type"] or "",
-                            relation,
-                            tail,
-                            record["tail_type"] or "",
-                        )
+                seen.add(key)
+                results.append(
+                    (
+                        head,
+                        record["head_type"] or "",
+                        relation,
+                        tail,
+                        record["tail_type"] or "",
                     )
-            except Exception as e:
-                logger.error("查询图谱失败 (关键词: %s): %s", kw, e)
+                )
 
         return results
+
+    @staticmethod
+    def _query_by_keyword(graph, kw: str, limit: int) -> list:
+        """单关键词图谱查询（全文索引）"""
+        try:
+            ft_records = graph.run(  # type: ignore[attr-defined]
+                "CALL db.index.fulltext.queryNodes('entity_fulltext', $keyword) "
+                "YIELD node RETURN node.name AS name LIMIT $limit",
+                keyword=kw,
+                limit=limit,
+            ).data()
+            names = [r["name"] for r in ft_records if r.get("name")]
+            if not names:
+                return []
+
+            return graph.run(  # type: ignore[attr-defined]
+                """
+                MATCH (e1:Entity)-[r]->(e2:Entity)
+                WHERE e1.name IN $names OR e2.name IN $names
+                RETURN e1.name AS head, e1.entity_type AS head_type,
+                       type(r) AS relation,
+                       e2.name AS tail, e2.entity_type AS tail_type
+                ORDER BY r.occurrence DESC, r.updated_at DESC
+                LIMIT $limit
+                """,
+                names=names,
+                limit=limit,
+            ).data()
+        except Exception as e:
+            logger.error("查询图谱失败 (关键词: %s): %s", kw, e)
+            return []
 
     def get_all_quintuples(self) -> List[QuintupleType]:
         """获取所有五元组（同步）"""
@@ -497,6 +538,16 @@ def _ensure_indexes(g: object) -> None:
             g.run(stmt)  # type: ignore[attr-defined]
         except Exception as e:
             logger.debug("创建索引/约束时出现警告（可忽略）: %s", e)
+
+    # 全文索引（可选，用于关键词查询加速；低版本 Neo4j 静默跳过）
+    try:
+        g.run(  # type: ignore[attr-defined]
+            "CREATE FULLTEXT INDEX entity_fulltext IF NOT EXISTS "
+            "FOR (e:Entity) ON EACH [e.name, e.entity_type]"
+        )
+    except Exception as e:
+        logger.debug("创建全文索引时出现警告（可忽略）: %s", e)
+
     logger.debug("Neo4j 索引和约束已检查/创建")
 
 
