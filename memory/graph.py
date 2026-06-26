@@ -46,6 +46,26 @@ QuintupleType = Tuple[str, str, str, str, str]
 # 关系类型合法性正则（仅允许中英文、数字、下划线、连字符）
 _REL_TYPE_PATTERN = re.compile(r"^[\w\u4e00-\u9fff-]+$")
 
+# source_text 截断配置
+_SOURCE_TEXT_MAX_CHARS = 500
+
+
+def _safe_truncate(text: str, max_chars: int = _SOURCE_TEXT_MAX_CHARS) -> str:
+    """截断文本到指定长度，尽量在句子边界断开"""
+    if len(text) <= max_chars:
+        return text
+    truncated = text[:max_chars]
+    # 在 max_chars 范围内寻找最后一个句子边界
+    for sep in ("\n", "。", ".", "！", "？", "；", ";", "！", "，", ","):
+        pos = truncated.rfind(sep)
+        if pos > max_chars * 0.6:
+            return truncated[:pos + 1]
+    # 回退：查找最后一个空格
+    pos = truncated.rfind(" ")
+    if pos > max_chars * 0.6:
+        return truncated[:pos]
+    return truncated
+
 # 尝试导入 py2neo
 try:
     from py2neo import Graph, Node, Relationship
@@ -158,11 +178,12 @@ class GraphStore:
 
         调用后 _get_graph 会重新尝试连接（惰性重连）。
         """
-        if self._graph is not None:
-            logger.info("释放 Neo4j 连接")
-            self._graph = None
-        self._connection_failed = False
-        self._last_failure_time = 0.0
+        with self._connect_lock:
+            if self._graph is not None:
+                logger.info("释放 Neo4j 连接")
+                self._graph = None
+            self._connection_failed = False
+            self._last_failure_time = 0.0
 
     # ── 同步操作 ──────────────────────────────────────────────────────────
 
@@ -191,7 +212,7 @@ class GraphStore:
             return False
 
         now = time.time()
-        src = (source_text or "")[:200]
+        src = _safe_truncate(source_text or "")
         success_count = 0
 
         node_cypher = """
@@ -276,53 +297,91 @@ class GraphStore:
 
         使用全文索引 + name IN 精确过滤，不依赖 CONTAINS 模糊匹配。
         当 similarity_threshold > 0 时，对结果进行文本相似度过滤。
+        优化：先批量收集所有关键词匹配的实体名，再做一次 MATCH 查询。
         """
         try:
-            graph = self._get_graph()
+            g = self._get_graph()
         except GraphConnectionError:
             logger.debug("图谱未连接，返回空结果")
             return []
 
-        if graph is None:
+        if g is None:
             return []
 
-        seen: set = set()
-        results: List[QuintupleType] = []
-
+        # 批量收集所有关键词的全文索引命中结果
+        all_names: set[str] = set()
         for kw in keywords:
             if not kw:
                 continue
+            try:
+                ft_records = g.run(  # type: ignore[attr-defined]
+                    "CALL db.index.fulltext.queryNodes('entity_fulltext', $keyword) "
+                    "YIELD node RETURN node.name AS name LIMIT $limit",
+                    keyword=kw,
+                    limit=limit,
+                ).data()
+                for r in ft_records:
+                    if r.get("name"):
+                        all_names.add(r["name"])
+            except Exception as e:
+                logger.error("全文索引查询失败 (关键词: %s): %s", kw, e)
 
-            records = self._query_by_keyword(graph, kw, limit)
+        if not all_names:
+            return []
 
-            for record in records:
-                head = record["head"]
-                tail = record["tail"]
-                relation = record["relation"]
-                if not head or not tail or not relation:
-                    continue
+        # 单次 MATCH 查询获取所有相关关系
+        try:
+            records = g.run(  # type: ignore[attr-defined]
+                """
+                MATCH (e1:Entity)-[r]->(e2:Entity)
+                WHERE e1.name IN $names OR e2.name IN $names
+                RETURN e1.name AS head, e1.entity_type AS head_type,
+                       type(r) AS relation,
+                       e2.name AS tail, e2.entity_type AS tail_type
+                ORDER BY r.occurrence DESC, r.updated_at DESC
+                LIMIT $limit
+                """,
+                names=list(all_names),
+                limit=limit * max(len(keywords), 1),
+            ).data()
+        except Exception as e:
+            logger.error("批次图谱查询失败: %s", e)
+            return []
 
-                key = (head, relation, tail)
-                if key in seen:
-                    continue
+        # 去重 + 相似度过滤
+        seen: set = set()
+        results: List[QuintupleType] = []
 
-                if similarity_threshold > 0:
+        for record in records:
+            head = record["head"]
+            tail = record["tail"]
+            relation = record["relation"]
+            if not head or not tail or not relation:
+                continue
+
+            key = (head, relation, tail)
+            if key in seen:
+                continue
+
+            if similarity_threshold > 0:
+                best_sim = 0.0
+                for kw in keywords:
                     head_sim = difflib.SequenceMatcher(None, head.lower(), kw.lower()).ratio()
                     tail_sim = difflib.SequenceMatcher(None, tail.lower(), kw.lower()).ratio()
-                    best_sim = max(head_sim, tail_sim)
-                    if best_sim < similarity_threshold:
-                        continue
+                    best_sim = max(best_sim, head_sim, tail_sim)
+                if best_sim < similarity_threshold:
+                    continue
 
-                seen.add(key)
-                results.append(
-                    (
-                        head,
-                        record["head_type"] or "",
-                        relation,
-                        tail,
-                        record["tail_type"] or "",
-                    )
+            seen.add(key)
+            results.append(
+                (
+                    head,
+                    record["head_type"] or "",
+                    relation,
+                    tail,
+                    record["tail_type"] or "",
                 )
+            )
 
         return results
 

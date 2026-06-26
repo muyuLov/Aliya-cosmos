@@ -153,7 +153,7 @@ class RAGQueryEngine:
     async def _extract_keywords(
         self, question: str, context: List[str] | None = None
     ) -> List[str]:
-        """异步提取查询关键词（含自我认知增强）"""
+        """异步提取查询关键词（含自我认知增强 + 指数退避重试）"""
         ctx = context if context is not None else self._recent_context
         context_str = "\n".join(ctx) if ctx else "无上下文"
 
@@ -162,36 +162,49 @@ class RAGQueryEngine:
             question=question,
         )
 
-        try:
-            request = ChatRequest(
-                messages=[
-                    Message(role="system", content=SYSTEM_PROMPT).to_api_dict(),
-                    Message(role="user", content=prompt).to_api_dict(),
-                ],
-                model=self.provider.model,
-                temperature=0.3,
-                max_tokens=500,
-            )
+        cfg = get_grag_config()
+        max_retries = cfg.extractor.max_retries
 
-            cfg = get_grag_config()
-            response = await asyncio.wait_for(
-                self.provider.async_chat_completion(request),
-                timeout=cfg.extractor.timeout,
-            )
-            keywords = self._parse_keywords(response.content.strip())
+        last_exc: Exception | None = None
+        for attempt in range(max_retries + 1):
+            try:
+                request = ChatRequest(
+                    messages=[
+                        Message(role="system", content=SYSTEM_PROMPT).to_api_dict(),
+                        Message(role="user", content=prompt).to_api_dict(),
+                    ],
+                    model=self.provider.model,
+                    temperature=0.3,
+                    max_tokens=500,
+                )
 
-            # 自我认知增强：问题涉及身份/记忆时，补充用户相关关键词
-            if self._is_identity_question(question):
-                if "用户" not in keywords:
-                    keywords.append("用户")
-                if "我" not in keywords:
-                    keywords.append("我")
+                response = await asyncio.wait_for(
+                    self.provider.async_chat_completion(request),
+                    timeout=cfg.extractor.timeout,
+                )
+                keywords = self._parse_keywords(response.content.strip())
 
-            return keywords
+                # 自我认知增强：问题涉及身份/记忆时，补充用户相关关键词
+                if self._is_identity_question(question):
+                    if "用户" not in keywords:
+                        keywords.append("用户")
+                    if "我" not in keywords:
+                        keywords.append("我")
 
-        except Exception as e:
-            logger.error(f"关键词提取失败: {e}")
-            return []
+                return keywords
+
+            except asyncio.TimeoutError:
+                last_exc = asyncio.TimeoutError(f"关键词提取超时 ({cfg.extractor.timeout}s)")
+                logger.warning("关键词提取超时 (尝试 %d/%d)", attempt + 1, max_retries + 1)
+            except Exception as e:
+                last_exc = e
+                logger.warning("关键词提取失败 (尝试 %d/%d): %s", attempt + 1, max_retries + 1, e)
+
+            if attempt < max_retries:
+                await asyncio.sleep(min(2 ** attempt, 10))
+
+        logger.error("关键词提取全部重试失败: %s", last_exc)
+        return []
 
     def _is_identity_question(self, question: str) -> bool:
         """判断是否为自我认知类问题"""
@@ -213,7 +226,7 @@ class RAGQueryEngine:
     async def _generate_answer(
         self, question: str, quintuples: List[QuintupleType]
     ) -> str:
-        """异步生成回答（LLM call #2）"""
+        """异步生成回答（LLM call #2，含指数退避重试）"""
         quintuple_strs = [
             f"- {h}({h_type}) —[{r}]→ {t}({t_type})"
             for h, h_type, r, t, t_type in quintuples
@@ -224,28 +237,40 @@ class RAGQueryEngine:
             question=question,
         )
 
-        try:
-            request = ChatRequest(
-                messages=[Message(role="user", content=prompt).to_api_dict()],
-                model=self.provider.model,
-                temperature=0.5,
-                max_tokens=1000,
-            )
+        cfg = get_grag_config()
+        max_retries = cfg.extractor.max_retries
 
-            cfg = get_grag_config()
-            response = await asyncio.wait_for(
-                self.provider.async_chat_completion(request),
-                timeout=cfg.extractor.timeout,
-            )
-            return response.content.strip()
+        last_exc: Exception | None = None
+        for attempt in range(max_retries + 1):
+            try:
+                request = ChatRequest(
+                    messages=[Message(role="user", content=prompt).to_api_dict()],
+                    model=self.provider.model,
+                    temperature=0.5,
+                    max_tokens=1000,
+                )
 
-        except Exception as e:
-            logger.error(f"回答生成失败: {e}")
-            raise RAGGenerationError(
-                message=str(e),
-                details={"quintuple_count": len(quintuples)},
-                cause=e,
-            )
+                response = await asyncio.wait_for(
+                    self.provider.async_chat_completion(request),
+                    timeout=cfg.extractor.timeout,
+                )
+                return response.content.strip()
+
+            except asyncio.TimeoutError:
+                last_exc = asyncio.TimeoutError(f"回答生成超时 ({cfg.extractor.timeout}s)")
+                logger.warning("回答生成超时 (尝试 %d/%d)", attempt + 1, max_retries + 1)
+            except Exception as e:
+                last_exc = e
+                logger.warning("回答生成失败 (尝试 %d/%d): %s", attempt + 1, max_retries + 1, e)
+
+            if attempt < max_retries:
+                await asyncio.sleep(min(2 ** attempt, 10))
+
+        raise RAGGenerationError(
+            message=str(last_exc),
+            details={"quintuple_count": len(quintuples)},
+            cause=last_exc,
+        )
 
 
 # 全局 RAG 查询引擎实例

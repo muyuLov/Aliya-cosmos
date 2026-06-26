@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import threading
-from collections import deque
+from collections import OrderedDict, deque
 from typing import Any, Dict, List, Optional, Tuple
 
 from core.logger import get_logger
@@ -25,6 +25,9 @@ QuintupleType = Tuple[str, str, str, str, str]
 
 # 默认 AI 名称
 DEFAULT_AI_NAME = "Aliya"
+
+# recent_context 字符数上限（与 context_length 条数上线并行约束）
+_MAX_CONTEXT_CHARS = 100000
 
 
 class GRAGMemoryManager:
@@ -47,8 +50,9 @@ class GRAGMemoryManager:
         # 最近对话上下文
         self.recent_context: List[str] = []
 
-        # 提取缓存（避免重复提取）
-        self.extraction_cache: set = set()
+        # 提取缓存（避免重复提取，LRU 淘汰）
+        self.extraction_cache: OrderedDict = OrderedDict()
+        self._max_cache_size = 500
 
         # 当前活跃的任务 ID
         self.active_tasks: set = set()
@@ -97,10 +101,17 @@ class GRAGMemoryManager:
             conversation_text = f"用户: {user_input}\n{self.ai_name}: {ai_response}"
             logger.info(f"添加对话记忆: {conversation_text[:50]}...")
 
-            # 更新 recent_context
+            # 更新 recent_context（条数 + 字符数双重约束）
             self.recent_context.append(conversation_text)
+            # 条数约束
             if len(self.recent_context) > self.context_length:
                 self.recent_context = self.recent_context[-self.context_length:]
+            # 字符数约束：从头部移除直到总字符数在限制内
+            while len(self.recent_context) > 1:
+                total_chars = sum(len(s) for s in self.recent_context)
+                if total_chars <= _MAX_CONTEXT_CHARS:
+                    break
+                self.recent_context.pop(0)
 
             # 使用任务管理器异步提取五元组
             if self.auto_extract:
@@ -171,7 +182,9 @@ class GRAGMemoryManager:
                 session_id=session_id,
             )
             if success:
-                self.extraction_cache.add(text_hash)
+                self.extraction_cache[text_hash] = True
+                if len(self.extraction_cache) > self._max_cache_size:
+                    self.extraction_cache.popitem(last=False)
                 logger.info(f"回退方法存储 {len(quintuples)} 个五元组成功")
 
             return success
@@ -221,7 +234,9 @@ class GRAGMemoryManager:
                 logger.info("成功存储 %d 个五元组到图谱", len(task.result))
                 # 更新提取缓存（与 _extract_and_store_sync 保持一致）
                 text_hash = task.text_hash
-                self.extraction_cache.add(text_hash)
+                self.extraction_cache[text_hash] = True
+                if len(self.extraction_cache) > self._max_cache_size:
+                    self.extraction_cache.popitem(last=False)
 
         except Exception as e:
             logger.error("任务完成回调处理失败: %s", e)

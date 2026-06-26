@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import threading
+
 import time
 import traceback
 from dataclasses import dataclass, field
@@ -79,8 +79,8 @@ class QuintupleTaskManager:
         """
         cfg = get_grag_config()
 
-        self.max_workers: int = max_workers or cfg.task_manager.max_workers
-        self.max_queue_size: int = max_queue_size or cfg.task_manager.max_queue_size
+        self.max_workers: int = max_workers if max_workers is not None else cfg.task_manager.max_workers
+        self.max_queue_size: int = max_queue_size if max_queue_size is not None else cfg.task_manager.max_queue_size
         self.task_timeout: int = cfg.task_manager.task_timeout
         self.auto_cleanup_hours: int = cfg.task_manager.auto_cleanup_hours
 
@@ -89,7 +89,7 @@ class QuintupleTaskManager:
 
         # 异步对象（延迟到 start() 中创建）
         self.task_queue: Optional[asyncio.Queue[ExtractionTask]] = None
-        self.lock: Optional[threading.Lock] = None
+        self.lock: Optional[asyncio.Lock] = None
 
         # 工作协程管理
         self.worker_tasks: List[asyncio.Task] = []
@@ -116,7 +116,7 @@ class QuintupleTaskManager:
         if self.task_queue is None:
             self.task_queue = asyncio.Queue(maxsize=self.max_queue_size)
         if self.lock is None:
-            self.lock = threading.Lock()
+            self.lock = asyncio.Lock()
 
     async def start(self) -> None:
         """启动任务管理器（在当前事件循环中创建 Queue 和 workers）"""
@@ -219,7 +219,7 @@ class QuintupleTaskManager:
         text_hash = self._generate_text_hash(text)
 
         # 检查重复任务
-        with self.lock:  # type: ignore[union-attr]
+        async with self.lock:  # type: ignore[union-attr]
             for task in self.tasks.values():
                 if task.text_hash == text_hash and task.status in [
                     TaskStatus.PENDING,
@@ -242,7 +242,7 @@ class QuintupleTaskManager:
         )
 
         # 添加到任务字典
-        with self.lock:  # type: ignore[union-attr]
+        async with self.lock:  # type: ignore[union-attr]
             self.tasks[task_id] = task
 
         # 将任务放入队列
@@ -257,7 +257,7 @@ class QuintupleTaskManager:
         except asyncio.TimeoutError:
             if task.future and not task.future.done():
                 task.future.cancel()
-            with self.lock:  # type: ignore[union-attr]
+            async with self.lock:  # type: ignore[union-attr]
                 if task_id in self.tasks:
                     del self.tasks[task_id]
             raise TaskQueueFullError(
@@ -279,7 +279,7 @@ class QuintupleTaskManager:
             (结果列表, 错误信息) 元组
         """
         assert self.lock is not None
-        with self.lock:
+        async with self.lock:
             task = self.tasks.get(task_id)
             if not task:
                 return None, f"任务不存在: {task_id}"
@@ -319,13 +319,14 @@ class QuintupleTaskManager:
                 except asyncio.TimeoutError:
                     continue
 
-                if task.status != TaskStatus.PENDING:
-                    self.task_queue.task_done()  # type: ignore[union-attr]
-                    continue
-
-                # 标记为运行中（单 writer：仅本 worker 处理此任务）
-                task.status = TaskStatus.RUNNING
-                task.started_at = time.time()
+                # 原子操作：检查 PENDING 并转为 RUNNING，与 cancel_task 互斥
+                assert self.lock is not None
+                async with self.lock:
+                    if task.status != TaskStatus.PENDING:
+                        self.task_queue.task_done()  # type: ignore[union-attr]
+                        continue
+                    task.status = TaskStatus.RUNNING
+                    task.started_at = time.time()
 
                 result: List[QuintupleType] | None = None
                 error: str | None = None
@@ -348,7 +349,7 @@ class QuintupleTaskManager:
 
                 # 锁内原子写入最终状态，与 cancel_task 互斥
                 assert self.lock is not None
-                with self.lock:
+                async with self.lock:
                     if task.status == TaskStatus.CANCELLED:
                         # 提取期间被取消，丢弃结果
                         self.task_queue.task_done()
@@ -410,7 +411,7 @@ class QuintupleTaskManager:
         removed_count = 0
 
         assert self.lock is not None
-        with self.lock:
+        async with self.lock:
             tasks_to_remove = [
                 task_id
                 for task_id, task in self.tasks.items()
@@ -433,75 +434,73 @@ class QuintupleTaskManager:
         return removed_count
 
     def get_task_text_hash(self, task_id: str) -> str | None:
-        """获取任务的文本哈希（线程安全）"""
-        with self.lock:
-            task = self.tasks.get(task_id)
-            return task.text_hash if task else None
+        """获取任务的文本哈希"""
+        task = self.tasks.get(task_id)
+        return task.text_hash if task else None
 
     def get_task_status(self, task_id: str) -> Optional[Dict[str, Any]]:
-        """获取任务状态（线程安全）
-        
+        """获取任务状态
+
         返回的是读取时刻的快照，可能在该快照返回后立即变化。
         """
-        with self.lock:
-            task = self.tasks.get(task_id)
-            if not task:
-                return None
+        task = self.tasks.get(task_id)
+        if not task:
+            return None
 
-            return {
-                "task_id": task.task_id,
-                "status": task.status.value,
-                "created_at": task.created_at,
-                "started_at": task.started_at,
-                "completed_at": task.completed_at,
-                "result_count": len(task.result) if task.result else 0,
-                "error": task.error,
-                "retry_count": task.retry_count,
-            }
+        return {
+            "task_id": task.task_id,
+            "status": task.status.value,
+            "created_at": task.created_at,
+            "started_at": task.started_at,
+            "completed_at": task.completed_at,
+            "result_count": len(task.result) if task.result else 0,
+            "error": task.error,
+            "retry_count": task.retry_count,
+        }
 
     def get_all_tasks(self) -> List[Dict[str, Any]]:
-        """获取所有任务状态（线程安全）
-        
+        """获取所有任务状态
+
         返回的是读取时刻的快照，任务列表在返回后可能变化。
         """
-        with self.lock:
-            return [
-                {
-                    "task_id": t.task_id,
-                    "status": t.status.value,
-                    "created_at": t.created_at,
-                    "started_at": t.started_at,
-                    "completed_at": t.completed_at,
-                    "result_count": len(t.result) if t.result else 0,
-                    "error": t.error,
-                    "retry_count": t.retry_count,
-                }
-                for t in self.tasks.values()
-            ]
+        tasks_snapshot = list(self.tasks.values())
+        return [
+            {
+                "task_id": t.task_id,
+                "status": t.status.value,
+                "created_at": t.created_at,
+                "started_at": t.started_at,
+                "completed_at": t.completed_at,
+                "result_count": len(t.result) if t.result else 0,
+                "error": t.error,
+                "retry_count": t.retry_count,
+            }
+            for t in tasks_snapshot
+        ]
 
     def get_stats(self) -> Dict[str, Any]:
-        """获取任务管理器统计信息（线程安全）
-        
-        所有计数器和任务列表在同一个锁内读取，保证时刻一致。
+        """获取任务管理器统计信息
+
+        所有计数器和任务统计在同一时刻的快照上计算。
         """
         queue_size = self.task_queue.qsize() if self.task_queue else 0
-        with self.lock:
-            return {
-                "is_running": self.is_running,
-                "total_tasks": len(self.tasks),
-                "pending_tasks": sum(
-                    1 for t in self.tasks.values() if t.status == TaskStatus.PENDING
-                ),
-                "running_tasks": sum(
-                    1 for t in self.tasks.values() if t.status == TaskStatus.RUNNING
-                ),
-                "completed_tasks": self.completed_tasks,
-                "failed_tasks": self.failed_tasks,
-                "max_workers": self.max_workers,
-                "max_queue_size": self.max_queue_size,
-                "queue_size": queue_size,
-                "task_timeout": self.task_timeout,
-            }
+        tasks_snapshot = list(self.tasks.values())
+        return {
+            "is_running": self.is_running,
+            "total_tasks": len(self.tasks),
+            "pending_tasks": sum(
+                1 for t in tasks_snapshot if t.status == TaskStatus.PENDING
+            ),
+            "running_tasks": sum(
+                1 for t in tasks_snapshot if t.status == TaskStatus.RUNNING
+            ),
+            "completed_tasks": self.completed_tasks,
+            "failed_tasks": self.failed_tasks,
+            "max_workers": self.max_workers,
+            "max_queue_size": self.max_queue_size,
+            "queue_size": queue_size,
+            "task_timeout": self.task_timeout,
+        }
 
     async def cancel_task(self, task_id: str) -> bool:
         """取消任务
@@ -514,7 +513,7 @@ class QuintupleTaskManager:
             是否成功将任务标记为取消
         """
         assert self.lock is not None
-        with self.lock:
+        async with self.lock:
             task = self.tasks.get(task_id)
             if not task:
                 return False

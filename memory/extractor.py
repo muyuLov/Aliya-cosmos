@@ -21,8 +21,6 @@ from memory.exceptions import (
     LLMProviderError,
 )
 
-logger = get_logger(__name__)
-
 # 五元组类型别名
 QuintupleType = Tuple[str, str, str, str, str]
 
@@ -69,6 +67,9 @@ SYSTEM_PROMPT = """
 请仔细分析文本，只提取有价值的事实性五元组关系。
 """
 
+# 输入文本上限（字符数），超长文本截断以避免超出 LLM 上下文窗口
+MAX_INPUT_CHARS = 40000
+
 # 用户提示词模板
 USER_PROMPT_TEMPLATE = """请从以下文本中提取五元组：
 
@@ -76,6 +77,20 @@ USER_PROMPT_TEMPLATE = """请从以下文本中提取五元组：
 
 只返回 JSON 数组格式，例如：[["主体", "类型", "谓语", "宾语", "类型"]]
 不要输出任何其他内容。"""
+
+
+def _truncate_input(text: str, max_chars: int = MAX_INPUT_CHARS) -> str:
+    """截断过长的输入文本，避免超出 LLM 上下文窗口"""
+    if len(text) <= max_chars:
+        return text
+    logger.warning("输入文本超长 (%d chars)，截断至 %d chars", len(text), max_chars)
+    # 尽量在句子边界截断
+    truncated = text[:max_chars]
+    for sep in ("\n", "。", ".", "！", "？"):
+        pos = truncated.rfind(sep)
+        if pos > max_chars * 0.7:
+            return truncated[:pos + 1] + "..."
+    return truncated + "..."
 
 
 class QuintupleExtractor:
@@ -124,12 +139,15 @@ class QuintupleExtractor:
             ExtractionTimeoutError: 提取超时
             LLMProviderError:       LLM 提供者错误
         """
+        # 输入文本截断保护，避免超长文本超出 LLM 上下文窗口
+        safe_text = _truncate_input(text)
+
         request = ChatRequest(
             messages=[
                 Message(role="system", content=SYSTEM_PROMPT).to_api_dict(),
                 Message(
                     role="user",
-                    content=USER_PROMPT_TEMPLATE.format(text=text),
+                    content=USER_PROMPT_TEMPLATE.format(text=safe_text),
                 ).to_api_dict(),
             ],
             model=self.provider.model,
@@ -184,16 +202,24 @@ class QuintupleExtractor:
         return []
 
     def _validate_quintuples(self, data) -> List[QuintupleType]:
-        """验证并规范化五元组数据"""
+        """验证并规范化五元组数据（含实体类型合理性校验）"""
         if not isinstance(data, list):
             return []
 
         result = []
         for item in data:
-            if isinstance(item, (list, tuple)) and len(item) == 5:
-                # 确保所有元素都是非空字符串
-                if all(isinstance(x, str) and x.strip() for x in item):
-                    result.append(tuple(x.strip() for x in item))
+            if not isinstance(item, (list, tuple)) or len(item) != 5:
+                continue
+            if not all(isinstance(x, str) and x.strip() for x in item):
+                continue
+            head, head_type, rel, tail, tail_type = (x.strip() for x in item)
+            if not _is_valid_entity_type(head_type):
+                logger.warning("非法主体类型，跳过: %s(%s)", head, head_type)
+                continue
+            if not _is_valid_entity_type(tail_type):
+                logger.warning("非法客体类型，跳过: %s(%s)", tail, tail_type)
+                continue
+            result.append((head, head_type, rel, tail, tail_type))
 
         return result
 
