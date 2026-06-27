@@ -17,6 +17,7 @@ from typing import List, Optional, Tuple
 from core.llm.models import ChatRequest, Message
 from core.logger import get_logger
 
+from core.llm.providers.base import LLMProvider
 from memory._utils import parse_json_array
 from memory.config import get_grag_config
 from memory import graph
@@ -77,7 +78,7 @@ class RAGQueryEngine:
         self._recent_context: List[str] = []
 
     @property
-    def provider(self):
+    def provider(self) -> LLMProvider:
         """获取 LLM Provider（通过模块级懒加载共享单例）"""
         return get_memory_provider()
 

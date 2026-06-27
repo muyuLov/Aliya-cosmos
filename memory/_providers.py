@@ -8,15 +8,16 @@ from __future__ import annotations
 
 from typing import Optional
 
+from core.llm.providers.base import LLMProvider
 from core.logger import get_logger
 
 logger = get_logger(__name__)
 
 # 共享 provider 单例（懒加载）
-_shared_provider: Optional[object] = None
+_shared_provider: Optional[LLMProvider] = None
 
 
-def get_memory_provider():
+def get_memory_provider() -> LLMProvider:
     """
     获取记忆系统共享 LLM Provider（懒加载单例）
 

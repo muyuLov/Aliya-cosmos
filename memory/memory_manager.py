@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import threading
-from collections import OrderedDict, deque
+from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple
 
 from core.logger import get_logger
@@ -46,6 +46,7 @@ class GRAGMemoryManager:
         self.auto_extract = cfg.auto_extract
         self.context_length = cfg.context_length
         self.ai_name = ai_name
+        self._init_error: Optional[str] = None
 
         # 最近对话上下文
         self.recent_context: List[str] = []
@@ -57,20 +58,21 @@ class GRAGMemoryManager:
         # 当前活跃的任务 ID
         self.active_tasks: set = set()
 
+        # 进行中（已提交但未完成）的文本哈希，用于去重
+        self._inflight_hashes: set = set()
+
         if not self.enabled:
             logger.info("GRAG 记忆系统已禁用")
             return
 
-        # 回调缓冲队列（当事件循环不可用时暂存回调结果）
-        self._pending_buffer: deque = deque()
-
+        # 注册任务完成回调
         try:
-            logger.info("GRAG 记忆系统初始化成功（Neo4j 连接保持惰性）")
             task_manager_module.get_task_manager().on_task_completed = (
                 self._on_task_completed_wrapper
             )
-
+            logger.info("GRAG 记忆系统初始化成功（Neo4j 连接保持惰性）")
         except Exception as e:
+            self._init_error = str(e)
             logger.error(f"GRAG 记忆系统初始化失败: {e}")
             self.enabled = False
 
@@ -94,8 +96,6 @@ class GRAGMemoryManager:
         if not self.enabled:
             return False
 
-        await self._flush_pending_buffer()
-
         try:
             # 拼接本轮内容
             conversation_text = f"用户: {user_input}\n{self.ai_name}: {ai_response}"
@@ -107,11 +107,7 @@ class GRAGMemoryManager:
             if len(self.recent_context) > self.context_length:
                 self.recent_context = self.recent_context[-self.context_length:]
             # 字符数约束：从头部移除直到总字符数在限制内
-            while len(self.recent_context) > 1:
-                total_chars = sum(len(s) for s in self.recent_context)
-                if total_chars <= _MAX_CONTEXT_CHARS:
-                    break
-                self.recent_context.pop(0)
+            self._trim_context_by_chars()
 
             # 使用任务管理器异步提取五元组
             if self.auto_extract:
@@ -127,10 +123,38 @@ class GRAGMemoryManager:
     def _hash_text(text: str) -> str:
         return hashlib.sha256(text.encode()).hexdigest()
 
+    def _trim_context_by_chars(self) -> None:
+        """将 recent_context 总字符数裁剪到 _MAX_CONTEXT_CHARS 以内"""
+        total_chars = sum(len(s) for s in self.recent_context)
+        while total_chars > _MAX_CONTEXT_CHARS and self.recent_context:
+            self.recent_context.pop(0)
+            total_chars = sum(len(s) for s in self.recent_context)
+
+    def _cache_mark_done(self, text_hash: str) -> None:
+        """统一标记提取缓存（同步/异步路径共用），附带 LRU 淘汰"""
+        if text_hash in self.extraction_cache:
+            self.extraction_cache.move_to_end(text_hash)
+        else:
+            self.extraction_cache[text_hash] = True
+        if len(self.extraction_cache) > self._max_cache_size:
+            self.extraction_cache.popitem(last=False)
+
     async def _submit_extraction_task(
         self, text: str, session_id: str = ""
     ) -> None:
         """提交五元组提取任务"""
+        text_hash = self._hash_text(text)
+
+        # 检查是否已提取过或正在进行中
+        if text_hash in self.extraction_cache:
+            logger.debug(f"跳过已处理的文本: {text[:50]}...")
+            return
+        if text_hash in self._inflight_hashes:
+            logger.debug(f"跳过进行中的文本: {text[:50]}...")
+            return
+
+        self._inflight_hashes.add(text_hash)
+
         try:
             mgr = task_manager_module.get_task_manager()
 
@@ -138,12 +162,6 @@ class GRAGMemoryManager:
             if not mgr.is_running:
                 await task_manager_module.start_task_manager()
                 await asyncio.sleep(0.5)
-
-            # 检查是否已提取过
-            text_hash = self._hash_text(text)
-            if text_hash in self.extraction_cache:
-                logger.debug(f"跳过已处理的文本: {text[:50]}...")
-                return
 
             # 提交任务
             task_id = await mgr.add_task(
@@ -153,6 +171,7 @@ class GRAGMemoryManager:
             logger.info(f"已提交五元组提取任务: {task_id}")
 
         except Exception as e:
+            self._inflight_hashes.discard(text_hash)
             logger.error(f"提交提取任务失败: {e}")
             # 回退到同步提取
             await self._extract_and_store_sync(text, session_id)
@@ -182,9 +201,7 @@ class GRAGMemoryManager:
                 session_id=session_id,
             )
             if success:
-                self.extraction_cache[text_hash] = True
-                if len(self.extraction_cache) > self._max_cache_size:
-                    self.extraction_cache.popitem(last=False)
+                self._cache_mark_done(text_hash)
                 logger.info(f"回退方法存储 {len(quintuples)} 个五元组成功")
 
             return success
@@ -194,34 +211,31 @@ class GRAGMemoryManager:
             return False
 
     def _on_task_completed_wrapper(self, task: task_manager_module.ExtractionTask) -> None:
-        """任务完成回调包装"""
+        """任务完成回调包装（同步，由 task_manager worker 调用）
+
+        职责：清理活跃任务集合，再将异步处理调度到事件循环。
+        active_tasks / _inflight_hashes 在此同步完成，消除跨协程竞态窗口。
+        """
         self.active_tasks.discard(task.task_id)
+        self._inflight_hashes.discard(task.text_hash)
         if not task.result:
             return
 
         try:
             asyncio.create_task(self._on_task_completed(task))
         except RuntimeError:
-            self._pending_buffer.append(task)
-
-    async def _flush_pending_buffer(self) -> None:
-        """处理缓冲队列中的回调结果"""
-        while self._pending_buffer:
-            task = self._pending_buffer.popleft()
-            await self._on_task_completed(task)
+            logger.warning("任务 %s 完成回调无法调度（无事件循环）", task.task_id)
 
     async def _on_task_completed(
         self, task: task_manager_module.ExtractionTask
     ) -> None:
-        """任务完成回调"""
+        """异步处理已完成的任务结果"""
         try:
-            self.active_tasks.discard(task.task_id)
             logger.info(
                 "任务完成: %s, 五元组数: %d", task.task_id, len(task.result or [])
             )
 
             if not task.result:
-                logger.debug("任务 %s 未提取到五元组", task.task_id)
                 return
 
             # 存储到图谱（使用异步接口，携带 source_text 和 session_id）
@@ -232,11 +246,7 @@ class GRAGMemoryManager:
             )
             if success:
                 logger.info("成功存储 %d 个五元组到图谱", len(task.result))
-                # 更新提取缓存（与 _extract_and_store_sync 保持一致）
-                text_hash = task.text_hash
-                self.extraction_cache[text_hash] = True
-                if len(self.extraction_cache) > self._max_cache_size:
-                    self.extraction_cache.popitem(last=False)
+                self._cache_mark_done(task.text_hash)
 
         except Exception as e:
             logger.error("任务完成回调处理失败: %s", e)
@@ -253,8 +263,6 @@ class GRAGMemoryManager:
         """
         if not self.enabled:
             return None
-
-        await self._flush_pending_buffer()
 
         try:
             # 执行查询（直接传入上下文，不再预置到 RAG 引擎）
@@ -316,14 +324,18 @@ class GRAGMemoryManager:
             task_stats = mgr.get_stats()
             graph_stats = graph.get_graph_stats()
 
-            return {
+            ret = {
                 "enabled": True,
                 "context_length": len(self.recent_context),
                 "cache_size": len(self.extraction_cache),
+                "inflight_count": len(self._inflight_hashes),
                 "active_tasks": len(self.active_tasks),
                 "task_manager": task_stats,
                 "graph": graph_stats,
             }
+            if self._init_error:
+                ret["init_error"] = self._init_error
+            return ret
 
         except Exception as e:
             logger.error(f"获取记忆统计失败: {e}")
@@ -340,6 +352,9 @@ class GRAGMemoryManager:
     async def cancel_task(self, task_id: str) -> bool:
         """取消任务"""
         self.active_tasks.discard(task_id)
+        text_hash = task_manager_module.get_task_manager().get_task_text_hash(task_id)
+        if text_hash:
+            self._inflight_hashes.discard(text_hash)
         return await task_manager_module.get_task_manager().cancel_task(task_id)
 
     async def clear_memory(self) -> bool:
@@ -355,6 +370,7 @@ class GRAGMemoryManager:
         try:
             self.recent_context.clear()
             self.extraction_cache.clear()
+            self._inflight_hashes.clear()
 
             # 取消所有活跃任务
             mgr = task_manager_module.get_task_manager()

@@ -151,27 +151,6 @@ class GraphWriteError(GraphOperationError):
         )
 
 
-class FileStorageError(GraphOperationError):
-    """文件存储错误（已弃用 - 不再使用本地文件存储）"""
-
-    def __init__(
-        self,
-        message: str,
-        file_path: str | None = None,
-        details: dict | None = None,
-        cause: Exception | None = None,
-    ):
-        details = details or {}
-        if file_path:
-            details["file_path"] = file_path
-        super().__init__(
-            code="MEM_104",
-            message=f"文件存储失败: {message}",
-            details=details,
-            cause=cause,
-        )
-
-
 # ============ 提取器异常 (MEM_200~299) ============
 
 

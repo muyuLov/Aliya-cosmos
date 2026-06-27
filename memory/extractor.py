@@ -13,6 +13,9 @@ from typing import List, Tuple
 from core.llm.models import ChatRequest, Message
 from core.logger import get_logger
 
+logger = get_logger(__name__)
+
+from core.llm.providers.base import LLMProvider
 from memory._utils import parse_json_array
 from memory.config import get_grag_config
 from memory._providers import get_memory_provider
@@ -70,6 +73,24 @@ SYSTEM_PROMPT = """
 # 输入文本上限（字符数），超长文本截断以避免超出 LLM 上下文窗口
 MAX_INPUT_CHARS = 40000
 
+# 合法实体类型集合（中英文混合，用于类型校验）
+VALID_ENTITY_TYPES = frozenset({
+    "人物", "Person",
+    "地点", "Location",
+    "组织", "Organization",
+    "物品", "Object",
+    "概念", "Concept",
+    "时间", "Time",
+    "事件", "Event",
+    "活动", "Activity",
+    "技能", "Skill",
+})
+
+
+def _is_valid_entity_type(t: str) -> bool:
+    return t in VALID_ENTITY_TYPES
+
+
 # 用户提示词模板
 USER_PROMPT_TEMPLATE = """请从以下文本中提取五元组：
 
@@ -113,7 +134,7 @@ class QuintupleExtractor:
         self.timeout = timeout if timeout is not None else cfg.extractor.timeout
 
     @property
-    def provider(self):
+    def provider(self) -> LLMProvider:
         """获取 LLM Provider（通过模块级懒加载共享单例）"""
         return get_memory_provider()
 

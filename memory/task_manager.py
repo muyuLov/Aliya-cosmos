@@ -217,8 +217,9 @@ class QuintupleTaskManager:
         self._ensure_async_objects()
 
         text_hash = self._generate_text_hash(text)
+        task_id = self._generate_task_id(text)
 
-        # 检查重复任务
+        # 检查重复 + 创建 + 添加（原子操作，消除竞态窗口）
         async with self.lock:  # type: ignore[union-attr]
             for task in self.tasks.values():
                 if task.text_hash == text_hash and task.status in [
@@ -228,21 +229,16 @@ class QuintupleTaskManager:
                     logger.debug(f"发现重复任务: {task.task_id}")
                     return task.task_id
 
-        # 创建新任务
-        task_id = self._generate_task_id(text)
-        task = ExtractionTask(
-            task_id=task_id,
-            text=text,
-            text_hash=text_hash,
-            source_text=source_text,
-            session_id=session_id,
-            status=TaskStatus.PENDING,
-            created_at=time.time(),
-            future=asyncio.get_running_loop().create_future(),
-        )
-
-        # 添加到任务字典
-        async with self.lock:  # type: ignore[union-attr]
+            task = ExtractionTask(
+                task_id=task_id,
+                text=text,
+                text_hash=text_hash,
+                source_text=source_text,
+                session_id=session_id,
+                status=TaskStatus.PENDING,
+                created_at=time.time(),
+                future=asyncio.get_running_loop().create_future(),
+            )
             self.tasks[task_id] = task
 
         # 将任务放入队列

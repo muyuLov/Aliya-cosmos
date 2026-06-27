@@ -68,18 +68,21 @@ def _safe_truncate(text: str, max_chars: int = _SOURCE_TEXT_MAX_CHARS) -> str:
 
 # 尝试导入 py2neo
 try:
-    from py2neo import Graph, Node, Relationship
+    from py2neo import Graph, Node, Relationship, Transaction
     from py2neo.errors import ServiceUnavailable
 
     PY2NEO_AVAILABLE = True
     _GRAPH_TYPE = Graph
+    _TRANSACTION_TYPE = Transaction
 except ImportError:
     Graph = None          # type: ignore[assignment,misc]
     Node = None           # type: ignore[assignment,misc]
     Relationship = None   # type: ignore[assignment,misc]
+    Transaction = None    # type: ignore[assignment,misc]
     ServiceUnavailable = Exception  # type: ignore[assignment,misc]
     PY2NEO_AVAILABLE = False
     _GRAPH_TYPE = object  # type: ignore[assignment,misc]
+    _TRANSACTION_TYPE = object  # type: ignore[assignment,misc]
 
 
 class GraphStore:
@@ -245,44 +248,49 @@ class GraphStore:
                         END
         """
 
+        # 按关系类型分组，每组在一个事务中批处理
+        groups: dict[str, list] = {}
         for head, head_type, rel, tail, tail_type in new_quintuples:
             if not head or not tail or not rel:
                 logger.warning("跳过无效五元组: %s", (head, head_type, rel, tail, tail_type))
                 continue
-
             if not _REL_TYPE_PATTERN.match(rel):
                 logger.warning("非法关系类型，跳过: %s", rel)
                 continue
+            groups.setdefault(rel, []).append((head, head_type, tail, tail_type))
 
-            # Cypher 不支持参数化关系类型，使用校验过的 rel 字符串插值
-            relation_cypher = f"""
-            WITH h, t
-            MERGE (h)-[r:{rel}]->(t)
-              ON CREATE SET r.source_text = $source_text,
-                            r.session_id  = $session_id,
-                            r.confidence  = $confidence,
-                            r.created_at  = $now,
-                            r.updated_at  = $now,
-                            r.occurrence  = 1
-              ON MATCH  SET r.updated_at  = $now,
-                            r.occurrence  = r.occurrence + 1
-            """
-
-            try:
-                g.run(
-                    node_cypher + relation_cypher,
-                    head=head,
-                    head_type=head_type,
-                    tail=tail,
-                    tail_type=tail_type,
-                    source_text=src,
-                    session_id=session_id,
-                    confidence=confidence,
-                    now=now,
-                )
-                success_count += 1
-            except Exception as e:
-                logger.error("存储五元组失败: %s-[%s]->%s: %s", head, rel, tail, e)
+        tx = g.begin()
+        try:
+            for rel, items in groups.items():
+                relation_cypher = f"""
+                WITH h, t
+                MERGE (h)-[r:{rel}]->(t)
+                  ON CREATE SET r.source_text = $source_text,
+                                r.session_id  = $session_id,
+                                r.confidence  = $confidence,
+                                r.created_at  = $now,
+                                r.updated_at  = $now,
+                                r.occurrence  = 1
+                  ON MATCH  SET r.updated_at  = $now,
+                                r.occurrence  = r.occurrence + 1
+                """
+                for head, head_type, tail, tail_type in items:
+                    tx.run(
+                        node_cypher + relation_cypher,
+                        head=head,
+                        head_type=head_type,
+                        tail=tail,
+                        tail_type=tail_type,
+                        source_text=src,
+                        session_id=session_id,
+                        confidence=confidence,
+                        now=now,
+                    )
+                    success_count += 1
+            tx.commit()
+        except Exception:
+            tx.rollback()
+            raise
 
         logger.info("成功存储 %d/%d 个五元组到 Neo4j", success_count, len(new_quintuples))
         return success_count > 0
@@ -384,37 +392,6 @@ class GraphStore:
             )
 
         return results
-
-    @staticmethod
-    def _query_by_keyword(graph, kw: str, limit: int) -> list:
-        """单关键词图谱查询（全文索引）"""
-        try:
-            ft_records = graph.run(  # type: ignore[attr-defined]
-                "CALL db.index.fulltext.queryNodes('entity_fulltext', $keyword) "
-                "YIELD node RETURN node.name AS name LIMIT $limit",
-                keyword=kw,
-                limit=limit,
-            ).data()
-            names = [r["name"] for r in ft_records if r.get("name")]
-            if not names:
-                return []
-
-            return graph.run(  # type: ignore[attr-defined]
-                """
-                MATCH (e1:Entity)-[r]->(e2:Entity)
-                WHERE e1.name IN $names OR e2.name IN $names
-                RETURN e1.name AS head, e1.entity_type AS head_type,
-                       type(r) AS relation,
-                       e2.name AS tail, e2.entity_type AS tail_type
-                ORDER BY r.occurrence DESC, r.updated_at DESC
-                LIMIT $limit
-                """,
-                names=names,
-                limit=limit,
-            ).data()
-        except Exception as e:
-            logger.error("查询图谱失败 (关键词: %s): %s", kw, e)
-            return []
 
     def get_all_quintuples(self) -> List[QuintupleType]:
         """获取所有五元组（同步）"""
