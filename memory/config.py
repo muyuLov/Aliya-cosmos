@@ -2,9 +2,49 @@
 
 import threading
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
 
 from core.config import get_config_instance
+from core.logger import get_logger
+
+logger = get_logger(__name__)
+
+
+def _check_type(
+    value: Any,
+    key: str,
+    expected_type: type | tuple[type, ...],
+    min_val: int | float | None = None,
+    max_val: int | float | None = None,
+) -> None:
+    """校验配置值的类型和范围，不符合时抛出 GRAGConfigError
+
+    Args:
+        value:         配置值
+        key:           配置路径（用于错误消息）
+        expected_type: 期望的类型（支持 type 或 type 元组，如 (int, float)）
+        min_val:       最小值（可选，含边界）
+        max_val:       最大值（可选，含边界）
+    """
+    if not isinstance(value, expected_type):
+        from memory.exceptions import GRAGConfigError
+        if isinstance(expected_type, tuple):
+            type_desc = '|'.join(t.__name__ for t in expected_type)
+        else:
+            type_desc = expected_type.__name__
+        raise GRAGConfigError(
+            f"{key}: 期望类型 {type_desc}，实际 {type(value).__name__} = {value!r}"
+        )
+    if min_val is not None and value < min_val:
+        from memory.exceptions import GRAGConfigError
+        raise GRAGConfigError(
+            f"{key}: 值 {value} 小于最小值 {min_val}"
+        )
+    if max_val is not None and value > max_val:
+        from memory.exceptions import GRAGConfigError
+        raise GRAGConfigError(
+            f"{key}: 值 {value} 大于最大值 {max_val}"
+        )
 
 
 @dataclass
@@ -14,6 +54,7 @@ class Neo4jConfig:
     user: str = "neo4j"
     password: str | None = None
     database: str = "neo4j"
+    max_connections: int = 10
 
 
 @dataclass
@@ -92,7 +133,7 @@ def get_grag_config(config_path: str = "data/config/main.yml") -> GRAGConfig:
 
 
 def _load_grag_config(config_path: str) -> GRAGConfig:
-    """从配置文件加载 GRAG 配置"""
+    """从配置文件加载 GRAG 配置（含类型和范围校验）"""
     cfg = get_config_instance(config_path)
 
     # 加载顶层配置
@@ -102,31 +143,76 @@ def _load_grag_config(config_path: str) -> GRAGConfig:
     similarity_threshold = cfg.get("cosmos.service.grag.similarity_threshold", 0.7)
     session_tracking = cfg.get("cosmos.service.grag.session_tracking", True)
 
+    # 类型和范围校验
+    _check_type(grag_enabled, "cosmos.service.grag.enabled", bool)
+    _check_type(auto_extract, "cosmos.service.grag.auto_extract", bool)
+    _check_type(context_length, "cosmos.service.grag.context_length", int, min_val=1)
+    _check_type(similarity_threshold, "cosmos.service.grag.similarity_threshold", (int, float), min_val=0.0, max_val=1.0)
+    _check_type(session_tracking, "cosmos.service.grag.session_tracking", bool)
+
     # 加载 Neo4j 配置
     neo4j_cfg = cfg.get("cosmos.service.grag.neo4j") or {}
+    neo4j_uri = neo4j_cfg.get("uri", "bolt://localhost:7687")
+    neo4j_user = neo4j_cfg.get("user", "neo4j")
+    neo4j_password = neo4j_cfg.get("password")  # 无默认值，运行时检查
+    neo4j_database = neo4j_cfg.get("database", "neo4j")
+    neo4j_max_connections = neo4j_cfg.get("max_connections", 10)
+
+    _check_type(neo4j_uri, "cosmos.service.grag.neo4j.uri", str)
+    _check_type(neo4j_user, "cosmos.service.grag.neo4j.user", str)
+    _check_type(neo4j_database, "cosmos.service.grag.neo4j.database", str)
+    _check_type(neo4j_max_connections, "cosmos.service.grag.neo4j.max_connections", int, min_val=1)
+    if neo4j_password is not None:
+        _check_type(neo4j_password, "cosmos.service.grag.neo4j.password", str)
+
+    # fail-fast: enabled=True 时 password 必须非空
+    if grag_enabled and (not neo4j_password or not neo4j_password.strip()):
+        from memory.exceptions import GRAGConfigError
+        raise GRAGConfigError(
+            "cosmos.service.grag.neo4j.password: 启用 GRAG 时必须配置 Neo4j 密码"
+        )
+
     neo4j = Neo4jConfig(
-        uri=neo4j_cfg.get("uri", "bolt://localhost:7687"),
-        user=neo4j_cfg.get("user", "neo4j"),
-        password=neo4j_cfg.get("password"),  # 无默认值，运行时检查
-        database=neo4j_cfg.get("database", "neo4j"),
+        uri=neo4j_uri,
+        user=neo4j_user,
+        password=neo4j_password,
+        database=neo4j_database,
+        max_connections=neo4j_max_connections,
     )
 
     # 加载提取器配置
     extractor_cfg = cfg.get("cosmos.service.grag.extractor") or {}
+    extractor_max_retries = extractor_cfg.get("max_retries", 2)
+    extractor_timeout = extractor_cfg.get("timeout", 30)
+
+    _check_type(extractor_max_retries, "cosmos.service.grag.extractor.max_retries", int, min_val=0)
+    _check_type(extractor_timeout, "cosmos.service.grag.extractor.timeout", int, min_val=1)
+
     extractor = ExtractorConfig(
-        max_retries=extractor_cfg.get("max_retries", 2),
-        timeout=extractor_cfg.get("timeout", 30),
+        max_retries=extractor_max_retries,
+        timeout=extractor_timeout,
     )
 
     # 加载任务管理器配置
     task_cfg = cfg.get("cosmos.service.grag.task_manager") or {}
+    task_max_workers = task_cfg.get("max_workers", 3)
+    task_max_queue_size = task_cfg.get("max_queue_size", 100)
+    task_timeout = task_cfg.get("task_timeout", 30)
+    task_auto_cleanup = task_cfg.get("auto_cleanup_hours", 24)
+
+    _check_type(task_max_workers, "cosmos.service.grag.task_manager.max_workers", int, min_val=1)
+    _check_type(task_max_queue_size, "cosmos.service.grag.task_manager.max_queue_size", int, min_val=1)
+    _check_type(task_timeout, "cosmos.service.grag.task_manager.task_timeout", int, min_val=1)
+    _check_type(task_auto_cleanup, "cosmos.service.grag.task_manager.auto_cleanup_hours", int, min_val=1)
+
     task_manager = TaskManagerConfig(
-        max_workers=task_cfg.get("max_workers", 3),
-        max_queue_size=task_cfg.get("max_queue_size", 100),
-        task_timeout=task_cfg.get("task_timeout", 30),
-        auto_cleanup_hours=task_cfg.get("auto_cleanup_hours", 24),
+        max_workers=task_max_workers,
+        max_queue_size=task_max_queue_size,
+        task_timeout=task_timeout,
+        auto_cleanup_hours=task_auto_cleanup,
     )
 
+    logger.debug("GRAG 配置加载并校验完成")
     return GRAGConfig(
         enabled=grag_enabled,
         auto_extract=auto_extract,

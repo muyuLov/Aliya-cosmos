@@ -1,4 +1,4 @@
-"""记忆系统内部 JSON 解析工具函数"""
+"""记忆系统内部工具函数"""
 
 from __future__ import annotations
 

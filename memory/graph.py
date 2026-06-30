@@ -43,28 +43,16 @@ logger = get_logger(__name__)
 # 五元组类型别名：(主体, 主体类型, 谓语, 宾语, 宾语类型)
 QuintupleType = Tuple[str, str, str, str, str]
 
-# 关系类型合法性正则（仅允许中英文、数字、下划线、连字符）
-_REL_TYPE_PATTERN = re.compile(r"^[\w\u4e00-\u9fff-]+$")
+# 关系类型合法性正则（仅允许中文字符、ASCII字母数字、下划线、连字符）
+# 显式白名单替代 \w，避免 Unicode 宽泛匹配绕过
+_REL_TYPE_PATTERN = re.compile(
+    r"^[a-zA-Z0-9_\u4e00-\u9fff\u3400-\u4dbf-]+$"
+)
+# 关系类型最大长度限制（防止 LLM 生成异常长字符串）
+_REL_TYPE_MAX_LEN = 64
 
-# source_text 截断配置
-_SOURCE_TEXT_MAX_CHARS = 500
-
-
-def _safe_truncate(text: str, max_chars: int = _SOURCE_TEXT_MAX_CHARS) -> str:
-    """截断文本到指定长度，尽量在句子边界断开"""
-    if len(text) <= max_chars:
-        return text
-    truncated = text[:max_chars]
-    # 在 max_chars 范围内寻找最后一个句子边界
-    for sep in ("\n", "。", ".", "！", "？", "；", ";", "！", "，", ","):
-        pos = truncated.rfind(sep)
-        if pos > max_chars * 0.6:
-            return truncated[:pos + 1]
-    # 回退：查找最后一个空格
-    pos = truncated.rfind(" ")
-    if pos > max_chars * 0.6:
-        return truncated[:pos]
-    return truncated
+# 关系类型最大长度限制（防止 LLM 生成异常长字符串）
+_REL_TYPE_MAX_LEN = 64
 
 # 尝试导入 py2neo
 try:
@@ -154,6 +142,7 @@ class GraphStore:
                     cfg.neo4j.uri,
                     auth=(cfg.neo4j.user, cfg.neo4j.password),
                     name=cfg.neo4j.database,
+                    max_connections=cfg.neo4j.max_connections,
                 )
                 # 验证连接（触发实际握手）
                 self._graph.service.kernel_version  # type: ignore[attr-defined]
@@ -201,6 +190,7 @@ class GraphStore:
 
         节点统一使用 Entity 标签，类型信息通过 entity_type 属性存储。
         通过 MERGE 保证幂等性，关系存在时累加 occurrence。
+        使用 UNWIND 批量写入：每个关系类型一次 tx.run()，消除 N+1 网络往返。
         """
         if not new_quintuples:
             return True
@@ -215,40 +205,10 @@ class GraphStore:
             return False
 
         now = time.time()
-        src = _safe_truncate(source_text or "")
+        src = source_text or ""
         success_count = 0
 
-        node_cypher = """
-        MERGE (h:Entity {name: $head})
-          ON CREATE SET h.entity_type = $head_type,
-                        h.aliases     = $head,
-                        h.created_at  = $now,
-                        h.updated_at  = $now
-          ON MATCH  SET h.updated_at  = $now,
-                        h.aliases     = CASE
-                          WHEN h.aliases IS NULL OR h.aliases = ''
-                            THEN $head
-                          WHEN h.aliases CONTAINS $head
-                            THEN h.aliases
-                          ELSE h.aliases + ';' + $head
-                        END
-
-        MERGE (t:Entity {name: $tail})
-          ON CREATE SET t.entity_type = $tail_type,
-                        t.aliases     = $tail,
-                        t.created_at  = $now,
-                        t.updated_at  = $now
-          ON MATCH  SET t.updated_at  = $now,
-                        t.aliases     = CASE
-                          WHEN t.aliases IS NULL OR t.aliases = ''
-                            THEN $tail
-                          WHEN t.aliases CONTAINS $tail
-                            THEN t.aliases
-                          ELSE t.aliases + ';' + $tail
-                        END
-        """
-
-        # 按关系类型分组，每组在一个事务中批处理
+        # 按关系类型分组，每组通过 UNWIND 一次性批量写入
         groups: dict[str, list] = {}
         for head, head_type, rel, tail, tail_type in new_quintuples:
             if not head or not tail or not rel:
@@ -257,12 +217,47 @@ class GraphStore:
             if not _REL_TYPE_PATTERN.match(rel):
                 logger.warning("非法关系类型，跳过: %s", rel)
                 continue
+            if len(rel) > _REL_TYPE_MAX_LEN:
+                logger.warning("关系类型过长 (%d > %d)，跳过: %s", len(rel), _REL_TYPE_MAX_LEN, rel)
+                continue
             groups.setdefault(rel, []).append((head, head_type, tail, tail_type))
+
+        if not groups:
+            return True
 
         tx = g.begin()
         try:
             for rel, items in groups.items():
-                relation_cypher = f"""
+                cypher = f"""
+                UNWIND $items AS item
+                MERGE (h:Entity {{name: item[0]}})
+                  ON CREATE SET h.entity_type = item[1],
+                                h.aliases     = item[0],
+                                h.created_at  = $now,
+                                h.updated_at  = $now
+                  ON MATCH  SET h.updated_at  = $now,
+                                h.aliases     = CASE
+                                  WHEN h.aliases IS NULL OR h.aliases = ''
+                                    THEN item[0]
+                                  WHEN h.aliases CONTAINS item[0]
+                                    THEN h.aliases
+                                  ELSE h.aliases + ';' + item[0]
+                                END
+
+                MERGE (t:Entity {{name: item[2]}})
+                  ON CREATE SET t.entity_type = item[3],
+                                t.aliases     = item[2],
+                                t.created_at  = $now,
+                                t.updated_at  = $now
+                  ON MATCH  SET t.updated_at  = $now,
+                                t.aliases     = CASE
+                                  WHEN t.aliases IS NULL OR t.aliases = ''
+                                    THEN item[2]
+                                  WHEN t.aliases CONTAINS item[2]
+                                    THEN t.aliases
+                                  ELSE t.aliases + ';' + item[2]
+                                END
+
                 WITH h, t
                 MERGE (h)-[r:{rel}]->(t)
                   ON CREATE SET r.source_text = $source_text,
@@ -274,19 +269,15 @@ class GraphStore:
                   ON MATCH  SET r.updated_at  = $now,
                                 r.occurrence  = r.occurrence + 1
                 """
-                for head, head_type, tail, tail_type in items:
-                    tx.run(
-                        node_cypher + relation_cypher,
-                        head=head,
-                        head_type=head_type,
-                        tail=tail,
-                        tail_type=tail_type,
-                        source_text=src,
-                        session_id=session_id,
-                        confidence=confidence,
-                        now=now,
-                    )
-                    success_count += 1
+                tx.run(
+                    cypher,
+                    items=items,
+                    source_text=src,
+                    session_id=session_id,
+                    confidence=confidence,
+                    now=now,
+                )
+                success_count += len(items)
             tx.commit()
         except Exception:
             tx.rollback()
@@ -316,23 +307,26 @@ class GraphStore:
         if g is None:
             return []
 
-        # 批量收集所有关键词的全文索引命中结果
+        # 合并所有关键词为单次全文索引查询（减少网络往返 N→1）
         all_names: set[str] = set()
-        for kw in keywords:
-            if not kw:
-                continue
-            try:
-                ft_records = g.run(  # type: ignore[attr-defined]
-                    "CALL db.index.fulltext.queryNodes('entity_fulltext', $keyword) "
-                    "YIELD node RETURN node.name AS name LIMIT $limit",
-                    keyword=kw,
-                    limit=limit,
-                ).data()
-                for r in ft_records:
-                    if r.get("name"):
-                        all_names.add(r["name"])
-            except Exception as e:
-                logger.error("全文索引查询失败 (关键词: %s): %s", kw, e)
+        valid_keywords = [kw for kw in keywords if kw]
+        if not valid_keywords:
+            return []
+
+        # 构建 Lucene OR 查询（每个关键词用引号包裹以做精确匹配）
+        lucene_query = " OR ".join(f'"{kw}"' for kw in valid_keywords)
+        try:
+            ft_records = g.run(  # type: ignore[attr-defined]
+                "CALL db.index.fulltext.queryNodes('entity_fulltext', $query) "
+                "YIELD node RETURN node.name AS name LIMIT $limit",
+                query=lucene_query,
+                limit=limit * len(valid_keywords),
+            ).data()
+            for r in ft_records:
+                if r.get("name"):
+                    all_names.add(r["name"])
+        except Exception as e:
+            logger.error("全文索引合并查询失败: %s", e)
 
         if not all_names:
             return []
@@ -393,8 +387,13 @@ class GraphStore:
 
         return results
 
-    def get_all_quintuples(self) -> List[QuintupleType]:
-        """获取所有五元组（同步）"""
+    def get_all_quintuples(self, limit: int = 1000, offset: int = 0) -> List[QuintupleType]:
+        """获取所有五元组（同步，支持分页）
+
+        Args:
+            limit:  返回数量上限，设为 0 表示不限制
+            offset: 跳过条数
+        """
         try:
             graph = self._get_graph()
         except GraphConnectionError:
@@ -405,14 +404,24 @@ class GraphStore:
             return []
 
         try:
-            query = """
-            MATCH (e1:Entity)-[r]->(e2:Entity)
-            RETURN e1.name AS head, e1.entity_type AS head_type,
-                   type(r) AS relation,
-                   e2.name AS tail, e2.entity_type AS tail_type
-            ORDER BY r.created_at DESC
-            """
-            records = graph.run(query).data()  # type: ignore[attr-defined]
+            if limit > 0:
+                query = """
+                MATCH (e1:Entity)-[r]->(e2:Entity)
+                RETURN e1.name AS head, e1.entity_type AS head_type,
+                       type(r) AS relation,
+                       e2.name AS tail, e2.entity_type AS tail_type
+                ORDER BY r.created_at DESC
+                SKIP $offset LIMIT $limit
+                """
+            else:
+                query = """
+                MATCH (e1:Entity)-[r]->(e2:Entity)
+                RETURN e1.name AS head, e1.entity_type AS head_type,
+                       type(r) AS relation,
+                       e2.name AS tail, e2.entity_type AS tail_type
+                ORDER BY r.created_at DESC
+                """
+            records = graph.run(query, limit=limit or 1000, offset=offset).data()  # type: ignore[attr-defined]
             return [
                 (
                     rec["head"],
@@ -439,8 +448,8 @@ class GraphStore:
             return False
 
         try:
-            graph.run("MATCH (n) DETACH DELETE n")  # type: ignore[attr-defined]
-            logger.info("已清空 Neo4j 图谱")
+            graph.run("MATCH (n:Entity) DETACH DELETE n")  # type: ignore[attr-defined]
+            logger.info("已清空 Neo4j 图谱（仅 Entity 节点）")
             return True
         except Exception as e:
             logger.error("清空五元组失败: %s", e)
@@ -520,9 +529,11 @@ class GraphStore:
             self.query_graph_by_keywords, keywords, limit, similarity_threshold
         )
 
-    async def get_all_quintuples_async(self) -> List[QuintupleType]:
-        """获取所有五元组（异步）"""
-        return await asyncio.to_thread(self.get_all_quintuples)
+    async def get_all_quintuples_async(
+        self, limit: int = 1000, offset: int = 0
+    ) -> List[QuintupleType]:
+        """获取所有五元组（异步，支持分页）"""
+        return await asyncio.to_thread(self.get_all_quintuples, limit, offset)
 
     async def get_graph_stats_async(self) -> dict:
         """获取图谱统计信息（异步）"""
@@ -536,26 +547,31 @@ class GraphStore:
 # ── 模块级单例管理 ──────────────────────────────────────────────────────────
 
 _graph_store: Optional[GraphStore] = None
+_graph_store_lock = threading.Lock()
 
 
 def get_graph_store() -> GraphStore:
-    """获取模块级 GraphStore 单例（懒加载）"""
+    """获取模块级 GraphStore 单例（线程安全懒加载）"""
     global _graph_store
     if _graph_store is None:
-        _graph_store = GraphStore()
+        with _graph_store_lock:
+            if _graph_store is None:
+                _graph_store = GraphStore()
     return _graph_store
 
 
 def set_graph_store(store: GraphStore) -> None:
     """替换当前 GraphStore 实例（用于测试注入 mock 对象）"""
     global _graph_store
-    _graph_store = store
+    with _graph_store_lock:
+        _graph_store = store
 
 
 def reset_graph_store() -> None:
     """重置 GraphStore 为全新实例（测试 teardown 使用）"""
     global _graph_store
-    _graph_store = None
+    with _graph_store_lock:
+        _graph_store = None
 
 
 # ── 模块级函数（向后兼容代理） ─────────────────────────────────────────────
@@ -608,8 +624,8 @@ def query_graph_by_keywords(
     )
 
 
-def get_all_quintuples() -> List[QuintupleType]:
-    return get_graph_store().get_all_quintuples()
+def get_all_quintuples(limit: int = 1000, offset: int = 0) -> List[QuintupleType]:
+    return get_graph_store().get_all_quintuples(limit, offset)
 
 
 def clear_all_quintuples() -> bool:
@@ -641,8 +657,10 @@ async def query_graph_by_keywords_async(
     )
 
 
-async def get_all_quintuples_async() -> List[QuintupleType]:
-    return await get_graph_store().get_all_quintuples_async()
+async def get_all_quintuples_async(
+    limit: int = 1000, offset: int = 0,
+) -> List[QuintupleType]:
+    return await get_graph_store().get_all_quintuples_async(limit, offset)
 
 
 async def get_graph_stats_async() -> dict:

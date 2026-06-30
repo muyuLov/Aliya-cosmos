@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from typing import List, Tuple
 
 from core.llm.models import ChatRequest, Message
@@ -17,6 +18,7 @@ logger = get_logger(__name__)
 
 from core.llm.providers.base import LLMProvider
 from memory._utils import parse_json_array
+from memory._retry import async_retry, is_transient_error
 from memory.config import get_grag_config
 from memory._providers import get_memory_provider
 from memory.exceptions import (
@@ -70,10 +72,7 @@ SYSTEM_PROMPT = """
 请仔细分析文本，只提取有价值的事实性五元组关系。
 """
 
-# 输入文本上限（字符数），超长文本截断以避免超出 LLM 上下文窗口
-MAX_INPUT_CHARS = 40000
-
-# 合法实体类型集合（中英文混合，用于类型校验）
+# 合法实体类型集合
 VALID_ENTITY_TYPES = frozenset({
     "人物", "Person",
     "地点", "Location",
@@ -98,20 +97,6 @@ USER_PROMPT_TEMPLATE = """请从以下文本中提取五元组：
 
 只返回 JSON 数组格式，例如：[["主体", "类型", "谓语", "宾语", "类型"]]
 不要输出任何其他内容。"""
-
-
-def _truncate_input(text: str, max_chars: int = MAX_INPUT_CHARS) -> str:
-    """截断过长的输入文本，避免超出 LLM 上下文窗口"""
-    if len(text) <= max_chars:
-        return text
-    logger.warning("输入文本超长 (%d chars)，截断至 %d chars", len(text), max_chars)
-    # 尽量在句子边界截断
-    truncated = text[:max_chars]
-    for sep in ("\n", "。", ".", "！", "？"):
-        pos = truncated.rfind(sep)
-        if pos > max_chars * 0.7:
-            return truncated[:pos + 1] + "..."
-    return truncated + "..."
 
 
 class QuintupleExtractor:
@@ -147,8 +132,7 @@ class QuintupleExtractor:
         return asyncio.run(self.extract_async(text))
 
     async def extract_async(self, text: str) -> List[QuintupleType]:
-        """
-        异步提取五元组（含指数退避重试 + 超时控制）。
+        """异步提取五元组（含指数退避重试 + 超时控制 + 永久性错误检测）。
 
         Args:
             text: 待提取的文本
@@ -160,8 +144,7 @@ class QuintupleExtractor:
             ExtractionTimeoutError: 提取超时
             LLMProviderError:       LLM 提供者错误
         """
-        # 输入文本截断保护，避免超长文本超出 LLM 上下文窗口
-        safe_text = _truncate_input(text)
+        safe_text = text
 
         request = ChatRequest(
             messages=[
@@ -176,44 +159,34 @@ class QuintupleExtractor:
             max_tokens=2000,
         )
 
-        last_exc: Exception | None = None
-        for attempt in range(self.max_retries + 1):
-            try:
-                response = await asyncio.wait_for(
-                    self.provider.async_chat_completion(request),
-                    timeout=self.timeout,
-                )
-                content = response.content.strip() if response.content else ""
-                quintuples = self._parse_response(content)
-                logger.info("提取到 %d 个五元组", len(quintuples))
-                return quintuples
+        async def _call() -> str:
+            response = await self.provider.async_chat_completion(request)
+            return response.content.strip() if response.content else ""
 
-            except asyncio.TimeoutError:
-                last_exc = asyncio.TimeoutError(f"LLM 调用超时 ({self.timeout}s)")
-                logger.warning("提取超时 (尝试 %d)", attempt + 1)
-                if attempt < self.max_retries:
-                    await asyncio.sleep(min(2 ** attempt, 10))
-
-            except Exception as e:
-                last_exc = e
-                logger.warning("提取失败 (尝试 %d): %s", attempt + 1, e)
-                if attempt < self.max_retries:
-                    await asyncio.sleep(min(2 ** attempt, 10))
-
-        # 所有重试均失败
-        assert last_exc is not None
-        if isinstance(last_exc, asyncio.TimeoutError):
+        try:
+            content = await async_retry(
+                _call,
+                max_retries=self.max_retries,
+                timeout=float(self.timeout),
+                operation_name="五元组提取",
+            )
+        except asyncio.TimeoutError as e:
             raise ExtractionTimeoutError(
                 timeout=float(self.timeout),
                 details={"attempt": self.max_retries + 1},
-                cause=last_exc,
+                cause=e,
             )
-        raise LLMProviderError(
-            message=str(last_exc),
-            provider=type(self.provider).__name__,
-            details={"attempt": self.max_retries + 1},
-            cause=last_exc,
-        )
+        except Exception as e:
+            raise LLMProviderError(
+                message=str(e),
+                provider=type(self.provider).__name__,
+                details={"attempt": self.max_retries + 1},
+                cause=e,
+            )
+
+        quintuples = self._parse_response(content)
+        logger.info("提取到 %d 个五元组", len(quintuples))
+        return quintuples
 
     def _parse_response(self, content: str) -> List[QuintupleType]:
         """解析 LLM 响应，提取五元组"""
@@ -247,13 +220,16 @@ class QuintupleExtractor:
 
 # 全局提取器实例
 _extractor: QuintupleExtractor | None = None
+_extractor_lock = threading.Lock()
 
 
 def get_extractor() -> QuintupleExtractor:
-    """获取五元组提取器单例"""
+    """获取五元组提取器单例（线程安全懒加载）"""
     global _extractor
     if _extractor is None:
-        _extractor = QuintupleExtractor()
+        with _extractor_lock:
+            if _extractor is None:
+                _extractor = QuintupleExtractor()
     return _extractor
 
 

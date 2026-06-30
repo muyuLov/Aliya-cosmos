@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-
+import threading
 import time
 import traceback
 from dataclasses import dataclass, field
@@ -63,12 +63,15 @@ class QuintupleTaskManager:
 
     Note: asyncio.Queue 在 start() 内创建，保证绑定到正确的事件循环。
           __init__ 仅存储配置，不创建任何异步对象。
+
+    依赖注入: extract_func 参数允许测试时注入 mock 提取函数。
     """
 
     def __init__(
         self,
         max_workers: int | None = None,
         max_queue_size: int | None = None,
+        extract_func: Callable | None = None,
     ):
         """
         初始化任务管理器（仅存储配置，不创建异步对象）
@@ -76,6 +79,7 @@ class QuintupleTaskManager:
         Args:
             max_workers:    最大并发工作协程数，None 时从配置读取
             max_queue_size: 最大任务队列大小，None 时从配置读取
+            extract_func:   五元组提取函数（async），None 时使用默认 extractor.extract_quintuples
         """
         cfg = get_grag_config()
 
@@ -86,6 +90,8 @@ class QuintupleTaskManager:
 
         # 任务存储
         self.tasks: Dict[str, ExtractionTask] = {}
+        # text_hash → task_id 辅助索引（add_task 去重 O(1)，替代 O(n) 遍历）
+        self._hash_to_active_task: Dict[str, str] = {}
 
         # 异步对象（延迟到 start() 中创建）
         self.task_queue: Optional[asyncio.Queue[ExtractionTask]] = None
@@ -102,6 +108,9 @@ class QuintupleTaskManager:
         # 回调函数
         self.on_task_completed: Optional[Callable[[ExtractionTask], None]] = None
         self.on_task_failed: Optional[Callable] = None
+
+        # 依赖注入：提取函数（None 时在 _worker_loop 中回退到默认实现）
+        self._extract_func: Callable | None = extract_func
 
         # 自动清理任务
         self.cleanup_task: Optional[asyncio.Task] = None
@@ -219,15 +228,19 @@ class QuintupleTaskManager:
         text_hash = self._generate_text_hash(text)
         task_id = self._generate_task_id(text)
 
-        # 检查重复 + 创建 + 添加（原子操作，消除竞态窗口）
+        # 检查重复 + 创建 + 添加（原子操作，消除竞态窗口，O(1) 去重）
         async with self.lock:  # type: ignore[union-attr]
-            for task in self.tasks.values():
-                if task.text_hash == text_hash and task.status in [
+            existing_id = self._hash_to_active_task.get(text_hash)
+            if existing_id is not None:
+                existing = self.tasks.get(existing_id)
+                if existing and existing.status in (
                     TaskStatus.PENDING,
                     TaskStatus.RUNNING,
-                ]:
-                    logger.debug(f"发现重复任务: {task.task_id}")
-                    return task.task_id
+                ):
+                    logger.debug(f"发现重复任务: {existing.task_id}")
+                    return existing.task_id
+                # 索引中记录的任务已完成/取消，清理过期索引
+                del self._hash_to_active_task[text_hash]
 
             task = ExtractionTask(
                 task_id=task_id,
@@ -240,6 +253,7 @@ class QuintupleTaskManager:
                 future=asyncio.get_running_loop().create_future(),
             )
             self.tasks[task_id] = task
+            self._hash_to_active_task[text_hash] = task_id
 
         # 将任务放入队列
         try:
@@ -328,8 +342,9 @@ class QuintupleTaskManager:
                 error: str | None = None
 
                 try:
+                    extract_fn = self._extract_func or extractor.extract_quintuples
                     result = await asyncio.wait_for(
-                        extractor.extract_quintuples(task.text),
+                        extract_fn(task.text),
                         timeout=self.task_timeout,
                     )
                     final_status = TaskStatus.COMPLETED
@@ -359,6 +374,8 @@ class QuintupleTaskManager:
                     else:
                         task.error = error
                         self.failed_tasks += 1
+                    # 任务结束，从活跃去重索引中移除
+                    self._hash_to_active_task.pop(task.text_hash, None)
 
                 # 设置 future 结果（状态已确定，无需锁）
                 if task.future and not task.future.done():
@@ -517,6 +534,8 @@ class QuintupleTaskManager:
             if task.status in [TaskStatus.PENDING, TaskStatus.RUNNING]:
                 task.status = TaskStatus.CANCELLED
                 task.completed_at = time.time()
+                # 从活跃去重索引中移除
+                self._hash_to_active_task.pop(task.text_hash, None)
 
                 if task.future and not task.future.done():
                     task.future.cancel()
@@ -544,18 +563,21 @@ class QuintupleTaskManager:
 # ─────────────────────────── 懒加载工厂 ───────────────────────────
 
 _task_manager_instance: Optional[QuintupleTaskManager] = None
+_task_manager_lock = threading.Lock()
 
 
 def get_task_manager() -> QuintupleTaskManager:
     """
-    获取任务管理器单例（懒加载）
+    获取任务管理器单例（线程安全懒加载）
 
     首次调用时才创建 QuintupleTaskManager 实例，
     避免模块导入时因无事件循环而触发 asyncio.Queue 创建问题。
     """
     global _task_manager_instance
     if _task_manager_instance is None:
-        _task_manager_instance = QuintupleTaskManager()
+        with _task_manager_lock:
+            if _task_manager_instance is None:
+                _task_manager_instance = QuintupleTaskManager()
     return _task_manager_instance
 
 
