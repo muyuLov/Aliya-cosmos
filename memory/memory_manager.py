@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import threading
+import time
 from collections import OrderedDict, deque
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -73,6 +74,9 @@ class GRAGMemoryManager:
 
         # 当前活跃的任务 ID
         self.active_tasks: set = set()
+
+        # clear_memory 调用时间戳，用于过滤陈旧任务回调
+        self._last_clear_time: float = 0.0
 
         # 进行中（已提交但未完成）的文本哈希，用于去重
         self._inflight_hashes: set = set()
@@ -270,6 +274,10 @@ class GRAGMemoryManager:
         self, task: task_manager_module.ExtractionTask
     ) -> None:
         """异步处理已完成的任务结果"""
+        if task.created_at < self._last_clear_time:
+            logger.debug("跳过 clear_memory 前提交的陈旧任务: %s", task.task_id)
+            return
+
         try:
             logger.info(
                 "任务完成: %s, 五元组数: %d", task.task_id, len(task.result or [])
@@ -408,6 +416,8 @@ class GRAGMemoryManager:
         """
         if not self.enabled:
             return False
+
+        self._last_clear_time = time.time()
 
         try:
             self.recent_context.clear()

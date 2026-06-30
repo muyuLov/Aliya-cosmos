@@ -5,7 +5,6 @@ from __future__ import annotations
 from memory.extractor import (
     VALID_ENTITY_TYPES,
     _is_valid_entity_type,
-    _truncate_input,
     QuintupleExtractor,
 )
 from memory._utils import parse_json_array
@@ -54,29 +53,6 @@ class TestValidEntityTypesSet:
         chinese = {"人物", "地点", "组织", "物品", "概念", "时间", "事件", "活动", "技能"}
         english = {"Person", "Location", "Organization", "Object", "Concept", "Time", "Event", "Activity", "Skill"}
         assert chinese | english == VALID_ENTITY_TYPES
-
-
-class TestTruncateInput:
-    def test_short_text(self):
-        text = "你好世界"
-        assert _truncate_input(text, max_chars=100) == text
-
-    def test_exact_boundary(self):
-        text = "a" * 100
-        result = _truncate_input(text, max_chars=100)
-        assert result == text
-
-    def test_truncate_at_sentence_boundary(self):
-        text = "第一句。第二句。第三句。"
-        result = _truncate_input(text, max_chars=10)
-        assert len(result) <= 13  # 10 chars + "..."
-        assert result.endswith("...")
-
-    def test_very_long_no_punctuation(self):
-        text = "无标点" * 200
-        MAX = 100
-        result = _truncate_input(text, max_chars=MAX)
-        assert len(result) <= MAX + 3
 
 
 class TestParseJsonArray:

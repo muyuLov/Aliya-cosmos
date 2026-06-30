@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -27,6 +27,12 @@ def manager():
     ):
         cfg = mock_cfg.return_value
         cfg.enabled = False
+        cfg.context_length = 10
+        cfg.auto_extract = True
+        cfg.similarity_threshold = 0.7
+        cfg.session_tracking = True
+        cfg.extractor.max_retries = 2
+        cfg.extractor.timeout = 30
         mgr = GRAGMemoryManager(ai_name="Test")
         return mgr
 
@@ -66,21 +72,22 @@ class TestCacheMarkDone:
 
 class TestTrimContextByChars:
     def test_empty_context(self, manager):
-        manager.recent_context = []
+        manager.recent_context = deque()
         manager._trim_context_by_chars()
-        assert manager.recent_context == []
+        assert len(manager.recent_context) == 0
 
     def test_within_limit(self, manager):
-        texts = ["短文本"] * 5
+        texts = deque(["短文本"] * 5)
         total = sum(len(t) for t in texts)
         assert total < _MAX_CONTEXT_CHARS
-        manager.recent_context = list(texts)
+        manager.recent_context = texts
         manager._trim_context_by_chars()
         assert len(manager.recent_context) == 5
 
     def test_exceeds_limit(self, manager):
         long_text = "a" * (_MAX_CONTEXT_CHARS // 2 + 100)
-        manager.recent_context = [long_text, long_text]  # 总长 > limit
+        manager.recent_context = deque([long_text, long_text])  # 总长 > limit
+        manager._context_char_count = sum(len(s) for s in manager.recent_context)
         manager._trim_context_by_chars()
         total = sum(len(s) for s in manager.recent_context)
         assert total <= _MAX_CONTEXT_CHARS
@@ -88,15 +95,17 @@ class TestTrimContextByChars:
     def test_single_long_entry(self, manager):
         """单条超长文本也应被裁剪"""
         long_text = "a" * (_MAX_CONTEXT_CHARS + 1000)
-        manager.recent_context = [long_text]
+        manager.recent_context = deque([long_text])
+        manager._context_char_count = len(long_text)
         manager._trim_context_by_chars()
-        assert manager.recent_context == []  # 裁剪到 0 条
+        assert len(manager.recent_context) == 0  # 裁剪到 0 条
 
     def test_trim_preserves_latest(self, manager):
         """裁剪应该从头移除，保留最新（尾部）"""
         short = "短"
         long_text = "a" * (_MAX_CONTEXT_CHARS // 2)
-        manager.recent_context = [long_text, long_text, short]
+        manager.recent_context = deque([long_text, long_text, short])
+        manager._context_char_count = sum(len(s) for s in manager.recent_context)
         manager._trim_context_by_chars()
         assert manager.recent_context[-1] == short
 

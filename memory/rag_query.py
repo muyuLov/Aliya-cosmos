@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 from core.llm.models import ChatRequest, Message
 from core.logger import get_logger
