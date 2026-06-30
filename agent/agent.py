@@ -410,9 +410,27 @@ class AliyaAgent:
     # ── 记忆与任务管理 ─────────────────────────────────────────────────────────
 
     async def _store_memory_async(self, user_input: str, response_text: str) -> None:
+        """异步存储对话记忆到知识图谱
+
+        分别存储到两条平行时间链：
+        - 用户时间链（现实时间，如 2026-06-30）
+        - Aliya 时间链（游戏内未来时间，如 3026-06-30）
+        """
+        today = datetime.date.today()
+        user_day = today.strftime("%Y-%m-%d")
+        # Aliya 时间链 = 现实时间 + 1000 年
+        aliya_day = today.replace(year=today.year + 1000).strftime("%Y-%m-%d")
+
         async with self._memory_semaphore:
             try:
-                await self._memory_manager.add_conversation_memory(user_input, response_text)
+                # 存储到用户时间链
+                await self._memory_manager.add_conversation_memory(
+                    user_input, response_text, day_date=user_day, timeline="user"
+                )
+                # 存储到 Aliya 时间链
+                await self._memory_manager.add_conversation_memory(
+                    user_input, response_text, day_date=aliya_day, timeline="aliya"
+                )
             except Exception as exc:
                 logger.warning("异步记忆存储失败：%s", exc)
 

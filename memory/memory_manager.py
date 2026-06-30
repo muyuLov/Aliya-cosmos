@@ -109,6 +109,8 @@ class GRAGMemoryManager:
         user_input: str,
         ai_response: str,
         session_id: str = "",
+        day_date: str = "",
+        timeline: str = "",
     ) -> bool:
         """
         添加对话记忆到知识图谱
@@ -117,6 +119,8 @@ class GRAGMemoryManager:
             user_input:  用户输入
             ai_response: AI 响应
             session_id:  会话 ID（用于图谱关系元属性）
+            day_date:    日期字符串，如 "2026-06-01"（用于关联 Day 节点和时间链）
+            timeline:    时间链标识，如 "user" 或 "aliya"
 
         Returns:
             是否成功
@@ -137,7 +141,9 @@ class GRAGMemoryManager:
 
             # 使用任务管理器异步提取五元组
             if self.auto_extract:
-                await self._submit_extraction_task(conversation_text, session_id)
+                await self._submit_extraction_task(
+                    conversation_text, session_id, day_date, timeline
+                )
 
             return True
 
@@ -169,7 +175,8 @@ class GRAGMemoryManager:
             self.extraction_cache.popitem(last=False)
 
     async def _submit_extraction_task(
-        self, text: str, session_id: str = ""
+        self, text: str, session_id: str = "",
+        day_date: str = "", timeline: str = "",
     ) -> None:
         """提交五元组提取任务"""
         text_hash = self._hash_text(text)
@@ -194,7 +201,8 @@ class GRAGMemoryManager:
 
             # 提交任务
             task_id = await mgr.add_task(
-                text, source_text=text, session_id=session_id
+                text, source_text=text, session_id=session_id,
+                day_date=day_date, timeline=timeline,
             )
             self.active_tasks.add(task_id)
             logger.info(f"已提交五元组提取任务: {task_id}")
@@ -203,10 +211,11 @@ class GRAGMemoryManager:
             self._inflight_hashes.discard(text_hash)
             logger.error(f"提交提取任务失败: {e}")
             # 回退到同步提取
-            await self._extract_and_store_sync(text, session_id)
+            await self._extract_and_store_sync(text, session_id, day_date, timeline)
 
     async def _extract_and_store_sync(
-        self, text: str, session_id: str = ""
+        self, text: str, session_id: str = "",
+        day_date: str = "", timeline: str = "",
     ) -> bool:
         """同步提取并存储五元组（回退方案）"""
         try:
@@ -228,6 +237,8 @@ class GRAGMemoryManager:
                 quintuples,
                 source_text=text,
                 session_id=session_id,
+                day_date=day_date,
+                timeline=timeline,
             )
             if success:
                 self._cache_mark_done(text_hash)
@@ -267,11 +278,13 @@ class GRAGMemoryManager:
             if not task.result:
                 return
 
-            # 存储到图谱（使用异步接口，携带 source_text 和 session_id）
+            # 存储到图谱（使用异步接口，携带 source_text、session_id、day_date 和 timeline）
             success = await graph.store_quintuples_async(
                 task.result,
                 source_text=task.source_text,
                 session_id=task.session_id,
+                day_date=task.day_date,
+                timeline=task.timeline,
             )
             if success:
                 logger.info("成功存储 %d 个五元组到图谱", len(task.result))

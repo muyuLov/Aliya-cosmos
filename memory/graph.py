@@ -1,15 +1,28 @@
 """Neo4j 图谱操作模块
 
-Schema 设计（v3）：
-  节点：(:Entity)
+Schema 设计（v4）：
+  节点：
+    (:Entity)
         属性: name(str), entity_type(str), aliases(str),
               created_at(float), updated_at(float)
         约束: name 唯一约束（保证实体不重复）
         索引: entity_type 索引（加速类型过滤）
 
-  关系：(e1)-[r:PREDICATE]->(e2)，PREDICATE 为五元组谓语（如 工作于、居住在）
-         属性: source_text(str), session_id(str), confidence(float),
-               created_at(float), updated_at(float), occurrence(int)
+    (:Day)
+        属性: date(str), timeline(str), created_at(float), updated_at(float)
+        约束: (date, timeline) 组合唯一约束
+        说明: 每条时间链上每天一个独立 Day 节点
+
+  关系：
+    (e1)-[r:PREDICATE]->(e2)，PREDICATE 为五元组谓语（如 工作于、居住在）
+        属性: source_text(str), session_id(str), confidence(float),
+              created_at(float), updated_at(float), occurrence(int)
+
+    (:Entity)-[:ON_DAY]->(:Day)
+        Entity 在某天被提及，关联到当天的 Day 节点
+
+    (:Day)-[:NEXT_DAY]->(:Day)
+        同一时间链内相邻两天的链式串联
 
 特性：
   - 连接失败后 60 秒冷却期，冷却结束后允许自动重试
@@ -18,6 +31,7 @@ Schema 设计（v3）：
   - aliases 字段自动累积同一实体的多种称呼（分号分隔）
   - 不再依赖 APOC 插件，节点类型以 entity_type 属性存储
   - GraphStore 类封装全部状态，支持测试隔离（set_graph_store / reset_graph_store）
+  - Day 节点按 (date, timeline) 组合唯一，同一天内实体/关系自动去重合并
 """
 
 from __future__ import annotations
@@ -48,9 +62,6 @@ QuintupleType = Tuple[str, str, str, str, str]
 _REL_TYPE_PATTERN = re.compile(
     r"^[a-zA-Z0-9_\u4e00-\u9fff\u3400-\u4dbf-]+$"
 )
-# 关系类型最大长度限制（防止 LLM 生成异常长字符串）
-_REL_TYPE_MAX_LEN = 64
-
 # 关系类型最大长度限制（防止 LLM 生成异常长字符串）
 _REL_TYPE_MAX_LEN = 64
 
@@ -185,12 +196,16 @@ class GraphStore:
         source_text: str = "",
         session_id: str = "",
         confidence: float = 1.0,
+        day_date: str = "",
+        timeline: str = "",
     ) -> bool:
         """存储五元组到 Neo4j（同步）
 
         节点统一使用 Entity 标签，类型信息通过 entity_type 属性存储。
         通过 MERGE 保证幂等性，关系存在时累加 occurrence。
         使用 UNWIND 批量写入：每个关系类型一次 tx.run()，消除 N+1 网络往返。
+        
+        若提供 day_date 和 timeline，自动创建/获取 Day 节点并关联实体。
         """
         if not new_quintuples:
             return True
@@ -283,8 +298,153 @@ class GraphStore:
             tx.rollback()
             raise
 
+        # 若提供了 day_date 和 timeline，将涉及实体关联到 Day 节点
+        if day_date and timeline:
+            self._link_entities_to_day(g, new_quintuples, day_date, timeline, now)
+            # 串联时间链
+            self._link_next_day(g, day_date, timeline, now)
+
         logger.info("成功存储 %d/%d 个五元组到 Neo4j", success_count, len(new_quintuples))
         return success_count > 0
+
+    # ── Day 节点操作（时间链）──────────────────────────────────────────────
+
+    @staticmethod
+    def _ensure_day_node(g: object, day_date: str, timeline: str, now: float) -> None:
+        """确保 Day 节点存在（幂等创建）
+
+        Args:
+            g:         Neo4j 图谱连接
+            day_date:  日期字符串，如 "2026-06-01"
+            timeline:  时间链标识，如 "user" 或 "aliya"
+            now:       当前时间戳
+        """
+        g.run(
+            """
+            MERGE (d:Day {date: $date, timeline: $timeline})
+              ON CREATE SET d.created_at = $now, d.updated_at = $now
+              ON MATCH  SET d.updated_at = $now
+            """,
+            date=day_date,
+            timeline=timeline,
+            now=now,
+        )
+
+    def _link_entities_to_day(
+        self,
+        g: object,
+        quintuples: List[QuintupleType],
+        day_date: str,
+        timeline: str,
+        now: float,
+    ) -> None:
+        """将五元组中涉及的实体关联到当天的 Day 节点
+
+        收集所有 Entity name（去重），批量建立 ON_DAY 关系。
+        同一天内多次提及同一实体只保留一条 ON_DAY 关系（MERGE 幂等）。
+
+        Args:
+            g:          Neo4j 图谱连接
+            quintuples: 已存储的五元组列表
+            day_date:   日期字符串
+            timeline:   时间链标识
+            now:        当前时间戳
+        """
+        # 确保 Day 节点存在
+        self._ensure_day_node(g, day_date, timeline, now)
+
+        # 收集所有涉及的 Entity 名称（去重）
+        entity_names: set[str] = set()
+        for head, _ht, _rel, tail, _tt in quintuples:
+            if head:
+                entity_names.add(head)
+            if tail:
+                entity_names.add(tail)
+
+        if not entity_names:
+            return
+
+        entity_list = list(entity_names)
+        try:
+            g.run(
+                """
+                UNWIND $names AS name
+                MATCH (e:Entity {name: name})
+                MATCH (d:Day {date: $date, timeline: $timeline})
+                MERGE (e)-[:ON_DAY]->(d)
+                """,
+                names=entity_list,
+                date=day_date,
+                timeline=timeline,
+            )
+            logger.debug(
+                "已将 %d 个实体关联到 Day 节点 (%s/%s)",
+                len(entity_list), timeline, day_date,
+            )
+        except Exception as exc:
+            logger.warning("实体关联 Day 节点失败: %s", exc)
+
+    @staticmethod
+    def _find_prev_day(g: object, day_date: str, timeline: str) -> str | None:
+        """查找同一时间链上当前 day_date 之前最近的那天
+
+        Args:
+            g:         Neo4j 图谱连接
+            day_date:  当前日期字符串，如 "2026-06-02"
+            timeline:  时间链标识
+
+        Returns:
+            前一天日期字符串，没有则返回 None
+        """
+        records = g.run(
+            """
+            MATCH (d:Day)
+            WHERE d.timeline = $timeline AND d.date < $date
+            RETURN d.date AS prev_date
+            ORDER BY d.date DESC
+            LIMIT 1
+            """,
+            date=day_date,
+            timeline=timeline,
+        ).data()
+        if records:
+            return records[0].get("prev_date")
+        return None
+
+    def _link_next_day(
+        self, g: object, day_date: str, timeline: str, now: float
+    ) -> None:
+        """串联时间链：将前一天与当前天用 NEXT_DAY 关系连接
+
+        查找同时间链上前一天，建立 (prev_day)-[:NEXT_DAY]->(current_day)。
+        如果 NEXT_DAY 关系已存在则跳过（幂等）。
+
+        Args:
+            g:         Neo4j 图谱连接
+            day_date:  当前日期字符串
+            timeline:  时间链标识
+            now:       当前时间戳
+        """
+        prev_date = self._find_prev_day(g, day_date, timeline)
+        if not prev_date:
+            return
+
+        try:
+            g.run(
+                """
+                MATCH (prev:Day {date: $prev_date, timeline: $timeline})
+                MATCH (curr:Day {date: $date, timeline: $timeline})
+                MERGE (prev)-[:NEXT_DAY]->(curr)
+                  ON CREATE SET prev.updated_at = $now, curr.updated_at = $now
+                """,
+                prev_date=prev_date,
+                date=day_date,
+                timeline=timeline,
+                now=now,
+            )
+            logger.debug("时间链串联: (%s/%s) --> (%s/%s)", timeline, prev_date, timeline, day_date)
+        except Exception as exc:
+            logger.warning("时间链串联失败: %s", exc)
 
     def query_graph_by_keywords(
         self,
@@ -387,6 +547,146 @@ class GraphStore:
 
         return results
 
+    def query_quintuples_by_day(
+        self,
+        timeline: str = "",
+        start_date: str = "",
+        end_date: str = "",
+        limit: int = 100,
+        offset: int = 0,
+    ) -> List[QuintupleType]:
+        """按时间链和日期范围查询五元组
+
+        Args:
+            timeline:   时间链标识（"user" / "aliya"），为空时查询所有时间链
+            start_date: 起始日期（含），如 "2026-06-01"，为空时不限
+            end_date:   截止日期（含），如 "2026-06-30"，为空时不限
+            limit:      返回数量上限
+            offset:     跳过条数
+
+        Returns:
+            五元组列表
+        """
+        try:
+            g = self._get_graph()
+        except GraphConnectionError:
+            logger.debug("图谱未连接，返回空结果")
+            return []
+
+        if g is None:
+            return []
+
+        filters: list[str] = []
+        params: dict = {"limit": max(limit, 1), "offset": max(offset, 0)}
+
+        if timeline:
+            filters.append("d.timeline = $timeline")
+            params["timeline"] = timeline
+        if start_date:
+            filters.append("d.date >= $start_date")
+            params["start_date"] = start_date
+        if end_date:
+            filters.append("d.date <= $end_date")
+            params["end_date"] = end_date
+
+        where_clause = " AND ".join(filters) if filters else "TRUE"
+
+        try:
+            records = g.run(
+                f"""
+                MATCH (d:Day)<-[:ON_DAY]-(e1:Entity)-[r]->(e2:Entity)
+                WHERE {where_clause}
+                RETURN DISTINCT e1.name AS head, e1.entity_type AS head_type,
+                       type(r) AS relation,
+                       e2.name AS tail, e2.entity_type AS tail_type,
+                       d.date AS day_date, d.timeline AS timeline
+                ORDER BY d.date DESC, r.created_at DESC
+                SKIP $offset LIMIT $limit
+                """,
+                **params,
+            ).data()
+            return [
+                (
+                    rec["head"],
+                    rec["head_type"] or "",
+                    rec["relation"],
+                    rec["tail"],
+                    rec["tail_type"] or "",
+                )
+                for rec in records
+            ]
+        except Exception as e:
+            logger.error("按日期查询五元组失败: %s", e)
+            return []
+
+    def get_day_nodes(
+        self,
+        timeline: str = "",
+        start_date: str = "",
+        end_date: str = "",
+        limit: int = 100,
+    ) -> List[dict]:
+        """获取 Day 节点列表
+
+        Args:
+            timeline:   时间链标识，为空时查询所有
+            start_date: 起始日期（含），为空时不限
+            end_date:   截止日期（含），为空时不限
+            limit:      返回数量上限
+
+        Returns:
+            [{"date": str, "timeline": str, "entity_count": int, ...}]
+        """
+        try:
+            g = self._get_graph()
+        except GraphConnectionError:
+            return []
+
+        if g is None:
+            return []
+
+        filters: list[str] = []
+        params: dict = {"limit": max(limit, 1)}
+
+        if timeline:
+            filters.append("d.timeline = $timeline")
+            params["timeline"] = timeline
+        if start_date:
+            filters.append("d.date >= $start_date")
+            params["start_date"] = start_date
+        if end_date:
+            filters.append("d.date <= $end_date")
+            params["end_date"] = end_date
+
+        where_clause = " AND ".join(filters) if filters else "TRUE"
+
+        try:
+            records = g.run(
+                f"""
+                MATCH (d:Day)
+                OPTIONAL MATCH (e:Entity)-[:ON_DAY]->(d)
+                WHERE {where_clause}
+                RETURN d.date AS date, d.timeline AS timeline,
+                       d.created_at AS created_at,
+                       count(DISTINCT e) AS entity_count
+                ORDER BY d.date DESC
+                LIMIT $limit
+                """,
+                **params,
+            ).data()
+            return [
+                {
+                    "date": r["date"],
+                    "timeline": r["timeline"],
+                    "created_at": r["created_at"],
+                    "entity_count": r["entity_count"],
+                }
+                for r in records
+            ]
+        except Exception as e:
+            logger.error("获取 Day 节点列表失败: %s", e)
+            return []
+
     def get_all_quintuples(self, limit: int = 1000, offset: int = 0) -> List[QuintupleType]:
         """获取所有五元组（同步，支持分页）
 
@@ -437,7 +737,7 @@ class GraphStore:
             return []
 
     def clear_all_quintuples(self) -> bool:
-        """清空所有五元组（同步）"""
+        """清空所有五元组（同步，同时清除 Day 节点）"""
         try:
             graph = self._get_graph()
         except GraphConnectionError:
@@ -449,14 +749,15 @@ class GraphStore:
 
         try:
             graph.run("MATCH (n:Entity) DETACH DELETE n")  # type: ignore[attr-defined]
-            logger.info("已清空 Neo4j 图谱（仅 Entity 节点）")
+            graph.run("MATCH (d:Day) DETACH DELETE d")     # type: ignore[attr-defined]
+            logger.info("已清空 Neo4j 图谱（Entity + Day 节点）")
             return True
         except Exception as e:
             logger.error("清空五元组失败: %s", e)
             return False
 
     def get_graph_stats(self) -> dict:
-        """获取图谱统计信息（同步）"""
+        """获取图谱统计信息（同步，含 Day 节点统计）"""
         try:
             g = self._get_graph()
             connected = g is not None
@@ -470,6 +771,7 @@ class GraphStore:
             "reconnect_cooldown_remaining": self.cooldown_remaining,
             "entity_count": 0,
             "relation_count": 0,
+            "day_count": 0,
         }
 
         if g is not None:
@@ -480,8 +782,12 @@ class GraphStore:
                 rel_count = g.run(  # type: ignore[attr-defined]
                     "MATCH ()-[r]->() RETURN count(r) AS count"
                 ).data()
+                day_count = g.run(  # type: ignore[attr-defined]
+                    "MATCH (d:Day) RETURN count(d) AS count"
+                ).data()
                 stats["entity_count"] = entity_count[0]["count"] if entity_count else 0
                 stats["relation_count"] = rel_count[0]["count"] if rel_count else 0
+                stats["day_count"] = day_count[0]["count"] if day_count else 0
 
                 type_counts = g.run(  # type: ignore[attr-defined]
                     """
@@ -494,6 +800,20 @@ class GraphStore:
                     etype = row["etype"] or "Unknown"
                     type_summary[etype] = row["cnt"]
                 stats["entity_type_distribution"] = type_summary
+
+                # 时间链统计
+                timeline_counts = g.run(  # type: ignore[attr-defined]
+                    """
+                    MATCH (d:Day)
+                    RETURN d.timeline AS timeline, count(d) AS cnt
+                    ORDER BY d.timeline
+                    """
+                ).data()
+                timeline_summary: dict = {}
+                for row in timeline_counts:
+                    tl = row["timeline"] or "Unknown"
+                    timeline_summary[tl] = row["cnt"]
+                stats["day_timeline_distribution"] = timeline_summary
 
             except Exception:
                 pass
@@ -508,6 +828,8 @@ class GraphStore:
         source_text: str = "",
         session_id: str = "",
         confidence: float = 1.0,
+        day_date: str = "",
+        timeline: str = "",
     ) -> bool:
         """存储五元组到 Neo4j（异步，不阻塞事件循环）"""
         return await asyncio.to_thread(
@@ -516,6 +838,8 @@ class GraphStore:
             source_text,
             session_id,
             confidence,
+            day_date,
+            timeline,
         )
 
     async def query_graph_by_keywords_async(
@@ -538,6 +862,31 @@ class GraphStore:
     async def get_graph_stats_async(self) -> dict:
         """获取图谱统计信息（异步）"""
         return await asyncio.to_thread(self.get_graph_stats)
+
+    async def query_quintuples_by_day_async(
+        self,
+        timeline: str = "",
+        start_date: str = "",
+        end_date: str = "",
+        limit: int = 100,
+        offset: int = 0,
+    ) -> List[QuintupleType]:
+        return await asyncio.to_thread(
+            self.query_quintuples_by_day,
+            timeline, start_date, end_date, limit, offset,
+        )
+
+    async def get_day_nodes_async(
+        self,
+        timeline: str = "",
+        start_date: str = "",
+        end_date: str = "",
+        limit: int = 100,
+    ) -> List[dict]:
+        return await asyncio.to_thread(
+            self.get_day_nodes,
+            timeline, start_date, end_date, limit,
+        )
 
     async def clear_all_quintuples_async(self) -> bool:
         """清空所有五元组（异步）"""
@@ -584,6 +933,10 @@ def _ensure_indexes(g: object) -> None:
     statements = [
         "CREATE CONSTRAINT entity_name_unique IF NOT EXISTS FOR (e:Entity) REQUIRE e.name IS UNIQUE",
         "CREATE INDEX entity_type_idx IF NOT EXISTS FOR (e:Entity) ON (e.entity_type)",
+        # Day 节点唯一约束：(date, timeline) 组合
+        "CREATE CONSTRAINT day_date_timeline_unique IF NOT EXISTS FOR (d:Day) REQUIRE (d.date, d.timeline) IS UNIQUE",
+        # Day 节点复合索引加速范围查询
+        "CREATE INDEX day_date_timeline_idx IF NOT EXISTS FOR (d:Day) ON (d.date, d.timeline)",
     ]
     for stmt in statements:
         try:
@@ -608,9 +961,11 @@ def store_quintuples(
     source_text: str = "",
     session_id: str = "",
     confidence: float = 1.0,
+    day_date: str = "",
+    timeline: str = "",
 ) -> bool:
     return get_graph_store().store_quintuples(
-        new_quintuples, source_text, session_id, confidence
+        new_quintuples, source_text, session_id, confidence, day_date, timeline
     )
 
 
@@ -641,9 +996,11 @@ async def store_quintuples_async(
     source_text: str = "",
     session_id: str = "",
     confidence: float = 1.0,
+    day_date: str = "",
+    timeline: str = "",
 ) -> bool:
     return await get_graph_store().store_quintuples_async(
-        new_quintuples, source_text, session_id, confidence
+        new_quintuples, source_text, session_id, confidence, day_date, timeline
     )
 
 
@@ -667,6 +1024,29 @@ async def get_graph_stats_async() -> dict:
     return await get_graph_store().get_graph_stats_async()
 
 
+async def query_quintuples_by_day_async(
+    timeline: str = "",
+    start_date: str = "",
+    end_date: str = "",
+    limit: int = 100,
+    offset: int = 0,
+) -> List[QuintupleType]:
+    return await get_graph_store().query_quintuples_by_day_async(
+        timeline, start_date, end_date, limit, offset,
+    )
+
+
+async def get_day_nodes_async(
+    timeline: str = "",
+    start_date: str = "",
+    end_date: str = "",
+    limit: int = 100,
+) -> List[dict]:
+    return await get_graph_store().get_day_nodes_async(
+        timeline, start_date, end_date, limit,
+    )
+
+
 async def clear_all_quintuples_async() -> bool:
     return await get_graph_store().clear_all_quintuples_async()
 
@@ -678,6 +1058,8 @@ __all__ = [
     "reset_graph_store",
     "store_quintuples",
     "query_graph_by_keywords",
+    "query_quintuples_by_day_async",
+    "get_day_nodes_async",
     "get_all_quintuples",
     "clear_all_quintuples",
     "get_graph_stats",

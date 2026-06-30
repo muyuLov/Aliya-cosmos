@@ -47,6 +47,8 @@ class ExtractionTask:
     text_hash: str
     source_text: str = ""
     session_id: str = ""
+    day_date: str = ""
+    timeline: str = ""
     status: TaskStatus = TaskStatus.PENDING
     created_at: float = field(default_factory=time.time)
     started_at: Optional[float] = None
@@ -199,7 +201,8 @@ class QuintupleTaskManager:
         return hashlib.sha256(text.encode()).hexdigest()
 
     async def add_task(
-        self, text: str, source_text: str = "", session_id: str = ""
+        self, text: str, source_text: str = "", session_id: str = "",
+        day_date: str = "", timeline: str = "",
     ) -> str:
         """
         添加新的提取任务
@@ -208,6 +211,8 @@ class QuintupleTaskManager:
             text:        待提取的文本
             source_text: 原始来源文本（用于图谱关系元属性）
             session_id:  会话 ID（用于图谱关系元属性）
+            day_date:    日期字符串，如 "2026-06-01"（用于关联 Day 节点）
+            timeline:    时间链标识，如 "user" 或 "aliya"
 
         Returns:
             任务 ID
@@ -248,6 +253,8 @@ class QuintupleTaskManager:
                 text_hash=text_hash,
                 source_text=source_text,
                 session_id=session_id,
+                day_date=day_date,
+                timeline=timeline,
                 status=TaskStatus.PENDING,
                 created_at=time.time(),
                 future=asyncio.get_running_loop().create_future(),

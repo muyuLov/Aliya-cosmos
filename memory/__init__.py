@@ -6,7 +6,7 @@
     _providers.py   - 共享 LLM Provider 懒加载工具
     config.py       - GRAG 配置加载
     extractor.py    - 五元组提取（使用 core/llm/）
-    graph.py        - Neo4j 图谱操作（Schema v3: Entity标签+属性类型，去APOC依赖）
+    graph.py        - Neo4j 图谱操作（Schema v4: Entity+Day节点+时间链，去APOC依赖）
     rag_query.py    - RAG 知识查询（使用 core/llm/）
     task_manager.py - 并发任务管理（懒加载工厂）
     memory_manager.py - 记忆管理器（集成层）
@@ -50,11 +50,13 @@ from memory.graph import (
     clear_all_quintuples_async,
     get_all_quintuples,
     get_all_quintuples_async,
+    get_day_nodes_async,
     get_graph_stats,
     get_graph_stats_async,
     get_graph_store,
     query_graph_by_keywords,
     query_graph_by_keywords_async,
+    query_quintuples_by_day_async,
     reset_graph_store,
     set_graph_store,
     store_quintuples,
@@ -114,6 +116,8 @@ def create_memory_service(
         "store_async": store_quintuples_async,
         "query": query_graph_by_keywords,
         "query_async": query_graph_by_keywords_async,
+        "query_by_day_async": query_quintuples_by_day_async,
+        "get_day_nodes_async": get_day_nodes_async,
         "get_all": get_all_quintuples,
         "get_all_async": get_all_quintuples_async,
         "clear": clear_all_quintuples,
@@ -169,6 +173,8 @@ __all__ = [
     # 图谱操作（异步）
     "store_quintuples_async",
     "query_graph_by_keywords_async",
+    "query_quintuples_by_day_async",
+    "get_day_nodes_async",
     "get_all_quintuples_async",
     "clear_all_quintuples_async",
     "get_graph_stats_async",
