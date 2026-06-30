@@ -27,11 +27,13 @@ cosmos:
       auto_extract: true               # 自动提取五元组
       context_length: 10               # 上下文窗口长度
       similarity_threshold: 0.7        # 语义相似度阈值（0-1）
+      session_tracking: true            # 启用会话追踪
       neo4j:
         uri: bolt://localhost:7687      # Neo4j 连接地址
         user: neo4j                     # 用户名
         password: Aliya_neo4j           # 密码
         database: neo4j                 # 数据库名
+        max_connections: 10            # 连接池最大连接数
       extractor:
         max_retries: 2                 # 五元组提取最大重试次数
         timeout: 30                    # 提取超时（秒）
