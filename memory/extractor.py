@@ -127,9 +127,16 @@ class QuintupleExtractor:
         """
         同步提取五元组（供无事件循环的上下文使用）。
 
-        内部驱动 extract_async，调用方须在无运行中事件循环的上下文中使用。
+        内部驱动 extract_async。若存在运行中的事件循环，抛出 RuntimeError
+        提示调用方使用 extract_async 或 extract_quintuples。
         """
-        return asyncio.run(self.extract_async(text))
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(self.extract_async(text))
+        raise RuntimeError(
+            "extract() 不能在运行中的事件循环内调用，请使用 extract_async() 或 extract_quintuples()"
+        )
 
     async def extract_async(self, text: str) -> List[QuintupleType]:
         """异步提取五元组（含指数退避重试 + 超时控制 + 永久性错误检测）。

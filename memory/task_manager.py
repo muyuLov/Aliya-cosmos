@@ -89,6 +89,7 @@ class QuintupleTaskManager:
         self.max_queue_size: int = max_queue_size if max_queue_size is not None else cfg.task_manager.max_queue_size
         self.task_timeout: int = cfg.task_manager.task_timeout
         self.auto_cleanup_hours: int = cfg.task_manager.auto_cleanup_hours
+        self.cleanup_interval: int = cfg.task_manager.cleanup_interval_seconds
 
         # 任务存储
         self.tasks: Dict[str, ExtractionTask] = {}
@@ -157,6 +158,9 @@ class QuintupleTaskManager:
             # 启动自动清理任务
             self.cleanup_task = asyncio.create_task(self._auto_cleanup_loop())
             logger.info(f"任务管理器已启动，工作协程数: {self.max_workers}")
+
+            # 让出控制权，确保 worker 协程有机会进入主循环后再返回
+            await asyncio.sleep(0)
 
         except Exception as e:
             logger.error(f"启动任务管理器失败: {e}")
@@ -277,6 +281,8 @@ class QuintupleTaskManager:
             async with self.lock:  # type: ignore[union-attr]
                 if task_id in self.tasks:
                     del self.tasks[task_id]
+                # 同步清理 _hash_to_active_task，防止文本永远无法重新提交
+                self._hash_to_active_task.pop(text_hash, None)
             raise TaskQueueFullError(
                 queue_size=self.task_queue.qsize(),  # type: ignore[union-attr]
                 max_size=self.max_queue_size,
@@ -366,6 +372,9 @@ class QuintupleTaskManager:
                     logger.error(f"{worker_id} 任务失败: {task.task_id}: {error}")
 
                 # 锁内原子写入最终状态，与 cancel_task 互斥
+                # future 设置也置于锁内，消除与 cancel_task 之间的竞态窗口：
+                # 若锁内检查 status != CANCELLED 后立即被 cancel_task 取消 future，
+                # 脱离锁后再 set_result 将引发 asyncio.InvalidStateError
                 assert self.lock is not None
                 async with self.lock:
                     if task.status == TaskStatus.CANCELLED:
@@ -384,12 +393,16 @@ class QuintupleTaskManager:
                     # 任务结束，从活跃去重索引中移除
                     self._hash_to_active_task.pop(task.text_hash, None)
 
-                # 设置 future 结果（状态已确定，无需锁）
-                if task.future and not task.future.done():
-                    if task.status == TaskStatus.COMPLETED:
-                        task.future.set_result(result)
-                    else:
-                        task.future.set_exception(Exception(error or "任务失败"))
+                    # 设置 future 结果（锁内操作，与 cancel_task 中的 future.cancel() 互斥）
+                    if task.future and not task.future.done():
+                        try:
+                            if task.status == TaskStatus.COMPLETED:
+                                task.future.set_result(result)
+                            else:
+                                task.future.set_exception(Exception(error or "任务失败"))
+                        except asyncio.InvalidStateError:
+                            # cancel_task 已在竞态中先行取消 future
+                            pass
 
                 # 触发回调
                 if task.status == TaskStatus.COMPLETED and self.on_task_completed:
@@ -554,11 +567,11 @@ class QuintupleTaskManager:
 
     async def _auto_cleanup_loop(self) -> None:
         """自动清理任务循环"""
-        logger.debug("自动清理任务已启动")
+        logger.debug("自动清理任务已启动，间隔 %d 秒", self.cleanup_interval)
 
         while self.is_running:
             try:
-                await asyncio.sleep(3600)  # 每小时清理一次
+                await asyncio.sleep(self.cleanup_interval)
                 await self.clear_completed_tasks()
             except asyncio.CancelledError:
                 break

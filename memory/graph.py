@@ -57,10 +57,11 @@ logger = get_logger(__name__)
 # 五元组类型别名：(主体, 主体类型, 谓语, 宾语, 宾语类型)
 QuintupleType = Tuple[str, str, str, str, str]
 
-# 关系类型合法性正则（仅允许中文字符、ASCII字母数字、下划线、连字符）
-# 显式白名单替代 \w，避免 Unicode 宽泛匹配绕过
+# 关系类型合法性正则（白名单：中文字符、ASCII 字母数字、下划线、连字符）
+# 采用白名单确保 f-string 拼入 Cypher 时不会引入语法破坏字符
+# 覆盖 BMP 内的常用 CJK 范围（基本区 + 扩展 A），Strict 模式可扩展至增补平面
 _REL_TYPE_PATTERN = re.compile(
-    r"^[a-zA-Z0-9_\u4e00-\u9fff\u3400-\u4dbf-]+$"
+    r"^[a-zA-Z0-9_\u4e00-\u9fff\u3400-\u4dbf\U00020000-\U0002A6DF-]+$"
 )
 # 关系类型最大长度限制（防止 LLM 生成异常长字符串）
 _REL_TYPE_MAX_LEN = 64
@@ -74,11 +75,15 @@ try:
     _GRAPH_TYPE = Graph
     _TRANSACTION_TYPE = Transaction
 except ImportError:
+    # py2neo 未安装时的回退类型，必须为独立异常类而非 Exception 基类，
+    # 否则 except ServiceUnavailable 会错误匹配所有非 ConnectionError 异常
+    class _ServiceUnavailableStub(Exception):
+        pass
+    ServiceUnavailable = _ServiceUnavailableStub
     Graph = None          # type: ignore[assignment,misc]
     Node = None           # type: ignore[assignment,misc]
     Relationship = None   # type: ignore[assignment,misc]
     Transaction = None    # type: ignore[assignment,misc]
-    ServiceUnavailable = Exception  # type: ignore[assignment,misc]
     PY2NEO_AVAILABLE = False
     _GRAPH_TYPE = object  # type: ignore[assignment,misc]
     _TRANSACTION_TYPE = object  # type: ignore[assignment,misc]
@@ -243,6 +248,8 @@ class GraphStore:
         tx = g.begin()
         try:
             for rel, items in groups.items():
+                # 关系类型名通过 f-string 拼入 Cypher，因为 Neo4j 不支持参数化关系类型。
+                # rel 已通过 _REL_TYPE_PATTERN 白名单校验，确保不含 Cypher 语法破坏字符。
                 cypher = f"""
                 UNWIND $items AS item
                 MERGE (h:Entity {{name: item[0]}})

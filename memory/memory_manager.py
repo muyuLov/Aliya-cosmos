@@ -198,10 +198,9 @@ class GRAGMemoryManager:
         try:
             mgr = self._get_task_manager()
 
-            # 确保任务管理器已启动
+            # 确保任务管理器已启动（start() 内部已通过 asyncio.sleep(0) 保证 worker 就绪）
             if not mgr.is_running:
                 await task_manager_module.start_task_manager()
-                await asyncio.sleep(0.5)
 
             # 提交任务
             task_id = await mgr.add_task(

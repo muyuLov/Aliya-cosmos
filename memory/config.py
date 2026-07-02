@@ -26,8 +26,9 @@ def _check_type(
         min_val:       最小值（可选，含边界）
         max_val:       最大值（可选，含边界）
     """
+    from memory.exceptions import GRAGConfigError
+
     if not isinstance(value, expected_type):
-        from memory.exceptions import GRAGConfigError
         if isinstance(expected_type, tuple):
             type_desc = '|'.join(t.__name__ for t in expected_type)
         else:
@@ -36,12 +37,10 @@ def _check_type(
             f"{key}: 期望类型 {type_desc}，实际 {type(value).__name__} = {value!r}"
         )
     if min_val is not None and value < min_val:
-        from memory.exceptions import GRAGConfigError
         raise GRAGConfigError(
             f"{key}: 值 {value} 小于最小值 {min_val}"
         )
     if max_val is not None and value > max_val:
-        from memory.exceptions import GRAGConfigError
         raise GRAGConfigError(
             f"{key}: 值 {value} 大于最大值 {max_val}"
         )
@@ -71,6 +70,7 @@ class TaskManagerConfig:
     max_queue_size: int = 100
     task_timeout: int = 30
     auto_cleanup_hours: int = 24
+    cleanup_interval_seconds: int = 3600
 
 
 @dataclass
@@ -199,17 +199,20 @@ def _load_grag_config(config_path: str) -> GRAGConfig:
     task_max_queue_size = task_cfg.get("max_queue_size", 100)
     task_timeout = task_cfg.get("task_timeout", 30)
     task_auto_cleanup = task_cfg.get("auto_cleanup_hours", 24)
+    task_cleanup_interval = task_cfg.get("cleanup_interval_seconds", 3600)
 
     _check_type(task_max_workers, "cosmos.service.grag.task_manager.max_workers", int, min_val=1)
     _check_type(task_max_queue_size, "cosmos.service.grag.task_manager.max_queue_size", int, min_val=1)
     _check_type(task_timeout, "cosmos.service.grag.task_manager.task_timeout", int, min_val=1)
     _check_type(task_auto_cleanup, "cosmos.service.grag.task_manager.auto_cleanup_hours", int, min_val=1)
+    _check_type(task_cleanup_interval, "cosmos.service.grag.task_manager.cleanup_interval_seconds", int, min_val=60)
 
     task_manager = TaskManagerConfig(
         max_workers=task_max_workers,
         max_queue_size=task_max_queue_size,
         task_timeout=task_timeout,
         auto_cleanup_hours=task_auto_cleanup,
+        cleanup_interval_seconds=task_cleanup_interval,
     )
 
     logger.debug("GRAG 配置加载并校验完成")

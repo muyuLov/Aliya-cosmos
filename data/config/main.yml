@@ -41,7 +41,8 @@ cosmos:
         max_workers: 3                 # 并发工作协程数
         max_queue_size: 100            # 任务队列最大长度
         task_timeout: 30               # 单任务超时（秒）
-        auto_cleanup_hours: 24         # 自动清理已完成任务的间隔（小时）
+        auto_cleanup_hours: 24         # 已完成任务保留时间（小时）
+        cleanup_interval_seconds: 3600 # 自动清理循环运行间隔（秒）
 
     # ── LLM 大语言模型 ────────────────────────────────
     llm:

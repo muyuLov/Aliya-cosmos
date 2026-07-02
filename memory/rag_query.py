@@ -220,8 +220,7 @@ class RAGQueryEngine:
             "你认识我", "我是", "我不会忘", "你还记得",
             "会不会忘", "忘了", "还记得", "别忘了",
         ]
-        q = question.lower()
-        return any(p in q for p in identity_patterns)
+        return any(p in question for p in identity_patterns)
 
     def _parse_keywords(self, content: str) -> List[str]:
         """解析关键词响应"""
