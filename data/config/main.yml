@@ -46,6 +46,7 @@ cosmos:
 
     # ── LLM 大语言模型 ────────────────────────────────
     llm:
+      # 支持 ${ENV_VAR} 和 ${ENV_VAR:default} 语法引用环境变量
       providers:
         name: deepseek                 # 当前使用的提供商名
         config_path: data/config/LLMProviders.json  # 提供商配置文件
@@ -55,7 +56,7 @@ cosmos:
     tts:
       providers:
         name: astra                    # 当前使用的提供商名
-        config_path: data/config/TTSProviders.json   # 提供商配置文件
+        config_path: data/config/TTSProviders.json   # 提供商配置文件（支持 ${ENV_VAR} 语法）
       voice:
         languages: [zh, en]            # 支持的语言列表
         speed: 1.0                     # 语速倍率（0.5-2.0）

@@ -1,10 +1,12 @@
-"""配置管理器：从 YAML 加载配置，提供点路径读写与热重载"""
+"""配置管理器：从 YAML 加载配置，提供点路径读写与热重载，支持 ${ENV_VAR} 环境变量解析"""
 
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable
 
 import yaml
+
+from core.config.env_resolver import resolve_env_vars as _resolve_env_vars
 
 
 _config_instances: dict[str, "ConfigManager"] = {}
@@ -41,11 +43,12 @@ class ConfigManager:
         "cosmos.logger.level" in config
     """
 
-    def __init__(self, config_path: str | Path | None = None) -> None:
+    def __init__(self, config_path: str | Path | None = None, *, resolve_env: bool = True) -> None:
         self._config_path: Path | None = None
         self._data: dict[str, Any] = {}
         self._callbacks: dict[str, list[Callable[[str, Any], None]]] = {}
         self._global_callbacks: list[Callable[[str, Any], None]] = []
+        self._resolve_env = resolve_env
         if config_path:
             self.load_config(config_path)
 
@@ -95,7 +98,24 @@ class ConfigManager:
         self._data = raw
 
     def get(self, path: str, default: Any = None) -> Any:
-        """按点路径读取值，路径不存在时返回 default。"""
+        """
+        按点路径读取值，路径不存在时返回 default。
+
+        默认会解析值中 ``${ENV_VAR}`` 和 ``${ENV_VAR:default}`` 占位符。
+        在 :meth:`__init__` 中传入 ``resolve_env=False`` 或使用 :meth:`get_raw`
+        可关闭此行为。
+        """
+        node: Any = self._data
+        for key in _split_path(path):
+            if not isinstance(node, dict) or key not in node:
+                return default
+            node = node[key]
+        if self._resolve_env:
+            return _resolve_env_vars(node)
+        return node
+
+    def get_raw(self, path: str, default: Any = None) -> Any:
+        """按点路径读取原始值（不解析环境变量占位符）。"""
         node: Any = self._data
         for key in _split_path(path):
             if not isinstance(node, dict) or key not in node:

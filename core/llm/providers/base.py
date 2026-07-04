@@ -223,7 +223,10 @@ class ProviderFactory:
                     f"可用的提供商：{available}"
                 )
             
-            return provider_name, external_configs[provider_name]
+            from core.config.env_resolver import resolve_env_vars as _resolve_env_vars
+            
+            provider_config = external_configs[provider_name]
+            return provider_name, _resolve_env_vars(provider_config)
         
         except FileNotFoundError as e:
             raise ProviderNotFoundError(
