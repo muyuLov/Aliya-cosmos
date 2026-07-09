@@ -115,7 +115,7 @@ class OpenAICompatibleProvider(LLMProvider):
         """
         self._log_request(request, stream=True)
         try:
-            async with await self._async_client.chat.completions.create(
+            stream = await self._async_client.chat.completions.create(
                 model=request.model or self.model,
                 messages=request.messages,  # type: ignore[arg-type]
                 temperature=self._or_not_given(request.temperature),
@@ -123,15 +123,19 @@ class OpenAICompatibleProvider(LLMProvider):
                 stream=True,
                 stream_options={"include_usage": True},
                 **self._filter_extra(request.extra),
-            ) as stream:
-                content_len = 0
-                async for chunk in stream:
-                    token = chunk.choices[0].delta.content if chunk.choices else ""
-                    if token:
-                        content_len += len(token)
-                        yield token
-                usage = extract_openai_usage(await stream.get_final_usage())
-                self._log_response("stop", content_len, usage, stream=True)
+            )
+            content_len = 0
+            final_usage = None
+            async for chunk in stream:
+                # include_usage=True 时，最后一个 chunk choices 为空但携带 usage
+                if chunk.usage is not None:
+                    final_usage = chunk.usage
+                token = chunk.choices[0].delta.content if chunk.choices else ""
+                if token:
+                    content_len += len(token)
+                    yield token
+            usage = extract_openai_usage(final_usage)
+            self._log_response("stop", content_len, usage, stream=True)
         except OPENAI_COMMON_EXCEPTIONS as exc:
             raise LLMRequestError(
                 provider=self.provider_name,

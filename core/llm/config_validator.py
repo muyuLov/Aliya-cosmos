@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from core.config.env_resolver import resolve_env_vars as _resolve_env_vars
+
 from core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -174,7 +176,9 @@ class ConfigValidator:
         config_path = providers_section.get("config_path")
         if provider_name and config_path:
             try:
-                provider_config = json.loads(Path(config_path).read_text(encoding="utf-8"))
+                all_provider_configs = json.loads(Path(config_path).read_text(encoding="utf-8"))
+                raw_config = all_provider_configs.get(provider_name, {})
+                provider_config = _resolve_env_vars(raw_config)
                 prov_valid, prov_msgs = cls.validate_provider_config(
                     provider_name, provider_config, strict=strict
                 )

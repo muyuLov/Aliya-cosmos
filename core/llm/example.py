@@ -39,13 +39,13 @@ async def example_context_manager() -> None:
     
     try:
         # 使用 async with 自动管理资源生命周期
-        async with create_from_config() as service:
+        async with create_from_config() as conv:
             # 对话 1
-            reply1 = await service.asend("你好，请用一句话介绍自己")
+            reply1 = await conv.asend("你好，请用一句话介绍自己")
             print(f"回复 1: {reply1}")
             
             # 对话 2（有上下文）
-            reply2 = await service.asend("你刚才说了什么？")
+            reply2 = await conv.asend("你刚才说了什么？")
             print(f"回复 2: {reply2}")
             
         # 退出上下文后，service 已自动释放资源
@@ -70,12 +70,12 @@ async def example_stream_chat() -> None:
     print("\n=== 示例 2：流式对话 ===")
     
     try:
-        async with create_from_config() as service:
+        async with create_from_config() as conv:
             print("📝 用户: 讲一个三句话的故事")
             print("🤖 助手: ", end="", flush=True)
             
             full_reply: list[str] = []
-            async for token in service.astream_send("讲一个三句话的故事"):
+            async for token in conv.astream_send("讲一个三句话的故事"):
                 print(token, end="", flush=True)
                 full_reply.append(token)
             
@@ -103,24 +103,24 @@ async def example_patch_injection() -> None:
     print("\n=== 示例 3：补丁注入 ===")
     
     try:
-        async with create_from_config() as service:
+        async with create_from_config() as conv:
             # 第一轮：注入情绪补丁
-            await service.set_emotion_patch("[当前情绪: 兴奋、充满活力]")
-            reply1 = await service.asend("今天天气真好")
+            await conv.set_emotion_patch("[当前情绪: 兴奋、充满活力]")
+            reply1 = await conv.asend("今天天气真好")
             print(f"带情绪补丁的回复: {reply1}")
             
             # 第二轮：注入多种上下文
-            await service.set_emotion_patch("[当前情绪: 平静、专注]")
-            await service.set_context_injection(
+            await conv.set_emotion_patch("[当前情绪: 平静、专注]")
+            await conv.set_context_injection(
                 skills="- 技能：代码助手\n- 技能：学习导师",
                 tools="- 工具：搜索引擎\n- 工具：计算器",
                 memory="[记忆：用户喜欢简洁的回答，不喜欢冗长的解释]"
             )
-            reply2 = await service.asend("帮我计算 123 + 456")
+            reply2 = await conv.asend("帮我计算 123 + 456")
             print(f"带完整上下文的回复: {reply2}")
             
             # 第三轮：无补丁（上一轮的补丁已自动清除）
-            reply3 = await service.asend("你现在是什么情绪？")
+            reply3 = await conv.asend("你现在是什么情绪？")
             print(f"无补丁的回复: {reply3}")
             
     except LLMRequestError as e:
@@ -148,8 +148,8 @@ async def example_multi_conversation() -> None:
             conversation_id="tech_chat",
             cache=cache,
             system_prompt="你是一个技术专家。"
-        ) as service1:
-            reply1 = await service1.asend("什么是异步编程？")
+        ) as conv1:
+            reply1 = await conv1.asend("什么是异步编程？")
             print(f"会话1（技术）: {reply1[:80]}...")
         
         # 会话 2：日常聊天
@@ -157,8 +157,8 @@ async def example_multi_conversation() -> None:
             conversation_id="casual_chat",
             cache=cache,
             system_prompt="你是一个友好的聊天伙伴。"
-        ) as service2:
-            reply2 = await service2.asend("今天天气怎么样？")
+        ) as conv2:
+            reply2 = await conv2.asend("今天天气怎么样？")
             print(f"会话2（日常）: {reply2[:80]}...")
         
         # 重新进入会话 1（有上下文）
@@ -166,12 +166,12 @@ async def example_multi_conversation() -> None:
             conversation_id="tech_chat",
             cache=cache,
             system_prompt="你是一个技术专家。"
-        ) as service1:
-            reply3 = await service1.asend("能举个例子吗？")
+        ) as conv1:
+            reply3 = await conv1.asend("能举个例子吗？")
             print(f"会话1（续）: {reply3[:80]}...")
             
             # 查看会话历史
-            history = await service1.get_history()
+            history = await conv1.get_history()
             print(f"\n会话1的历史记录: {len(history)} 条消息")
             for msg in history:
                 print(f"  {msg.role}: {msg.content[:50]}...")
@@ -249,13 +249,13 @@ async def example_error_handling() -> None:
     print("\n=== 示例 7：错误处理与重试 ===")
     
     try:
-        async with create_from_config() as service:
+        async with create_from_config() as conv:
             # 正常调用（内置重试）
-            reply = await service.asend("你好", max_retries=3)
+            reply = await conv.asend("你好", max_retries=3)
             print(f"回复: {reply}")
             
             # 自定义重试次数
-            reply = await service.asend("再见", max_retries=1)
+            reply = await conv.asend("再见", max_retries=1)
             print(f"回复: {reply}")
             
     except LLMRequestError as e:
@@ -276,30 +276,30 @@ async def example_history_management() -> None:
     print("\n=== 示例 8：历史管理 ===")
     
     try:
-        async with create_from_config() as service:
+        async with create_from_config() as conv:
             # 对话 1
-            await service.asend("我叫张三")
+            await conv.asend("我叫张三")
             # 对话 2
-            await service.asend("我今年25岁")
+            await conv.asend("我今年25岁")
             # 对话 3
-            reply = await service.asend("我叫什么名字？几岁？")
+            reply = await conv.asend("我叫什么名字？几岁？")
             print(f"回复: {reply}")
             
             # 查看历史
-            history = await service.get_history()
+            history = await conv.get_history()
             print(f"\n历史记录: {len(history)} 条")
             for msg in history:
                 print(f"  {msg.role}: {msg.content}")
             
             # 手动追加消息（用于 Agent 推理循环）
-            await service.append_message("system", "[系统提示：请保持简洁]")
+            await conv.append_message("system", "[系统提示：请保持简洁]")
             
             # 清空历史
-            await service.clear_history()
+            await conv.clear_history()
             print("\n✅ 历史已清空")
             
             # 清空后的对话（无上下文）
-            reply = await service.asend("我叫什么名字？")
+            reply = await conv.asend("我叫什么名字？")
             print(f"清空后的回复: {reply}")
             
     except LLMRequestError as e:
@@ -322,10 +322,10 @@ async def main() -> None:
     await example_stream_chat()
     
     # 示例 3：补丁注入
-    await example_patch_injection()
+    # await example_patch_injection()
     
     # 示例 4：多会话管理
-    await example_multi_conversation()
+    # wait example_multi_conversation()
     
     
     print("\n" + "=" * 80)
