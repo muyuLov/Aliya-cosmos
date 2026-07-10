@@ -20,9 +20,9 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from core.logger import get_logger
 
-from memory.config import get_grag_config
-from memory import extractor
-from memory.exceptions import TaskQueueFullError, TaskTimeoutError, TaskExecutionError
+from core.memory.config import get_grag_config
+from core.memory import extractor
+from core.memory.exceptions import TaskQueueFullError, TaskTimeoutError, TaskExecutionError
 
 logger = get_logger(__name__)
 

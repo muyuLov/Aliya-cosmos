@@ -15,9 +15,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from core.logger import get_logger
 
-from memory.config import get_grag_config
-from memory.exceptions import GRAGNotEnabledError, GRAGError
-from memory import extractor, graph, rag_query, task_manager as task_manager_module
+from core.memory.config import get_grag_config
+from core.memory.exceptions import GRAGNotEnabledError, GRAGError
+from core.memory import extractor, graph, rag_query, task_manager as task_manager_module
 
 logger = get_logger(__name__)
 

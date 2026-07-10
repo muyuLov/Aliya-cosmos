@@ -26,7 +26,7 @@ def _check_type(
         min_val:       最小值（可选，含边界）
         max_val:       最大值（可选，含边界）
     """
-    from memory.exceptions import GRAGConfigError
+    from core.memory.exceptions import GRAGConfigError
 
     if not isinstance(value, expected_type):
         if isinstance(expected_type, tuple):
@@ -164,7 +164,7 @@ def _load_grag_config(config_path: str) -> GRAGConfig:
 
     # fail-fast: enabled=True 时 password 必须非空
     if grag_enabled and (not neo4j_password or not neo4j_password.strip()):
-        from memory.exceptions import GRAGConfigError
+        from core.memory.exceptions import GRAGConfigError
         raise GRAGConfigError(
             "cosmos.service.grag.neo4j.password: 启用 GRAG 时必须配置 Neo4j 密码"
         )

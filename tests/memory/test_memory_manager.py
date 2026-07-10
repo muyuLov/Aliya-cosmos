@@ -7,12 +7,12 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from memory.memory_manager import GRAGMemoryManager, _MAX_CONTEXT_CHARS
+from core.memory.memory_manager import GRAGMemoryManager, _MAX_CONTEXT_CHARS
 
 
 @pytest.fixture(autouse=True)
 def reset_globals():
-    import memory.memory_manager as mm
+    import core.memory.memory_manager as mm
 
     mm._memory_manager_instance = None
     yield
@@ -22,8 +22,8 @@ def reset_globals():
 def manager():
     """创建一个 disabled 的 manager 用于测试工具方法"""
     with (
-        patch("memory.memory_manager.get_grag_config") as mock_cfg,
-        patch("memory.memory_manager.task_manager_module.get_task_manager"),
+        patch("core.memory.memory_manager.get_grag_config") as mock_cfg,
+        patch("core.memory.memory_manager.task_manager_module.get_task_manager"),
     ):
         cfg = mock_cfg.return_value
         cfg.enabled = False
@@ -135,7 +135,7 @@ class TestSubmitExtractionTask:
 
         with (
             patch.object(manager, "_hash_text", return_value="known_hash"),
-            patch("memory.memory_manager.task_manager_module.get_task_manager") as mock_tm,
+            patch("core.memory.memory_manager.task_manager_module.get_task_manager") as mock_tm,
         ):
             mgr = mock_tm.return_value
             mgr.is_running = True
@@ -151,7 +151,7 @@ class TestSubmitExtractionTask:
 
         with (
             patch.object(manager, "_hash_text", return_value="inflight_hash"),
-            patch("memory.memory_manager.task_manager_module.get_task_manager") as mock_tm,
+            patch("core.memory.memory_manager.task_manager_module.get_task_manager") as mock_tm,
         ):
             mgr = mock_tm.return_value
             mgr.is_running = True
@@ -167,7 +167,7 @@ class TestSubmitExtractionTask:
 
         with (
             patch.object(manager, "_hash_text", return_value="new_hash"),
-            patch("memory.memory_manager.task_manager_module.get_task_manager") as mock_tm,
+            patch("core.memory.memory_manager.task_manager_module.get_task_manager") as mock_tm,
             patch.object(manager, "_extract_and_store_sync", AsyncMock(return_value=True)),
         ):
             mgr = mock_tm.return_value
@@ -184,7 +184,7 @@ class TestSubmitExtractionTask:
 
         with (
             patch.object(manager, "_hash_text", return_value="fail_hash"),
-            patch("memory.memory_manager.task_manager_module.get_task_manager") as mock_tm,
+            patch("core.memory.memory_manager.task_manager_module.get_task_manager") as mock_tm,
             patch.object(manager, "_extract_and_store_sync", AsyncMock(return_value=True)) as mock_fallback,
         ):
             mgr = mock_tm.return_value
@@ -212,7 +212,7 @@ class TestInflightDedup:
 
         with (
             patch.object(manager, "_hash_text", return_value="same_hash"),
-            patch("memory.memory_manager.task_manager_module.get_task_manager") as mock_tm,
+            patch("core.memory.memory_manager.task_manager_module.get_task_manager") as mock_tm,
             patch.object(manager, "_extract_and_store_sync", AsyncMock(return_value=True)),
         ):
             mgr = mock_tm.return_value
@@ -236,8 +236,8 @@ class TestClearMemory:
         manager.extraction_cache["hash3"] = True
 
         with (
-            patch("memory.memory_manager.task_manager_module.get_task_manager"),
-            patch("memory.memory_manager.graph.clear_all_quintuples_async", AsyncMock(return_value=True)),
+            patch("core.memory.memory_manager.task_manager_module.get_task_manager"),
+            patch("core.memory.memory_manager.graph.clear_all_quintuples_async", AsyncMock(return_value=True)),
         ):
             result = await manager.clear_memory()
             assert result is True
@@ -252,8 +252,8 @@ class TestGetMemoryStats:
         manager.enabled = True
 
         with (
-            patch("memory.memory_manager.task_manager_module.get_task_manager") as mock_tm,
-            patch("memory.memory_manager.graph.get_graph_stats", return_value={}),
+            patch("core.memory.memory_manager.task_manager_module.get_task_manager") as mock_tm,
+            patch("core.memory.memory_manager.graph.get_graph_stats", return_value={}),
         ):
             mgr = mock_tm.return_value
             mgr.get_stats.return_value = {"total_tasks": 0}

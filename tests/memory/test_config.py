@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from memory.config import (
+from core.memory.config import (
     ExtractorConfig,
     GRAGConfig,
     Neo4jConfig,
@@ -16,7 +16,7 @@ from memory.config import (
     get_grag_config,
     reload_config,
 )
-from memory.exceptions import GRAGConfigError
+from core.memory.exceptions import GRAGConfigError
 
 
 class TestCheckType:
@@ -83,7 +83,7 @@ class TestDataclassDefaults:
 
 
 class TestLoadGragConfig:
-    @patch("memory.config.get_config_instance")
+    @patch("core.memory.config.get_config_instance")
     def test_loads_full_config(self, mock_get_cfg):
         mock_cfg = mock_get_cfg.return_value
         mock_cfg.get.side_effect = lambda key, default=None: {
@@ -120,7 +120,7 @@ class TestLoadGragConfig:
         assert cfg.extractor.max_retries == 3
         assert cfg.task_manager.max_workers == 5
 
-    @patch("memory.config.get_config_instance")
+    @patch("core.memory.config.get_config_instance")
     def test_fail_fast_on_missing_password(self, mock_get_cfg):
         mock_cfg = mock_get_cfg.return_value
         mock_cfg.get.side_effect = lambda key, default=None: {
@@ -137,7 +137,7 @@ class TestLoadGragConfig:
         with pytest.raises(GRAGConfigError, match="必须配置 Neo4j 密码"):
             _load_grag_config("test.yml")
 
-    @patch("memory.config.get_config_instance")
+    @patch("core.memory.config.get_config_instance")
     def test_disabled_skips_password_check(self, mock_get_cfg):
         mock_cfg = mock_get_cfg.return_value
         mock_cfg.get.side_effect = lambda key, default=None: {
@@ -151,7 +151,7 @@ class TestLoadGragConfig:
         assert cfg.enabled is False
         assert cfg.neo4j.password is None
 
-    @patch("memory.config.get_config_instance")
+    @patch("core.memory.config.get_config_instance")
     def test_missing_sections_use_defaults(self, mock_get_cfg):
         mock_cfg = mock_get_cfg.return_value
         mock_cfg.get.side_effect = lambda key, default=None: {

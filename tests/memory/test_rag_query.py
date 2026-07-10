@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from memory.exceptions import RAGGenerationError, RAGQueryError
-from memory.rag_query import RAGQueryEngine
+from core.memory.exceptions import RAGGenerationError, RAGQueryError
+from core.memory.rag_query import RAGQueryEngine
 
 
 @pytest.fixture
@@ -24,7 +24,7 @@ def mock_graph_query():
 
 @pytest.fixture
 def engine(mock_provider, mock_graph_query):
-    with patch("memory.rag_query.get_memory_provider", return_value=mock_provider):
+    with patch("core.memory.rag_query.get_memory_provider", return_value=mock_provider):
         eng = RAGQueryEngine(graph_query_func=mock_graph_query)
         yield eng
 
@@ -139,7 +139,7 @@ class TestRAGQueryEngine:
         assert engine._recent_context == ["a", "b", "c"]
 
     def test_set_context_respects_config_limit(self, engine, mock_provider):
-        with patch("memory.rag_query.get_grag_config") as mock_cfg:
+        with patch("core.memory.rag_query.get_grag_config") as mock_cfg:
             cfg = mock_cfg.return_value
             cfg.context_length = 2
 

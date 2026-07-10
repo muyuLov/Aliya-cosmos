@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from memory.task_manager import (
+from core.memory.task_manager import (
     QuintupleTaskManager,
     TaskStatus,
     start_task_manager,
@@ -19,7 +19,7 @@ from memory.task_manager import (
 @pytest.fixture(autouse=True)
 def reset_task_manager():
     """每个测试前重置任务管理器单例"""
-    import memory.task_manager as tm
+    import core.memory.task_manager as tm
 
     tm._task_manager_instance = None
     yield
@@ -76,7 +76,7 @@ class TestQuintupleTaskManager:
         await mgr.start()
 
         # Mock extractor to return quickly
-        with patch("memory.extractor.extract_quintuples", AsyncMock(return_value=[("a", "人物", "喜欢", "b", "物品")])):
+        with patch("core.memory.extractor.extract_quintuples", AsyncMock(return_value=[("a", "人物", "喜欢", "b", "物品")])):
             task_id = await mgr.add_task("测试文本")
             assert task_id.startswith("extract_")
 
@@ -104,7 +104,7 @@ class TestQuintupleTaskManager:
         mgr = QuintupleTaskManager(max_workers=2, max_queue_size=10)
         await mgr.start()
 
-        with patch("memory.extractor.extract_quintuples", AsyncMock(return_value=[])):
+        with patch("core.memory.extractor.extract_quintuples", AsyncMock(return_value=[])):
             task_id_1 = await mgr.add_task("相同的文本")
             task_id_2 = await mgr.add_task("相同的文本")
             # 应该返回相同的 task_id（去重）
@@ -122,7 +122,7 @@ class TestQuintupleTaskManager:
             await asyncio.sleep(100)
             return []
 
-        with patch("memory.extractor.extract_quintuples", slow_extract):
+        with patch("core.memory.extractor.extract_quintuples", slow_extract):
             task_id = await mgr.add_task("等待取消的文本")
 
             # 任务仍在 pending 或 running
@@ -166,7 +166,7 @@ class TestQuintupleTaskManager:
         mgr = QuintupleTaskManager(max_workers=2, max_queue_size=10)
         await mgr.start()
 
-        with patch("memory.extractor.extract_quintuples", AsyncMock(return_value=[("x", "人物", "喜欢", "y", "物品")])):
+        with patch("core.memory.extractor.extract_quintuples", AsyncMock(return_value=[("x", "人物", "喜欢", "y", "物品")])):
             await mgr.add_task("文本A")
             await mgr.add_task("文本B")
 
@@ -189,7 +189,7 @@ class TestQuintupleTaskManager:
         async def failing_extract(text):
             raise RuntimeError("提取失败")
 
-        with patch("memory.extractor.extract_quintuples", failing_extract):
+        with patch("core.memory.extractor.extract_quintuples", failing_extract):
             await mgr.add_task("会失败的文本")
             await asyncio.sleep(1)
 
@@ -203,7 +203,7 @@ class TestQuintupleTaskManager:
         mgr = QuintupleTaskManager(max_workers=2, max_queue_size=10)
         await mgr.start()
 
-        with patch("memory.extractor.extract_quintuples", AsyncMock(return_value=[])):
+        with patch("core.memory.extractor.extract_quintuples", AsyncMock(return_value=[])):
             await mgr.add_task("文本1")
             await mgr.add_task("文本2")
             await asyncio.sleep(0.5)
@@ -218,7 +218,7 @@ class TestQuintupleTaskManager:
         mgr = QuintupleTaskManager(max_workers=2, max_queue_size=10)
         await mgr.start()
 
-        with patch("memory.extractor.extract_quintuples", AsyncMock(return_value=[])):
+        with patch("core.memory.extractor.extract_quintuples", AsyncMock(return_value=[])):
             await mgr.add_task("文本1")
             await mgr.add_task("文本2")
             await asyncio.sleep(0.5)

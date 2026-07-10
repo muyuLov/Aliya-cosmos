@@ -22,8 +22,8 @@ from pathlib import Path
 from typing import Any, Tuple
 
 from core.logger import get_logger
-from memory.config import get_grag_config, reload_config
-from memory.exceptions import (
+from core.memory.config import get_grag_config, reload_config
+from core.memory.exceptions import (
     GRAGError,
     GRAGConfigError,
     GRAGNotEnabledError,
@@ -43,8 +43,8 @@ from memory.exceptions import (
     TaskTimeoutError,
     TaskExecutionError,
 )
-from memory.extractor import QuintupleExtractor, get_extractor
-from memory.graph import (
+from core.memory.extractor import QuintupleExtractor, get_extractor
+from core.memory.graph import (
     GraphStore,
     clear_all_quintuples,
     clear_all_quintuples_async,
@@ -62,9 +62,9 @@ from memory.graph import (
     store_quintuples,
     store_quintuples_async,
 )
-from memory.memory_manager import GRAGMemoryManager, get_memory_manager
-from memory.rag_query import RAGQueryEngine, get_rag_engine
-from memory.task_manager import (
+from core.memory.memory_manager import GRAGMemoryManager, get_memory_manager
+from core.memory.rag_query import RAGQueryEngine, get_rag_engine
+from core.memory.task_manager import (
     QuintupleTaskManager,
     get_task_manager,
     start_task_manager,

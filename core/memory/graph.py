@@ -45,8 +45,8 @@ from typing import List, Optional, Tuple
 
 from core.logger import get_logger
 
-from memory.config import get_grag_config
-from memory.exceptions import (
+from core.memory.config import get_grag_config
+from core.memory.exceptions import (
     GraphConnectionError,
     GraphQueryError,
     GraphWriteError,

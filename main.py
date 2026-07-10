@@ -47,7 +47,7 @@ from agent.ws_server import handle_connection
 from core.config import get_config_instance
 from core.logger import get_logger
 from core.tts import create_from_config
-from memory import get_memory_manager
+from core.memory import get_memory_manager
 
 logger = get_logger(__name__)
 

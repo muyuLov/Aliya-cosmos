@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from memory.extractor import (
+from core.memory.extractor import (
     VALID_ENTITY_TYPES,
     _is_valid_entity_type,
     QuintupleExtractor,
 )
-from memory._utils import parse_json_array
+from core.memory._utils import parse_json_array
 
 
 class TestIsValidEntityType:

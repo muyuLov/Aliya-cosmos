@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from memory.graph import _REL_TYPE_PATTERN
+from core.memory.graph import _REL_TYPE_PATTERN
 
 
 class TestRelTypePattern:

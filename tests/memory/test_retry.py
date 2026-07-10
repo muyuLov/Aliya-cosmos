@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from memory._retry import (
+from core.memory._retry import (
     async_retry,
     async_retry_or_default,
     is_transient_error,

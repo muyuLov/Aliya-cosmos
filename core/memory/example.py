@@ -23,7 +23,7 @@ if __name__ == "__main__":
       sys.path.insert(0, str(project_root))
 
 from core.exception import get_default_handler
-from memory import (
+from core.memory import (
    create_memory_service,
    get_memory_manager,
    get_service_status,
@@ -156,7 +156,7 @@ async def example_task_management() -> None:
       print("任务管理器已启动")
       
       # 获取任务管理器
-      from memory.task_manager import get_task_manager
+      from core.memory.task_manager import get_task_manager
       task_mgr = get_task_manager()
       
       # 准备多个文本进行并发提取
@@ -358,7 +358,7 @@ async def example_memory_maintenance() -> None:
       print("ℹ  清理操作已注释，如需执行请取消注释相关代码")
       
       # 演示任务清理
-      from memory.task_manager import get_task_manager
+      from core.memory.task_manager import get_task_manager
       task_mgr = get_task_manager()
       
       print("\n清理已完成的任务...")
