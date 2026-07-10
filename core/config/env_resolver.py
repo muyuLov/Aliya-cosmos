@@ -4,7 +4,16 @@ from __future__ import annotations
 
 import os
 import re
+from pathlib import Path
 from typing import Any
+
+# 自动加载项目根目录下的 .env 文件（不覆盖已有的系统环境变量）
+try:
+    from dotenv import load_dotenv as _load_dotenv
+    _env_file = Path(__file__).parent.parent.parent / ".env"
+    _load_dotenv(_env_file, override=False)
+except ImportError:
+    pass  # python-dotenv 未安装时静默跳过
 
 _ENV_VAR_PATTERN = re.compile(r"\$\{([^}:]+)(?::([^}]*))?\}")
 

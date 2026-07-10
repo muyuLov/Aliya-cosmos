@@ -53,7 +53,6 @@ class Neo4jConfig:
     user: str = "neo4j"
     password: str | None = None
     database: str = "neo4j"
-    max_connections: int = 10
 
 
 @dataclass
@@ -156,12 +155,10 @@ def _load_grag_config(config_path: str) -> GRAGConfig:
     neo4j_user = neo4j_cfg.get("user", "neo4j")
     neo4j_password = neo4j_cfg.get("password")  # 无默认值，运行时检查
     neo4j_database = neo4j_cfg.get("database", "neo4j")
-    neo4j_max_connections = neo4j_cfg.get("max_connections", 10)
 
     _check_type(neo4j_uri, "cosmos.service.grag.neo4j.uri", str)
     _check_type(neo4j_user, "cosmos.service.grag.neo4j.user", str)
     _check_type(neo4j_database, "cosmos.service.grag.neo4j.database", str)
-    _check_type(neo4j_max_connections, "cosmos.service.grag.neo4j.max_connections", int, min_val=1)
     if neo4j_password is not None:
         _check_type(neo4j_password, "cosmos.service.grag.neo4j.password", str)
 
@@ -177,7 +174,6 @@ def _load_grag_config(config_path: str) -> GRAGConfig:
         user=neo4j_user,
         password=neo4j_password,
         database=neo4j_database,
-        max_connections=neo4j_max_connections,
     )
 
     # 加载提取器配置

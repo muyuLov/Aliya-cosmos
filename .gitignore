@@ -69,7 +69,7 @@ docker/data/AstraTTS
 docker/data/Neo4j
 
 # claude-code reference
-claude-code/
+example/
 
 # env
 .env

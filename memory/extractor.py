@@ -49,7 +49,11 @@ SYSTEM_PROMPT = """
    - 闲聊中的无关信息
    - 重复或冗余的关系
 
-3. 类型包括但不限于：人物、地点、组织、物品、概念、时间、事件、活动等。
+3. 类型必须从以下列表中选择，不得使用其他类型：
+   人物、角色、身份、地点、区域、设施、组织、机构、品牌、物品、产品、食物、动植物、
+   软件、平台、技术、算法、数据、时间、日期、周期、事件、活动、技能、学科、领域、
+   语言、职业、项目、作品、概念、目标、规则、方法、原因、结果、关系、
+   属性、状态、年龄、数量、价格、比例
 
 ## 示例
 
@@ -74,15 +78,68 @@ SYSTEM_PROMPT = """
 
 # 合法实体类型集合
 VALID_ENTITY_TYPES = frozenset({
+    # ── 人物与角色 ────────────────────────────────────────────
     "人物", "Person",
+    "角色", "Role",
+    "身份", "Identity",
+
+    # ── 地点与设施 ────────────────────────────────────────────
     "地点", "Location",
+    "区域", "Region",
+    "设施", "Facility",
+
+    # ── 组织与机构 ────────────────────────────────────────────
     "组织", "Organization",
+    "机构", "Institution",
+    "品牌", "Brand",
+
+    # ── 物品与产品 ────────────────────────────────────────────
     "物品", "Object",
-    "概念", "Concept",
+    "产品", "Product",
+    "食物", "Food",
+    "动植物", "Biology",
+
+    # ── 科技与信息 ────────────────────────────────────────────
+    "软件", "Software",
+    "平台", "Platform",
+    "技术", "Technology",
+    "算法", "Algorithm",
+    "数据", "Data",
+
+    # ── 时间 ─────────────────────────────────────────────────
     "时间", "Time",
+    "日期", "Date",
+    "周期", "Period",
+
+    # ── 事件与活动 ────────────────────────────────────────────
     "事件", "Event",
     "活动", "Activity",
+
+    # ── 知识与工作 ────────────────────────────────────────────
     "技能", "Skill",
+    "学科", "Subject",
+    "领域", "Domain",
+    "语言", "Language",
+    "职业", "Occupation",
+    "项目", "Project",
+    "作品", "Work",
+
+    # ── 抽象概念 ─────────────────────────────────────────────
+    "概念", "Concept",
+    "目标", "Goal",
+    "规则", "Rule",
+    "方法", "Method",
+    "原因", "Cause",
+    "结果", "Result",
+    "关系", "Relation",
+
+    # ── 属性与度量 ────────────────────────────────────────────
+    "属性", "Attribute",
+    "状态", "State",
+    "年龄", "Age",
+    "数量", "Quantity",
+    "价格", "Price",
+    "比例", "Ratio",
 })
 
 
@@ -215,10 +272,10 @@ class QuintupleExtractor:
                 continue
             head, head_type, rel, tail, tail_type = (x.strip() for x in item)
             if not _is_valid_entity_type(head_type):
-                logger.warning("非法主体类型，跳过: %s(%s)", head, head_type)
+                logger.debug("跳过非法主体类型: %s(%s)", head, head_type)
                 continue
             if not _is_valid_entity_type(tail_type):
-                logger.warning("非法客体类型，跳过: %s(%s)", tail, tail_type)
+                logger.debug("跳过非法客体类型: %s(%s)", tail, tail_type)
                 continue
             result.append((head, head_type, rel, tail, tail_type))
 

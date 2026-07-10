@@ -33,7 +33,6 @@ cosmos:
         user: neo4j                     # 用户名
         password: Aliya_neo4j           # 密码
         database: neo4j                 # 数据库名
-        max_connections: 10            # 连接池最大连接数
       extractor:
         max_retries: 2                 # 五元组提取最大重试次数
         timeout: 30                    # 提取超时（秒）

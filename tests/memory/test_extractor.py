@@ -50,8 +50,50 @@ class TestValidEntityTypesSet:
 
     def test_coverage(self):
         """确保所有中英文类型成对存在"""
-        chinese = {"人物", "地点", "组织", "物品", "概念", "时间", "事件", "活动", "技能"}
-        english = {"Person", "Location", "Organization", "Object", "Concept", "Time", "Event", "Activity", "Skill"}
+        chinese = {
+            # 人物与角色
+            "人物", "角色", "身份",
+            # 地点与设施
+            "地点", "区域", "设施",
+            # 组织与机构
+            "组织", "机构", "品牌",
+            # 物品与产品
+            "物品", "产品", "食物", "动植物",
+            # 科技与信息
+            "软件", "平台", "技术", "算法", "数据",
+            # 时间
+            "时间", "日期", "周期",
+            # 事件与活动
+            "事件", "活动",
+            # 知识与工作
+            "技能", "学科", "领域", "语言", "职业", "项目", "作品",
+            # 抽象概念
+            "概念", "目标", "规则", "方法", "原因", "结果", "关系",
+            # 属性与度量
+            "属性", "状态", "年龄", "数量", "价格", "比例",
+        }
+        english = {
+            # 人物与角色
+            "Person", "Role", "Identity",
+            # 地点与设施
+            "Location", "Region", "Facility",
+            # 组织与机构
+            "Organization", "Institution", "Brand",
+            # 物品与产品
+            "Object", "Product", "Food", "Biology",
+            # 科技与信息
+            "Software", "Platform", "Technology", "Algorithm", "Data",
+            # 时间
+            "Time", "Date", "Period",
+            # 事件与活动
+            "Event", "Activity",
+            # 知识与工作
+            "Skill", "Subject", "Domain", "Language", "Occupation", "Project", "Work",
+            # 抽象概念
+            "Concept", "Goal", "Rule", "Method", "Cause", "Result", "Relation",
+            # 属性与度量
+            "Attribute", "State", "Age", "Quantity", "Price", "Ratio",
+        }
         assert chinese | english == VALID_ENTITY_TYPES
 
 

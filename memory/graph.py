@@ -158,7 +158,6 @@ class GraphStore:
                     cfg.neo4j.uri,
                     auth=(cfg.neo4j.user, cfg.neo4j.password),
                     name=cfg.neo4j.database,
-                    max_connections=cfg.neo4j.max_connections,
                 )
                 # 验证连接（触发实际握手）
                 self._graph.service.kernel_version  # type: ignore[attr-defined]
