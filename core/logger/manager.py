@@ -123,6 +123,8 @@ class LogManager:
         third_party_level = logging.DEBUG if enabled else logging.WARNING
         logging.getLogger("httpx").setLevel(third_party_level)
         logging.getLogger("httpcore").setLevel(third_party_level)
+        logging.getLogger("py2neo").setLevel(third_party_level)
+        logging.getLogger("openai").setLevel(third_party_level)
 
     def _apply_level(self, level: int) -> None:
         """同步设置根 Logger 与所有 Handler 的日志级别。"""
@@ -172,6 +174,8 @@ class LogManager:
         if not debug_mode:
             logging.getLogger("httpx").setLevel(logging.WARNING)
             logging.getLogger("httpcore").setLevel(logging.WARNING)
+            logging.getLogger("py2neo").setLevel(logging.WARNING)
+            logging.getLogger("openai").setLevel(logging.WARNING)
 
         console_cfg: dict[str, Any] = config.get("console", {})
         if console_cfg.get("enabled", True):

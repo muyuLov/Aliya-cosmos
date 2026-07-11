@@ -43,7 +43,8 @@ class GRAGMemoryManager:
 
         Args:
             ai_name:               AI 角色名称，用于格式化对话文本；
-                                   为 None 时自动从 cosmos.agent.ai_name 配置读取
+                                   为 None 时自动从 cosmos.characters.ai_name 配置读取
+            user_name               固定从 cosmos.characters.user_name 配置读取
             task_manager_instance:  任务管理器实例（可选，用于测试注入 mock）
             extract_func:          五元组提取函数（async，可选）
             rag_query_func:        RAG 查询函数（async，可选）
@@ -54,6 +55,7 @@ class GRAGMemoryManager:
         self.auto_extract = cfg.auto_extract
         self.context_length = cfg.context_length
         self.ai_name = ai_name if ai_name is not None else cfg.ai_name
+        self.user_name = cfg.user_name
         self._init_error: Optional[str] = None
 
         # 依赖注入存储（None 时回退到默认模块级单例/函数）
@@ -117,35 +119,26 @@ class GRAGMemoryManager:
         """
         添加对话记忆到知识图谱
 
-        Args:
-            user_input:  用户输入
-            ai_response: AI 响应
-            session_id:  会话 ID（用于图谱关系元属性）
-            day_date:    日期字符串，如 "2026-06-01"（用于关联 Day 节点和时间链）
-            timeline:    时间链标识，如 "user" 或 "aliya"
-
-        Returns:
-            是否成功
+        timeline 以 "|" 分隔可指定多条时间链，如 "aliya|user" 同时写入两条链。
+        每条链均存储完整的 conversation_text（双方回复）。
         """
         if not self.enabled:
             return False
 
         try:
-            # 拼接本轮内容
-            conversation_text = f"用户: {user_input}\n{self.ai_name}: {ai_response}"
+            conversation_text = f"{self.user_name}: {user_input}\n{self.ai_name}: {ai_response}"
             logger.info(f"添加对话记忆: {conversation_text[:50]}...")
 
-            # 更新 recent_context（deque maxlen 自动约束条数）
             self.recent_context.append(conversation_text)
             self._context_char_count += len(conversation_text)
-            # 字符数约束：从头部移除直到总字符数在限制内（O(n) 总复杂度）
             self._trim_context_by_chars()
 
-            # 使用任务管理器异步提取五元组
-            if self.auto_extract:
-                await self._submit_extraction_task(
-                    conversation_text, session_id, day_date, timeline
-                )
+            for tl in timeline.split("|") if timeline else ["aliya"]:
+                logger.debug(f"提交时间链任务: timeline={tl.strip()}")
+                if self.auto_extract:
+                    await self._submit_extraction_task(
+                        conversation_text, session_id, day_date, tl.strip(),
+                    )
 
             return True
 
@@ -167,49 +160,37 @@ class GRAGMemoryManager:
             removed = self.recent_context.popleft()
             self._context_char_count -= len(removed)
 
-    def _cache_mark_done(self, text_hash: str) -> None:
-        """统一标记提取缓存（同步/异步路径共用），附带 LRU 淘汰"""
-        if text_hash in self.extraction_cache:
-            self.extraction_cache.move_to_end(text_hash)
-        else:
-            self.extraction_cache[text_hash] = True
-        if len(self.extraction_cache) > self._max_cache_size:
-            self.extraction_cache.popitem(last=False)
+    def _cache_mark_done(self, task_id: str) -> None:
+        """标记任务完成到提取缓存（基于task_id，支持多时间链）"""
+        # 不再使用文本哈希进行缓存，改为简单的完成状态跟踪
+        # 如果需要缓存优化，可以在这里实现基于task_id的缓存逻辑
+        pass
 
     async def _submit_extraction_task(
         self, text: str, session_id: str = "",
         day_date: str = "", timeline: str = "",
     ) -> None:
-        """提交五元组提取任务"""
-        text_hash = self._hash_text(text)
-
-        # 检查是否已提取过或正在进行中
-        if text_hash in self.extraction_cache:
-            logger.debug(f"跳过已处理的文本: {text[:50]}...")
-            return
-        if text_hash in self._inflight_hashes:
-            logger.debug(f"跳过进行中的文本: {text[:50]}...")
-            return
-
-        self._inflight_hashes.add(text_hash)
-
+        """提交五元组提取任务
+        
+        每个时间链都会独立提取和处理，不进行跨时间链的去重。
+        相同文本的不同时间链会分别处理，因为它们可能产生不同的实体关联。
+        """
         try:
             mgr = self._get_task_manager()
 
-            # 确保任务管理器已启动（start() 内部已通过 asyncio.sleep(0) 保证 worker 就绪）
+            # 确保任务管理器已启动
             if not mgr.is_running:
                 await task_manager_module.start_task_manager()
 
-            # 提交任务
+            # 为每个时间链独立提交任务，不进行文本去重
             task_id = await mgr.add_task(
                 text, source_text=text, session_id=session_id,
                 day_date=day_date, timeline=timeline,
             )
             self.active_tasks.add(task_id)
-            logger.info(f"已提交五元组提取任务: {task_id}")
+            logger.info(f"已提交五元组提取任务: {task_id} (timeline={timeline})")
 
         except Exception as e:
-            self._inflight_hashes.discard(text_hash)
             logger.error(f"提交提取任务失败: {e}")
             # 回退到同步提取
             await self._extract_and_store_sync(text, session_id, day_date, timeline)
@@ -220,12 +201,7 @@ class GRAGMemoryManager:
     ) -> bool:
         """同步提取并存储五元组（回退方案）"""
         try:
-            text_hash = self._hash_text(text)
-
-            if text_hash in self.extraction_cache:
-                return True
-
-            logger.info(f"使用回退方法提取五元组: {text[:100]}...")
+            logger.info(f"使用回退方法提取五元组 (timeline={timeline}): {text[:100]}...")
 
             # 提取五元组
             quintuples = await self._get_extract_func()(text)
@@ -242,7 +218,6 @@ class GRAGMemoryManager:
                 timeline=timeline,
             )
             if success:
-                self._cache_mark_done(text_hash)
                 logger.info(f"回退方法存储 {len(quintuples)} 个五元组成功")
 
             return success
@@ -255,10 +230,8 @@ class GRAGMemoryManager:
         """任务完成回调包装（同步，由 task_manager worker 调用）
 
         职责：清理活跃任务集合，再将异步处理调度到事件循环。
-        active_tasks / _inflight_hashes 在此同步完成，消除跨协程竞态窗口。
         """
         self.active_tasks.discard(task.task_id)
-        self._inflight_hashes.discard(task.text_hash)
         if not task.result:
             return
 
@@ -293,7 +266,6 @@ class GRAGMemoryManager:
             )
             if success:
                 logger.info("成功存储 %d 个五元组到图谱", len(task.result))
-                self._cache_mark_done(task.text_hash)
 
         except Exception as e:
             logger.error("任务完成回调处理失败: %s", e)
@@ -369,7 +341,6 @@ class GRAGMemoryManager:
         try:
             mgr = self._get_task_manager()
             task_stats = mgr.get_stats()
-            graph_stats = graph.get_graph_stats()
 
             ret = {
                 "enabled": True,
@@ -378,7 +349,6 @@ class GRAGMemoryManager:
                 "inflight_count": len(self._inflight_hashes),
                 "active_tasks": len(self.active_tasks),
                 "task_manager": task_stats,
-                "graph": graph_stats,
             }
             if self._init_error:
                 ret["init_error"] = self._init_error
@@ -399,9 +369,6 @@ class GRAGMemoryManager:
     async def cancel_task(self, task_id: str) -> bool:
         """取消任务"""
         self.active_tasks.discard(task_id)
-        text_hash = self._get_task_manager().get_task_text_hash(task_id)
-        if text_hash:
-            self._inflight_hashes.discard(text_hash)
         return await self._get_task_manager().cancel_task(task_id)
 
     async def clear_memory(self) -> bool:
@@ -458,5 +425,3 @@ __all__ = [
     "GRAGMemoryManager",
     "get_memory_manager",
 ]
-
-
