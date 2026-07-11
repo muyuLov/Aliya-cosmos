@@ -1,5 +1,9 @@
 # ── 全局配置 ──────────────────────────────────────────────
 cosmos:
+  # ── Agent 全局设置 ────────────────────────────────────
+  agent:
+    ai_name: Aliya                     # AI 角色名称（用于记忆格式化等）
+
   # ── 日志系统 ──────────────────────────────────────────
   logger:
     debug: true                        # 全局调试模式
@@ -69,22 +73,3 @@ cosmos:
         frames_per_buffer: 1024        # 缓冲区帧数
         play_queue_size: 32            # 播放队列大小（段数）
         queue_timeout: 300.0           # 播放队列超时（秒）
-
-    # ── Agent 引擎 ────────────────────────────────────
-    agent:
-      ws_server:
-        host: 127.0.0.1               # WebSocket 监听地址
-        port: 8765                     # WebSocket 监听端口
-        timeout: 60                    # 接收消息超时（秒，须大于心跳间隔）
-        reconnect_timeout: 120         # 断连后会话保留时间（秒），超时后清理
-      loop:
-        max_turns: null                # 最大对话轮数（null=无限）
-      grag:
-        enabled: true                  # 启用记忆检索/存储
-        top_k: 5                       # 检索返回记忆条数
-      tools:
-        timeout_seconds: 120           # 工具执行超时（秒，0=无限制）
-      brain:
-        max_iterations: 5              # Brain 多轮推理最大轮数
-      log:
-        level: INFO                    # Agent 模块日志级别

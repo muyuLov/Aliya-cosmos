@@ -24,9 +24,6 @@ logger = get_logger(__name__)
 # 五元组类型别名
 QuintupleType = Tuple[str, str, str, str, str]
 
-# 默认 AI 名称
-DEFAULT_AI_NAME = "Aliya"
-
 # recent_context 字符数上限（与 context_length 条数上线并行约束）
 _MAX_CONTEXT_CHARS = 100000
 
@@ -36,7 +33,7 @@ class GRAGMemoryManager:
 
     def __init__(
         self,
-        ai_name: str = DEFAULT_AI_NAME,
+        ai_name: str | None = None,
         task_manager_instance: Any = None,
         extract_func: Any = None,
         rag_query_func: Any = None,
@@ -45,7 +42,8 @@ class GRAGMemoryManager:
         初始化记忆管理器
 
         Args:
-            ai_name:               AI 角色名称，用于格式化对话文本
+            ai_name:               AI 角色名称，用于格式化对话文本；
+                                   为 None 时自动从 cosmos.agent.ai_name 配置读取
             task_manager_instance:  任务管理器实例（可选，用于测试注入 mock）
             extract_func:          五元组提取函数（async，可选）
             rag_query_func:        RAG 查询函数（async，可选）
@@ -55,7 +53,7 @@ class GRAGMemoryManager:
         self.enabled = cfg.enabled
         self.auto_extract = cfg.auto_extract
         self.context_length = cfg.context_length
-        self.ai_name = ai_name
+        self.ai_name = ai_name if ai_name is not None else cfg.ai_name
         self._init_error: Optional[str] = None
 
         # 依赖注入存储（None 时回退到默认模块级单例/函数）
@@ -459,7 +457,6 @@ def get_memory_manager() -> GRAGMemoryManager:
 __all__ = [
     "GRAGMemoryManager",
     "get_memory_manager",
-    "DEFAULT_AI_NAME",
 ]
 
 
