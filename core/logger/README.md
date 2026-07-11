@@ -1,133 +1,150 @@
 # Logger 模块
 
-负责全局日志管理，提供结构化彩色终端输出、异步文件轮转输出，以及运行时动态级别控制。
+统一的日志管理系统，支持控制台彩色输出与异步文件轮转，提供模块级 Logger 获取和运行时动态配置。
 
 ## 核心接口
 
-- `setup(config: dict | None) -> LogManager`  
-  应用启动时调用一次，初始化全局日志管理器。
-
-- `get_logger(name: str) -> logging.Logger`  
-  获取指定名称的 Logger，未初始化时自动以默认配置启动。
-
-- `get_manager() -> LogManager`  
-  获取全局 LogManager 实例，用于动态调整级别或重载配置。
-
-### 使用示例
+### `get_logger(name)` — 获取 Logger
 
 ```python
-from core.logger import setup, get_logger, get_manager
-
-# 启动时初始化（通常在 main.py 中）
-setup({
-    "level": "info",
-    "debug": False,
-    "console": {"enabled": True, "color": True},
-    "file": {
-        "enabled": True,
-        "path": "data/log/app.log",
-        "rotate": "timed",      # 按天轮转（默认）
-        "when": "midnight",
-        "backup_count": 30,
-    },
-})
+from core.logger import get_logger
 
 logger = get_logger(__name__)
-logger.info("服务启动")
-logger.debug("调试信息", extra={"user": "admin"})
 
-# 应用退出前调用，确保异步队列日志全部落盘
-get_manager().shutdown()
+logger.debug("五元组提取开始")
+logger.info("成功存储 %d 个五元组", 5)
+logger.warning("Neo4j 连接冷却中，剩余 %.0fs", 30.0)
+logger.error("LLM 请求失败: %s", error, exc_info=True)
 ```
 
-### 与 ConfigManager 集成
+若全局管理器尚未初始化，自动以默认配置（INFO 级别，仅控制台）启动。通常不需要手动调用 `setup()`。
+
+---
+
+### `setup(config)` — 初始化日志管理器
+
+应在应用启动时调用一次，支持三种方式：
 
 ```python
-from core.config import get_config_instance
 from core.logger import setup
 
-cfg = get_config_instance("data/config/main.yml")
+# 方式 1：自动从 data/config/main.yml 的 cosmos.logger 段加载（推荐）
+setup()
 
+# 方式 2：指定配置文件路径
+setup("data/config/main.yml")
+
+# 方式 3：直接传入配置字典
 setup({
-    "level": cfg.get("cosmos.logger.level", "info"),
-    "debug": cfg.get("cosmos.logger.debug", False),
+    "level": "debug",
+    "debug": True,
     "console": {"enabled": True, "color": True},
-    "file": {
-        "enabled": True,
-        "path": cfg.get("cosmos.logger.file_url", "data/log/cosmos.log"),
-        "rotate": "timed",
-        "backup_count": 30,
-    },
+    "file": {"enabled": False},
 })
 ```
 
-### 动态控制
+---
+
+### `get_manager()` — 获取 LogManager
 
 ```python
 from core.logger import get_manager
 
 mgr = get_manager()
-mgr.set_debug_mode(True)        # 切换到 DEBUG 级别
-mgr.set_global_level("warning") # 动态调整级别
-mgr.reload_config({...})        # 热重载配置
-mgr.shutdown()                  # 优雅关闭，等待异步队列落盘
+
+# 运行时动态调整级别
+mgr.set_global_level("warning")
+
+# 快速切换 debug 模式（同时控制 httpx/httpcore 等三方库日志）
+mgr.set_debug_mode(True)
+
+# 热重载配置
+mgr.reload_config(new_config_dict)
+
+# 应用退出前优雅关闭，确保队列中的日志全部落盘
+mgr.shutdown()
 ```
 
-## 日志输出格式
+---
 
-控制台（彩色）：
+## 输出格式
 
-```
-2026-04-06 12:00:00 | MainThread           | INFO    | --> 服务启动
-2026-04-06 12:00:00 | MainThread           | WARNING | --> 磁盘空间不足
-2026-04-06 12:00:00 | MainThread           | ERROR   | --> 连接超时
-2026-04-06 12:00:00 | MainThread           | CRITICAL| --> 系统崩溃
-```
-
-各部分颜色：
-
-| 部分       | 颜色                     |
-| ---------- | ------------------------ |
-| 时间戳     | 暗白                     |
-| 线程名     | 青色                     |
-| `\|` / `-->` | 暗色                   |
-| DEBUG      | 青色 / 暗白消息          |
-| INFO       | 粗体绿色 / 白色消息      |
-| WARNING    | 粗体黄色 / 黄色消息      |
-| ERROR      | 粗体红色 / 红色消息      |
-| CRITICAL   | 粗体白字红底 / 粗体红色消息 |
-
-文件输出（无色，格式相同）：
+### 默认（彩色结构化）
 
 ```
-2026-04-06 12:00:00 | MainThread           | INFO    | --> 服务启动
+2026-07-11 14:32:01 | MainThread           | INFO    | --> 成功存储 5 个五元组到 Neo4j
+2026-07-11 14:32:02 | MainThread           | WARNING | --> Neo4j 连接失败，进入冷却期
+2026-07-11 14:32:03 | MainThread           | ERROR   | --> LLM 请求失败: timeout
 ```
 
-JSON 模式（`structured: True`）：
+各字段固定宽度对齐：`时间戳 | 线程名(20字符) | 级别(8字符) | --> 消息`
+
+### JSON 结构化（`structured: true`）
 
 ```json
-{"timestamp": "2026-04-06T12:00:00Z", "thread": "MainThread", "level": "INFO", "logger": "myapp", "message": "服务启动", "user_id": 42}
+{"timestamp": "2026-07-11T14:32:01Z", "thread": "MainThread", "level": "INFO", "logger": "core.memory.graph", "message": "成功存储 5 个五元组到 Neo4j"}
 ```
 
-## 文件轮转模式
+适合日志采集平台（ELK、Loki 等）。通过 `extra=` 传入的自定义字段会自动附加到 JSON 输出。
 
-| `rotate` 值 | 说明                                      | 关键参数                          |
-| ----------- | ----------------------------------------- | --------------------------------- |
-| `"timed"`   | 按时间轮转（默认），历史文件追加日期后缀  | `when`（默认 `midnight`）、`backup_count` |
-| `"sized"`   | 按文件大小轮转                            | `max_bytes`（默认 10 MB）、`backup_count` |
-
-文件写入采用 `QueueHandler + QueueListener` 异步机制，日志调用不阻塞业务线程。  
-应用退出前须调用 `shutdown()` 确保队列中的日志全部落盘。
-
-## 依赖关系
-
-- 内部模块：`core.config`（可选，用于从 YAML 读取配置）
-- 外部库：仅使用 Python 3.12 标准库（`logging`、`json`、`pathlib`、`queue`）
+---
 
 ## 配置说明
 
-| 配置键（YAML 路径）         | 描述                | 默认值                |
-| --------------------------- | ------------------- | --------------------- |
-| `cosmos.logger.level`      | 日志级别            | `info`                |
-| `cosmos.logger.debug`      | 是否开启 debug 模式 | `false`               |
-| `cosmos.logger.file_url`   | 日志文件路径        | `data/log/cosmos.log` |
+配置路径：`cosmos.logger`（`data/config/main.yml`）
+
+```yaml
+cosmos:
+  logger:
+    level: info          # 日志级别：debug / info / warning / error / critical
+    debug: false         # debug 模式：true 时强制 DEBUG 级别，并开放三方库日志
+    structured: false    # false = 彩色结构化；true = JSON
+
+    console:
+      enabled: true      # 是否输出到控制台
+      color: true        # 是否启用 ANSI 彩色
+
+    file:
+      enabled: true                  # 是否输出到文件
+      path: data/logs/cosmos.log     # 日志文件路径（父目录自动创建）
+      rotate: session                # 轮转策略（见下表）
+      when: midnight                 # timed 模式轮转周期
+      backup_count: 30               # 保留历史文件数
+      max_bytes: 10485760            # sized 模式单文件上限（10MB）
+      buffer_size: 100               # 批量写入缓冲区大小（条数）
+      flush_interval: 5.0            # 自动刷新间隔（秒）
+      max_queue_size: 10000          # 异步队列容量上限
+```
+
+### 文件轮转策略
+
+| `rotate` 值 | 说明 | 文件命名示例 |
+|-------------|------|-------------|
+| `session`（默认）| 每次启动创建新文件，文件名附带时间戳 | `cosmos_20260711_143201_123456.log` |
+| `timed` | 按时间轮转，由 `when` 控制周期 | `cosmos.log.2026-07-10` |
+| `sized` | 按文件大小轮转，由 `max_bytes` 控制 | `cosmos.log.1` |
+
+---
+
+## 异步文件写入
+
+文件输出采用三层异步架构，日志调用不阻塞业务线程：
+
+```
+业务代码 → MonitoredQueueHandler（有界队列）
+               ↓ 后台 QueueListener 消费
+          BufferedFileHandler（内存缓冲批量写入）
+               ↓
+          底层文件 Handler（RotatingFileHandler / TimedRotatingFileHandler）
+```
+
+- **MonitoredQueueHandler**：队列容量由 `max_queue_size` 控制，使用率超过 80% 时输出告警，队列满时丢弃最旧记录
+- **BufferedFileHandler**：积累到 `buffer_size` 条或超过 `flush_interval` 秒后批量写入，写入失败自动降级到 stderr
+- 应用退出前调用 `mgr.shutdown()` 确保队列中的日志全部落盘
+
+---
+
+## 依赖关系
+
+- 内部：`core.config`（从 YAML 加载配置）
+- 外部：仅 Python 标准库（`logging`、`queue`、`threading`）

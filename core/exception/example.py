@@ -1,4 +1,4 @@
-"""异常模块使用示例——结构化异常模式"""
+"""异常模块使用示例——基于 Aliya-cosmos 项目的真实业务场景"""
 
 from __future__ import annotations
 
@@ -9,114 +9,139 @@ from core.exception import (
     get_default_handler,
 )
 
-# ── 1. 在模块 exceptions.py 中定义业务异常（此处内联演示）────────────────────
+# ── 1. 直接使用项目中已定义的业务异常 ────────────────────────────────────────
+#
+#   各模块已在自己的 exceptions.py 中定义好，无需重复定义：
+#     core/llm/exceptions.py   → LLMError / LLMRequestError / ProviderNotFoundError ...
+#     core/memory/exceptions.py → GRAGError / GraphConnectionError / ExtractionTimeoutError ...
 
+from core.llm.exceptions import LLMRequestError, ProviderNotFoundError
+from core.memory.exceptions import (
+    ExtractionTimeoutError,
+    GRAGConfigError,
+    GraphConnectionError,
+    RAGQueryError,
+    TaskQueueFullError,
+)
 
-class DatabaseError(StructuredException):
-    """数据库操作异常"""
-
-    def __init__(
-        self,
-        details: dict | None = None,
-        cause: Exception | None = None,
-    ) -> None:
-        super().__init__(
-            code="DB_001",
-            message="数据库操作失败",
-            details=details or {},
-            cause=cause,
-        )
-
-
-class ValidationError(StructuredException):
-    """输入校验异常"""
-
-    def __init__(self, field: str, reason: str) -> None:
-        super().__init__(
-            code="VAL_001",
-            message=f"字段 '{field}' 校验失败：{reason}",
-            details={"field": field, "reason": reason},
-        )
-
-
-# ── 2. 注册处理器（可选，不注册则走默认日志）────────────────────────────────
+# ── 2. 注册处理器 ─────────────────────────────────────────────────────────────
 
 handler = ExceptionHandler()
-handler.register(ValidationError, lambda e: print(f"[校验] {e.message}"))  # type: ignore[attr-defined]
+
+# LLM 提供商未找到：打印简短提示即可，不需要默认日志
+handler.register(
+    ProviderNotFoundError,
+    lambda e: print(f"[LLM] 未找到提供商: {e.details.get('provider')}"),
+    suppress_default=True,
+)
+
+# LLM 请求失败：自定义告警 + 保留默认日志（suppress_default=False）
+handler.register(
+    LLMRequestError,
+    lambda e: print(f"[LLM告警] {e.code} provider={e.details.get('provider')} → {e.details.get('reason')}"),
+)
+
+# Neo4j 连接失败：接管日志，附带时间戳
+@handler.on(GraphConnectionError, suppress_default=True)
+def handle_graph_conn(exc: GraphConnectionError) -> None:
+    print(f"[Neo4j] 连接失败 {exc.code} @ {exc.timestamp.isoformat()} — {exc.message}")
 
 
-@handler.on(DatabaseError, suppress_default=True)  # type: ignore[arg-type]
-def handle_db(exc: DatabaseError) -> None:
-    """接管数据库异常的日志输出"""
-    print(f"[DB告警] {exc.code} @ {exc.timestamp.isoformat()}")
+# ── 3. 业务函数：try/except 结构化异常 ───────────────────────────────────────
 
 
-# ── 3. 业务函数：直接 try/except 结构化异常 ──────────────────────────────────
-
-
-def fetch_user(user_id: int) -> dict:
+def call_llm_provider(provider_name: str) -> str:
     """
-    查询用户，演示标准结构化异常用法。
+    调用 LLM 提供商，演示 ProviderNotFoundError 的标准抛出方式。
 
     Raises:
-        DatabaseError: 数据库操作失败时抛出。
+        ProviderNotFoundError: 提供商名称未在 registry 中注册。
+    """
+    registered = {"ollama", "lmstudio", "deepseek"}
+    if provider_name not in registered:
+        raise ProviderNotFoundError(provider_name)
+    return f"[{provider_name}] 响应内容..."
+
+
+def send_llm_request(provider: str, prompt: str) -> str:
+    """
+    发送 LLM 请求，演示 LLMRequestError 包装底层网络异常。
+
+    Raises:
+        LLMRequestError: 底层请求失败时抛出，原始异常保存在 cause。
     """
     try:
-        # 模拟数据库操作失败
-        raise ConnectionRefusedError("连接被拒绝")
+        # 模拟网络超时
+        raise TimeoutError("连接超时 (30s)")
+    except TimeoutError as e:
+        raise LLMRequestError(provider, reason="请求超时", cause=e) from e
+
+
+def connect_neo4j(uri: str) -> None:
+    """
+    连接 Neo4j，演示 GraphConnectionError 包装底层连接错误。
+
+    Raises:
+        GraphConnectionError: 数据库不可达时抛出。
+    """
+    try:
+        raise ConnectionRefusedError(f"无法连接到 {uri}")
     except ConnectionRefusedError as e:
-        raise DatabaseError({"user_id": user_id}, cause=e) from e
+        raise GraphConnectionError(
+            message=f"Neo4j 不可达: {uri}", cause=e
+        ) from e
 
 
-def parse_item(item_id: int) -> dict:
+def validate_grag_config(password: str | None) -> None:
     """
-    解析条目，演示 with_details 链式追加上下文。
+    校验 GRAG 配置，演示 with_details 链式追加上下文。
 
     Raises:
-        ValidationError: 参数非法时抛出。
+        GRAGConfigError: Neo4j 密码未配置时抛出。
     """
-    if item_id <= 0:
-        raise ValidationError("item_id", "必须大于 0").with_details(received=item_id)
-    return {"id": item_id}
+    if not password or not password.strip():
+        raise GRAGConfigError(
+            "启用 GRAG 时必须配置 Neo4j 密码"
+        ).with_details(config_key="cosmos.service.grag.neo4j.password")
 
 
-async def async_fetch(item_id: int) -> dict:
-    """
-    异步查询，演示异步函数中的结构化异常。
-
-    Raises:
-        ValidationError: 参数非法时抛出。
-    """
-    if item_id <= 0:
-        raise ValidationError("item_id", "必须大于 0")
-    return {"id": item_id}
-
-
-# ── 4. propagate 责任链示例 ──────────────────────────────────────────────────
+# ── 4. propagate 责任链：GRAGError 子类先处理，再上报到基类 ──────────────────
 
 chain_handler = ExceptionHandler()
-chain_handler.register(StructuredException, lambda e: print(f"[通用上报] code={e.code}"))  # type: ignore[attr-defined]
+
+# 父类：通用上报（所有 GRAGError 均执行）
+from core.memory.exceptions import GRAGError
 chain_handler.register(
-    DatabaseError,
-    lambda e: print(f"[DB专属] 触发告警: {e.message}"),  # type: ignore[attr-defined]
+    GRAGError,
+    lambda e: print(f"[GRAG通用上报] code={e.code} message={e.message}"),
+)
+
+# 子类：专属处理 + propagate=True 继续触发父类
+chain_handler.register(
+    GraphConnectionError,
+    lambda e: print(f"[Neo4j专属] 触发重连逻辑: {e.message}"),
     propagate=True,
 )
-# handle(DatabaseError) 依次执行：[DB专属] → [通用上报]
+# handle(GraphConnectionError) 依次执行：[Neo4j专属] → [GRAG通用上报]
 
 
-# ── 5. catch_context：代码块边界的统一捕获 ───────────────────────────────────
+# ── 5. catch_context：对话轮次批量处理的兜底捕获 ─────────────────────────────
 
 
-def process_batch(items: list[dict]) -> None:
+def process_conversation_batch(turns: list[dict]) -> None:
     """
-    批量处理，演示 catch_context 在代码块边界的用法。
+    批量处理对话轮次，演示 catch_context 在代码块边界的用法。
     业务逻辑内部仍用 try/except，catch_context 用于最外层兜底。
+
+    每条 turn 需包含 user / ai 字段，缺失时抛出 GRAGConfigError。
     """
-    with catch_context(handler=handler, re_raise=False, exc_types=(ValidationError,)):
-        for item in items:
-            if not item.get("id"):
-                raise ValidationError("id", "不能为空")
-        print("批量处理完成:", items)
+    with catch_context(handler=handler, re_raise=False, exc_types=(GRAGConfigError,)):
+        for i, turn in enumerate(turns):
+            if not turn.get("user") or not turn.get("ai"):
+                raise GRAGConfigError(
+                    f"第 {i} 条对话缺少必要字段"
+                ).with_details(turn_index=i, turn=turn)
+        print(f"批量处理完成，共 {len(turns)} 条对话")
 
 
 # ── 6. 运行示例 ──────────────────────────────────────────────────────────────
@@ -124,30 +149,55 @@ def process_batch(items: list[dict]) -> None:
 if __name__ == "__main__":
     import json
 
-    print("=== 结构化异常 + try/except ===")
+    print("=== LLM 提供商未找到（suppress_default=True）===")
     try:
-        fetch_user(42)
-    except DatabaseError as e:
+        call_llm_provider("openai")
+    except ProviderNotFoundError as e:
+        handler.handle(e)
+
+    print("\n=== LLM 请求失败 + 异常链（cause 保留）===")
+    try:
+        send_llm_request("ollama", "你好")
+    except LLMRequestError as e:
+        handler.handle(e)
+        print("cause:", type(e.cause).__name__, "→", e.cause)
+
+    print("\n=== Neo4j 连接失败 + to_dict 序列化 ===")
+    try:
+        connect_neo4j("bolt://localhost:7687")
+    except GraphConnectionError as e:
         handler.handle(e)
         print("to_dict:", json.dumps(e.to_dict(), ensure_ascii=False, indent=2))
 
-    print("\n=== with_details 链式追加上下文 ===")
+    print("\n=== GRAG 配置校验 + with_details ===")
     try:
-        parse_item(-1)
-    except ValidationError as e:
-        handler.handle(e)
+        validate_grag_config(None)
+    except GRAGConfigError as e:
+        print(f"[配置错误] {e.code}: {e.message}")
         print("details:", e.details)
 
-    print("\n=== propagate 责任链 ===")
-    chain_handler.handle(DatabaseError({"host": "db-01"}))
+    print("\n=== 五元组提取超时（ExtractionTimeoutError）===")
+    timeout_exc = ExtractionTimeoutError(timeout=30.0, details={"attempt": 3})
+    print(repr(timeout_exc))
+    print("details:", timeout_exc.details)
 
-    print("\n=== catch_context 代码块边界兜底 ===")
-    process_batch([{"id": "a"}, {}])
+    print("\n=== 任务队列已满（TaskQueueFullError）===")
+    queue_exc = TaskQueueFullError(queue_size=100, max_size=100)
+    print(str(queue_exc))
+
+    print("\n=== propagate 责任链：GraphConnectionError → GRAGError ===")
+    chain_handler.handle(GraphConnectionError("bolt://localhost:7687 不可达"))
+
+    print("\n=== catch_context 批量对话兜底 ===")
+    process_conversation_batch([
+        {"user": "你好", "ai": "你好！"},
+        {"user": "今天天气如何", "ai": ""},   # ai 字段为空，触发 GRAGConfigError
+    ])
 
     print("\n=== ExceptionHandler.__repr__ ===")
     print(repr(handler))
 
-    print("\n=== 全局默认处理器 ===")
+    print("\n=== 全局默认处理器兜底未知异常 ===")
     get_default_handler().handle(RuntimeError("未预期的运行时错误"))
 
     print("\n=== clear() 重置处理器 ===")

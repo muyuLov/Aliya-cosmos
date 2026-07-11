@@ -1,9 +1,9 @@
+"""memory 模块使用示例
 
-"""记忆系统使用示例
-
-演示 GRAG 知识图谱记忆系统的完整功能，包括：
-- 对话记忆添加与五元组提取
-- 知识图谱查询与RAG检索
+基于《彼方的她-Aliya》的真实对话场景演示 GRAG 记忆系统的完整功能：
+- 对话记忆的添加与五元组提取
+- 知识图谱查询与 RAG 检索
+- 跨对话的记忆关联（Aliya、Kane、Ryoko、泰瑞斯公司）
 - 任务管理与并发处理
 - 图谱统计与维护操作
 
@@ -16,422 +16,405 @@ import asyncio
 import sys
 from pathlib import Path
 
-# 将项目根目录添加到 Python 路径
 if __name__ == "__main__":
-   project_root = Path(__file__).parent.parent
-   if str(project_root) not in sys.path:
-      sys.path.insert(0, str(project_root))
+    project_root = Path(__file__).parent.parent.parent
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
 
 from core.exception import get_default_handler
 from core.memory import (
-   create_memory_service,
-   get_memory_manager,
-   get_service_status,
-   store_quintuples,
-   query_graph_by_keywords,
-   get_graph_stats,
-   clear_all_quintuples,
-   start_task_manager,
-   stop_task_manager,
-   GRAGError,
+    create_memory_service,
+    get_memory_manager,
+    get_service_status,
+    store_quintuples,
+    query_graph_by_keywords,
+    get_graph_stats,
+    start_task_manager,
+    stop_task_manager,
+    GRAGError,
 )
 
 
-async def example_basic_memory_usage() -> None:
-   """示例 1：基础记忆功能 - 添加对话记忆并查询。
+async def example_basic_conversation() -> None:
+    """示例 1：添加基础对话记忆，模拟 COSMOS 与 Aliya 在海獭号中的初次交流。
 
-   演示最简单的使用方式：添加对话、自动提取五元组、查询记忆。
-   """
-   print("\n=== 示例 1：基础记忆功能 ===")
+    Aliya 向 COSMOS 介绍她对深空探索的看法，
+    系统从中提取人物与职业、地点、情感等五元组关系。
+    """
+    print("\n=== 示例 1：基础对话记忆（海獭号·深空漫谈）===")
 
-   try:
-      # 获取记忆管理器
-      memory_mgr = get_memory_manager()
-      
-      if not memory_mgr.enabled:
-        print("[WARN] 记忆系统未启用，请检查配置文件")
-        return
+    try:
+        mgr = get_memory_manager()
 
-      # 添加对话记忆
-      user_input = "我叫张三，今年25岁，住在北京，喜欢编程和阅读。"
-      ai_response = "很高兴认识你，张三！你的兴趣爱好很棒，编程和阅读都是很有意义的活动。"
-      
-      print(f"用户: {user_input}")
-      print(f"AI: {ai_response}")
-      
-      success = await memory_mgr.add_conversation_memory(
-        user_input=user_input,
-        ai_response=ai_response,
-        session_id="demo_session_1"
-      )
-      
-      if success:
-        print("[OK] 对话记忆已添加")
-        
-        # 等待五元组提取完成
-        print("等待五元组提取...")
+        if not mgr.enabled:
+            print("[WARN] 记忆系统未启用，请检查配置文件")
+            return
+
+        # ── 第一轮：COSMOS 好奇深空，Aliya 谈科研冒险 ─────────────────────
+        user_input = "反正也是干等着，你不如给我讲讲你们那个时代的事情，比如外星怪兽啥的"
+        ai_response = (
+            "你倒是还蛮感兴趣的嘛。有的时候还是挺羡慕你们那个时代的人，普遍对星空有着"
+            "说不清的情结，也产生了很多精彩的幻想作品。其实对于大部分人来说，真实的星空"
+            "多少还是有些枯燥无聊的。但是对于我们科研人员而言，只要是存在未知的星球，"
+            "都有着很大的探索价值。像你说的这种怪兽也是有可能存在的，所以每次前往未探明"
+            "的深空时，都是兴奋且激动的，以至于能几乎忘记深空的危险。"
+        )
+
+        print(f"COSMOS: {user_input}")
+        print(f"Aliya : {ai_response[:60]}...")
+
+        success = await mgr.add_conversation_memory(
+            user_input=user_input,
+            ai_response=ai_response,
+            session_id="haita_session_001",
+            day_date="3024-07-11",
+            timeline="aliya",
+        )
+        print(f"[{'OK' if success else 'FAIL'}] 第一轮对话记忆已{'添加' if success else '添加失败'}")
+
+        # ── 第二轮：COSMOS 类比冒险者，Aliya 提到航海时代 ─────────────────
+        user_input2 = "所以你们相当于冒险者吗？明明是科研人员，却做着相当危险的工作"
+        ai_response2 = (
+            "也可以这样说吧。有点像在大航海时代探索地球的水手们吧，所以宇航员的原意也就是"
+            "星际水手。伤亡率确实很高，也就诞生了我们这种……"
+        )
+
+        print(f"\nCOSMOS: {user_input2}")
+        print(f"Aliya : {ai_response2}")
+
+        success2 = await mgr.add_conversation_memory(
+            user_input=user_input2,
+            ai_response=ai_response2,
+            session_id="haita_session_001",
+            day_date="3024-07-11",
+            timeline="aliya",
+        )
+        print(f"[{'OK' if success2 else 'FAIL'}] 第二轮对话记忆已{'添加' if success2 else '添加失败'}")
+
+        # 等待异步五元组提取完成
+        print("\n等待五元组提取...")
         await asyncio.sleep(3)
-        
-        # 查询记忆
-        question = "张三的基本信息是什么？"
-        print(f"查询: {question}")
-        
-        answer = await memory_mgr.query_memory(question)
-        if answer:
-           print(f"回答: {answer}")
-        else:
-           print("[FAIL] 未找到相关记忆")
-      else:
-        print("[FAIL] 添加对话记忆失败")
-        
-   except GRAGError as e:
-      get_default_handler().handle(e)
-      return
 
-   print("[OK] 基础记忆功能演示完成")
+        # ── 查询：COSMOS 回忆 Aliya 的职业 ───────────────────────────────
+        question = "Aliya 是做什么工作的？"
+        print(f"\n查询: {question}")
+        answer = await mgr.query_memory(question)
+        print(f"回答: {answer}" if answer else "[WARN] 未从图谱检索到相关信息")
+
+    except GRAGError as e:
+        get_default_handler().handle(e)
+
+    print("[OK] 示例 1 完成")
 
 
 async def example_graph_operations() -> None:
-   """示例 2：图谱操作 - 直接操作知识图谱。
+    """示例 2：直接写入五元组，构建 Aliya 的人际关系图谱。
 
-   演示如何直接存储和查询五元组，不依赖对话记忆。
-   """
-   print("\n=== 示例 2：图谱操作 ===")
+    将 Aliya、Kane、Ryoko 与泰瑞斯公司的关系直接存入 Neo4j，
+    无需经过 LLM 提取，适合已结构化的角色背景数据。
+    """
+    print("\n=== 示例 2：图谱写入（泰瑞斯公司人物关系）===")
 
-   try:
-      # 准备测试五元组
-      test_quintuples = [
-        ("李四", "人物", "工作于", "阿里巴巴", "组织"),
-        ("李四", "人物", "居住在", "杭州", "地点"),
-        ("李四", "人物", "擅长", "Python编程", "技能"),
-        ("阿里巴巴", "组织", "位于", "杭州", "地点"),
-        ("Python编程", "技能", "属于", "软件开发", "概念"),
-      ]
-      
-      print("存储测试五元组...")
-      for quintuple in test_quintuples:
-        print(f"  {quintuple[0]}({quintuple[1]}) —[{quintuple[2]}]→ {quintuple[3]}({quintuple[4]})")
-      
-      # 存储五元组
-      success = store_quintuples(
-        test_quintuples,
-        source_text="测试数据：李四的基本信息",
-        session_id="demo_session_2"
-      )
-      
-      if success:
-        print("[OK] 五元组存储成功")
-        
-        # 查询图谱
-        keywords = ["李四", "阿里巴巴", "Python"]
-        print(f"关键词查询: {keywords}")
-        
-        results = query_graph_by_keywords(keywords, limit=10)
+    try:
+        # Aliya 的已知关系：来自游戏对话和背景设定
+        character_quintuples = [
+            # ── Aliya ────────────────────────────────────────────────────
+            ("Aliya",     "人物", "就职于",   "泰瑞斯公司",   "组织"),
+            ("Aliya",     "人物", "职业是",   "宇航员",       "职业"),
+            ("Aliya",     "人物", "驾驶",     "海獭号",       "物品"),
+            ("Aliya",     "人物", "前往",     "深空",         "地点"),
+            ("Aliya",     "人物", "擅长",     "深空探索",     "技能"),
+            # ── Kane ─────────────────────────────────────────────────────
+            ("Kane",      "人物", "就职于",   "泰瑞斯公司",   "组织"),
+            ("Kane",      "人物", "同事是",   "Aliya",        "人物"),
+            ("Kane",      "人物", "提议",     "溜出公司玩",   "事件"),
+            # ── Ryoko ────────────────────────────────────────────────────
+            ("Ryoko",     "人物", "就职于",   "泰瑞斯公司",   "组织"),
+            ("Ryoko",     "人物", "同事是",   "Aliya",        "人物"),
+            ("Ryoko",     "人物", "同事是",   "Kane",         "人物"),
+            # ── 泰瑞斯公司 ────────────────────────────────────────────────
+            ("泰瑞斯公司", "组织", "拥有",    "庭院",         "地点"),
+            ("泰瑞斯公司", "组织", "从事",    "深空科研",     "领域"),
+        ]
+
+        print(f"写入 {len(character_quintuples)} 条人物关系五元组...")
+        for h, ht, r, t, tt in character_quintuples:
+            print(f"  {h}({ht}) —[{r}]→ {t}({tt})")
+
+        success = store_quintuples(
+            character_quintuples,
+            source_text="彼方的她-Aliya 角色背景：泰瑞斯公司人物关系",
+            session_id="character_setup",
+        )
+        print(f"\n[{'OK' if success else 'FAIL'}] 五元组写入{'成功' if success else '失败'}")
+
+        # ── 关键词查询：检索 Kane 的相关关系 ────────────────────────────
+        print("\n关键词查询: ['Kane', 'Aliya', '泰瑞斯公司']")
+        results = query_graph_by_keywords(["Kane", "Aliya", "泰瑞斯公司"], limit=8)
+
         if results:
-           print(f"查询结果 ({len(results)} 条):")
-           for i, (h, h_type, rel, t, t_type) in enumerate(results, 1):
-              print(f"  {i}. {h}({h_type}) —[{rel}]→ {t}({t_type})")
+            print(f"查询结果（{len(results)} 条）:")
+            for i, (h, ht, rel, t, tt) in enumerate(results, 1):
+                print(f"  {i}. {h}({ht}) —[{rel}]→ {t}({tt})")
         else:
-           print("[FAIL] 未找到匹配的关系")
-      else:
-        print("[FAIL] 五元组存储失败")
-        
-   except GRAGError as e:
-      get_default_handler().handle(e)
-      return
+            print("[WARN] 未查询到匹配关系")
 
-   print("[OK] 图谱操作演示完成")
+    except GRAGError as e:
+        get_default_handler().handle(e)
+
+    print("[OK] 示例 2 完成")
 
 
 async def example_task_management() -> None:
-   """示例 3：任务管理 - 演示并发任务处理。
+    """示例 3：并发任务提取，模拟 COSMOS 一次性收到多段 Aliya 对话的场景。
 
-   展示如何使用任务管理器进行并发五元组提取。
-   """
-   print("\n=== 示例 3：任务管理 ===")
+    三段对话同时提交到任务队列，由多个 worker 协程并发提取五元组，
+    还原 Aliya 讲述 Kane 事迹、分享大头照、谈及归家愿望的场景。
+    """
+    print("\n=== 示例 3：并发任务管理（批量提取 Aliya 对话片段）===")
 
-   try:
-      # 启动任务管理器
-      await start_task_manager()
-      print("任务管理器已启动")
-      
-      # 获取任务管理器
-      from core.memory.task_manager import get_task_manager
-      task_mgr = get_task_manager()
-      
-      # 准备多个文本进行并发提取
-      texts = [
-        "王五是一名软件工程师，在腾讯工作，负责微信开发。",
-        "赵六毕业于清华大学，专业是计算机科学，现在在字节跳动实习。",
-        "钱七喜欢旅游，去过日本、韩国和泰国，最喜欢的城市是京都。",
-      ]
-      
-      print(f"提交 {len(texts)} 个提取任务...")
-      task_ids = []
-      
-      # 提交任务
-      for i, text in enumerate(texts, 1):
-        task_id = await task_mgr.add_task(text)
-        task_ids.append(task_id)
-        print(f"  任务 {i}: {task_id} - {text[:30]}...")
-      
-      # 等待任务完成
-      print("等待任务完成...")
-      results = []
-      
-      for task_id in task_ids:
-        result, error = await task_mgr.get_task_result(task_id, timeout=30)
-        if result:
-           results.extend(result)
-           print(f"[OK] 任务 {task_id[:12]}... 完成，提取 {len(result)} 个五元组")
-        else:
-           print(f"[FAIL] 任务 {task_id[:12]}... 失败: {error}")
-      
-      # 显示统计信息
-      stats = task_mgr.get_stats()
-      print(f"任务统计:")
-      print(f"  总任务数: {stats['total_tasks']}")
-      print(f"  已完成: {stats['completed_tasks']}")
-      print(f"  失败: {stats['failed_tasks']}")
-      print(f"  工作协程: {stats['max_workers']}")
-      
-      if results:
-        print(f"总共提取到 {len(results)} 个五元组")
-        
-   except GRAGError as e:
-      get_default_handler().handle(e)
-      return
+    try:
+        await start_task_manager()
+        from core.memory.task_manager import get_task_manager
+        task_mgr = get_task_manager()
 
-   print("[OK] 任务管理演示完成")
+        # 三段来自游戏内的真实对话片段
+        conversation_texts = [
+            (
+                "Kane 跟老实可不沾边，几乎每个月的通报批评名单上面都有他。"
+                "之前还在食堂当众顶撞主管，都不给对方台阶下的。"
+                "不过依然因为技术水平太好了没有受到什么实质性的惩罚。"
+                "他对我们倒挺好的，属于「窝外横」。"
+            ),
+            (
+                "这是当时我们一起从公司的「庭院」里溜出去玩拍的大头照。"
+                "你绝对想不到这个计划是 Kane 提出来的，"
+                "你别看他那个样子，其实相当叛逆。"
+            ),
+            (
+                "有点像在大航海时代探索地球的水手们吧，所以宇航员的原意也就是星际水手。"
+                "伤亡率确实很高。每次前往未探明的深空时，都是兴奋且激动的，"
+                "以至于能几乎忘记深空的危险。"
+            ),
+        ]
+
+        print(f"提交 {len(conversation_texts)} 个提取任务...")
+        task_ids = []
+        labels = ["Kane 的性格", "庭院逃跑事件", "深空探索感悟"]
+
+        for label, text in zip(labels, conversation_texts):
+            task_id = await task_mgr.add_task(
+                text,
+                source_text=text,
+                session_id="haita_session_001",
+                day_date="3024-07-11",
+                timeline="aliya",
+            )
+            task_ids.append(task_id)
+            print(f"  [{label}] 任务ID: {task_id[:16]}...")
+
+        print("\n等待所有任务完成...")
+        for task_id, label in zip(task_ids, labels):
+            result, error = await task_mgr.get_task_result(task_id, timeout=30)
+            if result:
+                print(f"  [OK] [{label}] 提取到 {len(result)} 个五元组")
+                for h, ht, r, t, tt in result[:2]:  # 只打印前两条
+                    print(f"       {h}({ht}) —[{r}]→ {t}({tt})")
+            else:
+                print(f"  [FAIL] [{label}] 失败: {error}")
+
+        stats = task_mgr.get_stats()
+        print(f"\n任务统计: 完成 {stats['completed_tasks']} / 失败 {stats['failed_tasks']} / worker数 {stats['max_workers']}")
+
+    except GRAGError as e:
+        get_default_handler().handle(e)
+
+    print("[OK] 示例 3 完成")
 
 
 async def example_rag_query() -> None:
-   """示例 4：RAG 查询 - 演示知识检索与回答生成。
+    """示例 4：RAG 查询，模拟 COSMOS 在后续对话中依靠记忆回忆 Aliya 说过的话。
 
-   展示如何使用 RAG 引擎进行智能问答。
-   """
-   print("\n=== 示例 4：RAG 查询 ===")
+    先向记忆系统写入多段对话，再以问题形式触发 RAG 检索链路：
+    关键词提取 → 图谱查询 → LLM 生成回答。
+    """
+    print("\n=== 示例 4：RAG 查询（COSMOS 回忆 Aliya 讲述的事情）===")
 
-   try:
-      memory_mgr = get_memory_manager()
-      
-      if not memory_mgr.enabled:
-        print("[WARN] 记忆系统未启用")
-        return
-      
-      # 添加一些上下文对话
-      conversations = [
-        ("我在学习机器学习，最近在研究深度学习算法。", "深度学习确实是机器学习的重要分支，有什么具体问题吗？"),
-        ("我对卷积神经网络特别感兴趣，想了解它在图像识别中的应用。", "CNN在图像识别中应用广泛，从基础的分类到复杂的目标检测都有涉及。"),
-        ("我还想学习自然语言处理，听说Transformer架构很重要。", "是的，Transformer彻底改变了NLP领域，BERT、GPT等都基于这个架构。"),
-      ]
-      
-      print("添加学习对话记忆...")
-      for i, (user_msg, ai_msg) in enumerate(conversations, 1):
-        await memory_mgr.add_conversation_memory(
-           user_input=user_msg,
-           ai_response=ai_msg,
-           session_id=f"learning_session_{i}"
-        )
-        print(f"  对话 {i} 已添加")
-      
-      # 等待提取完成
-      print("等待五元组提取...")
-      await asyncio.sleep(5)
-      
-      # 进行 RAG 查询
-      questions = [
-        "我在学习什么技术？",
-        "深度学习和机器学习是什么关系？",
-        "Transformer架构有什么重要性？",
-        "我对什么算法特别感兴趣？",
-      ]
-      
-      print("开始 RAG 查询...")
-      for i, question in enumerate(questions, 1):
-        print(f"\n问题 {i}: {question}")
-        
-        answer = await memory_mgr.query_memory(question)
-        if answer:
-           print(f"回答: {answer}")
-        else:
-           print("[FAIL] 未找到相关信息")
-           
-   except GRAGError as e:
-      get_default_handler().handle(e)
-      return
+    try:
+        mgr = get_memory_manager()
 
-   print("\n[OK] RAG 查询演示完成")
+        if not mgr.enabled:
+            print("[WARN] 记忆系统未启用")
+            return
+
+        # 写入 Aliya 讲述 Kane 以及归家愿望的对话
+        conversations = [
+            (
+                "Kane 对我们倒挺好的，属于「窝外横」，在公司里经常被通报批评。",
+                "看来 Kane 是个很有个性的人，但对朋友很忠诚。",
+            ),
+            (
+                "好想再一次和他们一起逃出去玩啊……",
+                "等你们平安回到泰瑞斯公司，一定还有机会的。",
+            ),
+            (
+                "借你吉言，我一定会把 Kane 带回去的。",
+                "我相信你，Aliya，你们一定能平安回家。",
+            ),
+        ]
+
+        print("写入 Aliya 关于 Kane 和归家愿望的对话...")
+        for i, (user_msg, ai_msg) in enumerate(conversations, 1):
+            await mgr.add_conversation_memory(
+                user_input=user_msg,
+                ai_response=ai_msg,
+                session_id="haita_session_002",
+                day_date="3024-07-11",
+                timeline="aliya",
+            )
+            print(f"  对话 {i} 已写入")
+
+        print("等待五元组提取完成...")
+        await asyncio.sleep(5)
+
+        # COSMOS 通过 RAG 回忆 Aliya 说过的话
+        questions = [
+            "Aliya 怎么评价 Kane 这个人？",
+            "Aliya 最想做的事情是什么？",
+            "Aliya 和 Kane 是什么关系？",
+        ]
+
+        print("\n开始 RAG 查询...")
+        for question in questions:
+            print(f"\n  COSMOS 想起: 「{question}」")
+            answer = await mgr.query_memory(question)
+            print(f"  记忆回响: {answer}" if answer else "  [WARN] 未检索到相关记忆")
+
+    except GRAGError as e:
+        get_default_handler().handle(e)
+
+    print("\n[OK] 示例 4 完成")
 
 
-async def example_memory_statistics() -> None:
-   """示例 5：记忆统计 - 展示系统状态和统计信息。
+async def example_memory_stats() -> None:
+    """示例 5：查看记忆系统当前状态，确认 Aliya 相关知识已存入图谱。"""
+    print("\n=== 示例 5：记忆统计（图谱当前状态）===")
 
-   演示如何获取和分析记忆系统的运行状态。
-   """
-   print("\n=== 示例 5：记忆统计 ===")
+    try:
+        graph_stats = get_graph_stats()
+        print(f"Neo4j 连接状态: {'已连接' if graph_stats.get('neo4j_connected') else '未连接'}")
+        print(f"实体节点数:     {graph_stats.get('entity_count', 0)}")
+        print(f"关系数:         {graph_stats.get('relation_count', 0)}")
+        print(f"Day 节点数:     {graph_stats.get('day_count', 0)}")
 
-   try:
-      # 获取服务状态
-      print("记忆服务状态:")
-      service_status = get_service_status()
-      
-      for key, value in service_status.items():
-        if isinstance(value, dict):
-           print(f"  {key}:")
-           for sub_key, sub_value in value.items():
-              print(f"    {sub_key}: {sub_value}")
-        else:
-           print(f"  {key}: {value}")
-      
-      # 获取图谱统计
-      print("\n图谱统计:")
-      graph_stats = get_graph_stats()
-      
-      for key, value in graph_stats.items():
-        if key == "entity_type_distribution" and isinstance(value, dict):
-           print(f"  {key}:")
-           for label, count in value.items():
-              print(f"    {label}: {count}")
-        else:
-           print(f"  {key}: {value}")
-      
-      # 获取记忆管理器统计
-      memory_mgr = get_memory_manager()
-      print("\n记忆管理器统计:")
-      memory_stats = memory_mgr.get_memory_stats()
-      
-      for key, value in memory_stats.items():
-        if isinstance(value, dict):
-           print(f"  {key}:")
-           for sub_key, sub_value in value.items():
-              print(f"    {sub_key}: {sub_value}")
-        else:
-           print(f"  {key}: {value}")
-           
-   except GRAGError as e:
-      get_default_handler().handle(e)
-      return
+        type_dist = graph_stats.get("entity_type_distribution", {})
+        if type_dist:
+            print("实体类型分布:")
+            for etype, count in sorted(type_dist.items(), key=lambda x: -x[1]):
+                print(f"  {etype}: {count}")
 
-   print("[OK] 记忆统计演示完成")
+        timeline_dist = graph_stats.get("day_timeline_distribution", {})
+        if timeline_dist:
+            print("时间链分布:")
+            for timeline, count in timeline_dist.items():
+                print(f"  {timeline}: {count} 天")
+
+        mgr = get_memory_manager()
+        mem_stats = mgr.get_memory_stats()
+        print(f"\n近期对话缓存条数: {mem_stats.get('context_length', 0)}")
+        print(f"提取缓存命中项:   {mem_stats.get('cache_size', 0)}")
+        print(f"进行中的提取任务: {mem_stats.get('inflight_count', 0)}")
+
+    except GRAGError as e:
+        get_default_handler().handle(e)
+
+    print("[OK] 示例 5 完成")
 
 
 async def example_memory_maintenance() -> None:
-   """示例 6：记忆维护 - 演示清理和维护操作。
+    """示例 6：记忆维护，演示任务清理操作。
 
-   展示如何进行记忆系统的维护操作，包括清理和重置。
-   """
-   print("\n=== 示例 6：记忆维护 ===")
+    清理已完成的历史提取任务，释放内存占用。
+    实际清空图谱的操作已注释，避免误删 Aliya 的记忆数据。
+    """
+    print("\n=== 示例 6：记忆维护（清理已完成任务）===")
 
-   try:
-      memory_mgr = get_memory_manager()
-      
-      if not memory_mgr.enabled:
-        print("[WARN] 记忆系统未启用")
-        return
-      
-      # 显示清理前的统计
-      print("清理前的图谱状态:")
-      stats_before = get_graph_stats()
-      print(f"  节点数: {stats_before.get('entity_count', 0)}")
-      print(f"  关系数: {stats_before.get('relation_count', 0)}")
-      
-      # 询问用户是否要清理（在实际使用中）
-      print("\n[WARN] 注意：以下操作将清空所有记忆数据！")
-      print("  在生产环境中，请谨慎执行此操作。")
-      
-      # 演示清理操作（注释掉以避免意外清理）
-      # print(" 开始清理记忆...")
-      # success = await memory_mgr.clear_memory()
-      # 
-      # if success:
-      #    print("[OK] 记忆清理完成")
-      #    
-      #    # 显示清理后的统计
-      #    print(" 清理后的图谱状态:")
-      #    stats_after = get_graph_stats()
-      #    print(f"  节点数: {stats_after.get('entity_count', 0)}")
-      #    print(f"  关系数: {stats_after.get('relation_count', 0)}")
-      # else:
-      #    print("[FAIL] 记忆清理失败")
-      
-      print("ℹ  清理操作已注释，如需执行请取消注释相关代码")
-      
-      # 演示任务清理
-      from core.memory.task_manager import get_task_manager
-      task_mgr = get_task_manager()
-      
-      print("\n清理已完成的任务...")
-      cleaned_count = await task_mgr.clear_completed_tasks(max_age_hours=0)  # 清理所有已完成任务
-      print(f"[OK] 清理了 {cleaned_count} 个已完成任务")
-      
-   except GRAGError as e:
-      get_default_handler().handle(e)
-      return
+    try:
+        mgr = get_memory_manager()
 
-   print("[OK] 记忆维护演示完成")
+        if not mgr.enabled:
+            print("[WARN] 记忆系统未启用")
+            return
+
+        stats_before = get_graph_stats()
+        print(f"当前图谱状态 — 实体: {stats_before.get('entity_count', 0)}, 关系: {stats_before.get('relation_count', 0)}")
+
+        # 清理已完成的提取任务（不影响 Neo4j 中已存储的记忆）
+        from core.memory.task_manager import get_task_manager
+        task_mgr = get_task_manager()
+        cleaned = await task_mgr.clear_completed_tasks(max_age_hours=0)
+        print(f"[OK] 清理了 {cleaned} 个已完成的提取任务")
+
+        # ── 以下操作会清空 Aliya 全部记忆，生产环境请谨慎执行 ──────────────
+        # print("[WARN] 即将清空 Aliya 的全部记忆（Neo4j Entity + Day 节点）")
+        # success = await mgr.clear_memory()
+        # print(f"[{'OK' if success else 'FAIL'}] 记忆{'已清空' if success else '清空失败'}")
+
+        print("ℹ  clear_memory() 已注释，如需执行请取消注释")
+
+    except GRAGError as e:
+        get_default_handler().handle(e)
+
+    print("[OK] 示例 6 完成")
 
 
 async def main() -> None:
-   """运行所有示例。
+    """运行全部示例。
 
-   依次执行各个功能示例，展示记忆系统的完整能力。
-   可以注释掉不需要的示例以单独测试某个功能。
-   """
-   print("GRAG 记忆系统功能演示")
-   print("=" * 60)
-   
-   try:
-      # 检查系统状态
-      service_status = get_service_status()
-      if not service_status.get("enabled", False):
-        print("[FAIL] 记忆系统未启用，请检查以下配置：")
-        print("  1. data/config/main.yml 中 cosmos.service.grag.enabled = true")
-        print("  2. Neo4j 服务正在运行")
-        print("  3. Neo4j 连接配置正确")
-        return
-      
-      print("[OK] 记忆系统已启用，开始演示...")
-      
-      # 示例 1：基础记忆功能
-      await example_basic_memory_usage()
-      
-      # 示例 2：图谱操作
-      await example_graph_operations()
-      
-      # 示例 3：任务管理
-      await example_task_management()
-      
-      # 示例 4：RAG 查询
-      await example_rag_query()
-      
-      # 示例 5：记忆统计
-      await example_memory_statistics()
-      
-      # 示例 6：记忆维护
-      await example_memory_maintenance()
-      
-   except KeyboardInterrupt:
-      print("\n演示被用户中断")
-   except Exception as e:
-      print(f"\n[FAIL] 演示过程中发生错误: {e}")
-      get_default_handler().handle(e)
-   finally:
-      # 清理资源
-      try:
-        await stop_task_manager()
-        print("\n任务管理器已停止")
-      except Exception as e:
-        print(f"[WARN] 停止任务管理器时出错: {e}")
-   
-   print("\n" + "=" * 60)
-   print("所有示例执行完成！")
-   print("\n使用提示：")
-   print("  - 确保 Neo4j 服务正在运行")
-   print("  - 检查 data/config/main.yml 中的 GRAG 配置")
-   print("  - 根据需要调整配置参数")
-   print("  - 在生产环境中谨慎使用清理功能")
+    模拟 COSMOS 与 Aliya 在受损海獭号中建立记忆联结的完整过程：
+    从初次交流、人物关系建立，到跨对话的记忆检索与回溯。
+    """
+    print("彼方的她-Aliya · GRAG 记忆系统演示")
+    print("=" * 60)
+    print("场景：受损的海獭号 · 千年时空连接 · COSMOS ↔ Aliya")
+    print("=" * 60)
+
+    try:
+        service_status = get_service_status()
+        if not service_status.get("enabled", False):
+            print("\n[FAIL] 记忆系统未启用，请检查以下配置：")
+            print("  1. data/config/main.yml → cosmos.service.grag.enabled: true")
+            print("  2. Neo4j 服务正在运行（docker compose up -d）")
+            print("  3. cosmos.service.grag.neo4j.password 已配置")
+            return
+
+        print("\n[OK] 记忆系统已启用，开始演示...\n")
+
+        await example_basic_conversation()    # 示例 1：基础对话记忆
+        await example_graph_operations()     # 示例 2：直接写入人物关系五元组
+        await example_task_management()      # 示例 3：并发批量提取
+        await example_rag_query()            # 示例 4：跨对话 RAG 检索
+        await example_memory_stats()         # 示例 5：图谱统计
+        await example_memory_maintenance()   # 示例 6：任务清理
+
+    except KeyboardInterrupt:
+        print("\n演示被用户中断")
+    except Exception as e:
+        print(f"\n[FAIL] 演示过程中发生错误: {e}")
+        get_default_handler().handle(e)
+    finally:
+        try:
+            await stop_task_manager()
+            print("\n[OK] 任务管理器已停止")
+        except Exception as e:
+            print(f"[WARN] 停止任务管理器时出错: {e}")
+
+    print("\n" + "=" * 60)
+    print("演示完成")
+    print("  - Aliya 的记忆已存入 Neo4j 知识图谱")
+    print("  - 下次对话可通过 query_memory() 触发 RAG 检索")
+    print("  - 使用 docker compose up -d 确保 Neo4j 服务持续运行")
 
 
 if __name__ == "__main__":
-   asyncio.run(main())
+    asyncio.run(main())
