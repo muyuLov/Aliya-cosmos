@@ -111,6 +111,7 @@ Thumbs.db
 *.ogg
 *.flac
 tts_cache/
+data/cache/
 
 # =================================
 # AI 工具相关
