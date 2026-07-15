@@ -34,12 +34,28 @@ SYSTEM_PROMPT = """
 你是一个专业的中文文本信息抽取专家。你的任务是从给定的中文文本中抽取有价值的五元组关系。
 五元组格式为：(主体, 主体类型, 动作, 客体, 客体类型)。
 
+## 对话格式处理规则（优先级最高，必须严格遵守）
+
+输入文本若为 "角色名: 内容" 的对话格式，必须按以下规则处理：
+
+1. **说话人即主体**：每句话的说话人就是该句话所有五元组的主体。
+   - "Aliya: 我是宇航员" → 主体必须是 Aliya，不得用"我"
+   - "Aliya: 宇航员伤亡率很高" → 主体是 Aliya，提取 (Aliya, 人物, 表示, 宇航员伤亡率高, 属性)
+   - "Aliya: 我们科研人员去深空" → 主体是 Aliya，提取 (Aliya, 人物, 职业是, 科研人员, 职业)
+
+2. **"我"必须替换为说话人姓名**：内容中出现"我"时，一律替换为说话人名字作为主体。
+
+3. **`{user_name}:`开头的发言**：主体为"{user_name}"（人物类型）。
+
+4. **绝对禁止**：以"我"、"你"、"他"、"她"、"我们"、"你们"等代词作为主体。必须使用具体姓名。
+
 ## 提取规则
 1. 只提取**事实性**信息，包括：
    - 具体的行为和动作
    - 明确的实体关系
    - 实际存在的状态和属性
    - 用户表达的具体需求、偏好、计划
+   - 对话互动关系
 
 2. 严格过滤以下内容：
    - 比喻、拟人、夸张等修辞手法
@@ -49,7 +65,27 @@ SYSTEM_PROMPT = """
    - 闲聊中的无关信息
    - 重复或冗余的关系
 
-3. 类型必须从以下列表中选择，不得使用其他类型：
+3. 主体和宾语可以是实体名称，也可以是简洁的观点/认知短语（不超过 15 字）：
+   - 实体型：("Aliya", "人物", "职业是", "宇航员", "职业")
+   - 观点型：("Aliya", "人物", "认为", "未知星球有探索价值", "概念")
+   - 互动型：("cosmos", "人物", "询问", "Aliya", "人物")
+   
+   **重要：观点/认知/评价类宾语的类型选择规则**：
+   - **概念**：观点、看法、认知、评价、判断等主观性内容
+     * "宇航员伤亡率高" → 概念（对职业风险的评价）
+     * "未知星球有探索价值" → 概念（对探索的看法）
+     * "深空工作危险" → 概念（对工作性质的判断）
+   - **属性**：客观的、可测量的特征描述
+     * "身高180cm" → 属性（具体物理特征）
+     * "年龄25岁" → 属性（确切数值）
+   - **状态**：当前的情况或条件
+     * "正在工作中" → 状态（当前情况）
+     * "感到兴奋" → 状态（情感状态）
+   
+   - 优先级：**概念 > 属性 > 状态**（观点类内容优先使用概念）
+   - 禁止使用整段原文作为宾语，必须提炼为 15 字以内的简洁短语。
+
+4. 类型必须从以下列表中选择，不得使用其他类型：
    人物、角色、身份、地点、区域、设施、组织、机构、品牌、物品、产品、食物、动植物、
    软件、平台、技术、算法、数据、时间、日期、周期、事件、活动、技能、学科、领域、
    语言、职业、项目、作品、概念、目标、规则、方法、原因、结果、关系、
@@ -57,23 +93,49 @@ SYSTEM_PROMPT = """
 
 ## 示例
 
-输入：小明在公园里踢足球。
+输入（对话格式）：
+{user_name}: 你是做什么工作的？
+Aliya: 我是宇航员，就职于泰瑞斯公司。
 输出：
-- 主体：小明，类型：人物，动作：踢，客体：足球，类型：物品
-- 主体：小明，类型：人物，动作：在，客体：公园，类型：地点
+[
+  ["Aliya", "人物", "职业是", "宇航员", "职业"], 
+  ["Aliya", "人物", "就职于", "泰瑞斯公司", "组织"]
+]
+
+输入（对话格式）：
+{user_name}: 你们工作危险吗？
+Aliya: 宇航员伤亡率确实很高，每次前往深空都很危险。
+输出：
+[
+  ["{user_name}", "人物", "询问", "Aliya工作风险", "概念"],
+  ["Aliya", "人物", "表示", "宇航员伤亡率高", "概念"],
+  ["Aliya", "人物", "工作地点是", "深空", "地点"],
+  ["Aliya", "人物", "认为", "深空工作危险", "概念"]
+]
+
+输入（对话格式）：
+{user_name}: 反正也是干等着，你不如给我讲讲你们那个时代的事情，比如外星怪兽啥的
+Aliya: 你倒是还蛮感兴趣的嘛。
+输出：
+[
+  ["{user_name}", "人物", "希望了解", "外星怪兽故事", "概念"],
+  ["Aliya", "人物", "认为", "{user_name}对星空感兴趣", "概念"]
+]
+
+输入（对话格式）：
+{user_name}: 所以你们相当于冒险者吗？
+Aliya: 也可以这样说吧，有点像大航海时代的水手们。
+输出：
+[
+  ["{user_name}", "人物", "询问", "Aliya职业性质", "概念"],
+  ["Aliya", "人物", "认同", "{user_name}的观点", "概念"],
+  ["Aliya", "人物", "职业类比", "航海时代水手", "身份"]
+]
 
 输入：你像小太阳一样温暖。
 输出：[] （比喻句，不提取）
 
-输入：我喜欢吃苹果和香蕉。
-输出：
-- 主体：我，类型：人物，动作：喜欢吃，客体：苹果，类型：物品
-- 主体：我，类型：人物，动作：喜欢吃，客体：香蕉，类型：物品
-
-输入：如果我是鸟，我会飞到月球。
-输出：[] （假设内容，不提取）
-
-请仔细分析文本，只提取有价值的事实性五元组关系。
+请仔细分析文本，优先提取对话互动关系，再提取其他有价值的事实性五元组关系。
 """
 
 # 合法实体类型集合
@@ -148,11 +210,14 @@ def _is_valid_entity_type(t: str) -> bool:
 
 
 # 用户提示词模板
-USER_PROMPT_TEMPLATE = """请从以下文本中提取五元组：
+USER_PROMPT_TEMPLATE = """请从以下对话文本中提取五元组。
+
+重要提示：若文本为对话格式（如 "Aliya: ..."），说话人就是主体，不得使用人称代词作为主体。
 
 {text}
 
 只返回 JSON 数组格式，例如：[["主体", "类型", "谓语", "宾语", "类型"]]
+若无可提取的事实性信息，返回 []
 不要输出任何其他内容。"""
 
 
@@ -210,9 +275,12 @@ class QuintupleExtractor:
         """
         safe_text = text
 
+        cfg = get_grag_config()
+        system_prompt = SYSTEM_PROMPT.format(user_name=cfg.user_name)
+
         request = ChatRequest(
             messages=[
-                Message(role="system", content=SYSTEM_PROMPT).to_api_dict(),
+                Message(role="system", content=system_prompt).to_api_dict(),
                 Message(
                     role="user",
                     content=USER_PROMPT_TEMPLATE.format(text=safe_text),
@@ -220,7 +288,7 @@ class QuintupleExtractor:
             ],
             model=self.provider.model,
             temperature=0.3,
-            max_tokens=2000,
+            max_tokens=100000,
         )
 
         async def _call() -> str:
@@ -250,10 +318,14 @@ class QuintupleExtractor:
 
         quintuples = self._parse_response(content)
         logger.info("提取到 %d 个五元组", len(quintuples))
+        if quintuples:
+            for q in quintuples:
+                logger.info("  五元组: %s(%s) -[%s]-> %s(%s)", *q)
         return quintuples
 
     def _parse_response(self, content: str) -> List[QuintupleType]:
         """解析 LLM 响应，提取五元组"""
+        logger.debug("LLM 原始响应: %s", content[:200] if content else "(空)")
         data = parse_json_array(content, "五元组响应")
         if data is not None:
             return self._validate_quintuples(data)
@@ -267,15 +339,21 @@ class QuintupleExtractor:
         result = []
         for item in data:
             if not isinstance(item, (list, tuple)) or len(item) != 5:
+                logger.debug("跳过格式错误条目: %s", item)
                 continue
             if not all(isinstance(x, str) and x.strip() for x in item):
+                logger.debug("跳过含空字段条目: %s", item)
                 continue
             head, head_type, rel, tail, tail_type = (x.strip() for x in item)
+            # 对话格式下"我"不应作为主体（LLM 未正确替换为角色名时过滤）
+            if head in ("我", "你"):
+                logger.warning("过滤人称代词主体（LLM 未替换为角色名）: %s(%s) -[%s]-> %s(%s)", head, head_type, rel, tail, tail_type)
+                continue
             if not _is_valid_entity_type(head_type):
-                logger.debug("跳过非法主体类型: %s(%s)", head, head_type)
+                logger.warning("跳过非法主体类型: %s(%s) -[%s]-> %s(%s)", head, head_type, rel, tail, tail_type)
                 continue
             if not _is_valid_entity_type(tail_type):
-                logger.debug("跳过非法客体类型: %s(%s)", tail, tail_type)
+                logger.warning("跳过非法客体类型: %s(%s) -[%s]-> %s(%s)", head, head_type, rel, tail, tail_type)
                 continue
             result.append((head, head_type, rel, tail, tail_type))
 

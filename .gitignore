@@ -1,4 +1,6 @@
-# Python
+# =================================
+# Python 相关文件
+# =================================
 __pycache__/
 *.py[cod]
 *$py.class
@@ -19,58 +21,171 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+MANIFEST
 
-# Virtual Environment
+# =================================
+# Python 虚拟环境
+# =================================
 .venv/
 venv/
 ENV/
 env/
+.env
 
-# Testing
+# =================================
+# Python 包管理器
+# =================================
+# UV 相关
+uv.lock
+.uv/
+
+# pip 相关
+pip-log.txt
+pip-delete-this-directory.txt
+
+# =================================
+# 测试相关
+# =================================
 .pytest_cache/
 .coverage
+.coverage.*
 htmlcov/
 .hypothesis/
+.nox/
+.cache/
+nosetests.xml
+coverage.xml
+*.cover
+.pytest_cache
 
-# IDE
+# =================================
+# IDE 和编辑器
+# =================================
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
+*.sublime-project
+*.sublime-workspace
 
-# Logs
+# =================================
+# 日志文件
+# =================================
 logs/
 *.log
+data/logs/
 
-# Database
+# =================================
+# 数据库文件
+# =================================
 *.db
 *.sqlite
 *.sqlite3
+*.db-shm
+*.db-wal
 
-# Config (if contains sensitive data)
-# config.yml
-
-# OS
+# =================================
+# 缓存文件
+# =================================
+.cache/
+*.pyc
 .DS_Store
 Thumbs.db
 
-# Old backup directory
-NagaAgent/
+# =================================
+# 配置文件（包含敏感信息）
+# =================================
+# 环境变量文件
+.env
+.env.local
+.env.*.local
 
-#AI
+# 配置文件（如果包含敏感信息，取消注释）
+# config.yml
+# data/config/
+
+# TTS 缓存文件
+*.wav
+*.mp3
+*.ogg
+*.flac
+tts_cache/
+
+# =================================
+# AI 工具相关
+# =================================
 .kiro/
-.claude
+.claude/
 .nexus-map/
 .worktrees/
+.codebuddy/
+.codegraph/
 
-# docker
-docker/data/AstraTTS
-docker/data/Neo4j
+# =================================
+# 项目特定忽略
+# =================================
+# 旧版本备份
+NagaAgent/
 
-# claude-code reference
+# 示例文件夹
 example/
 
-# env
-.env
+# 临时文件
+temp/
+tmp/
+*.tmp
+*.bak
+*.backup
+
+# =================================
+# 系统文件
+# =================================
+.DS_Store
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# =================================
+# 开发工具相关
+# =================================
+# MyPy 缓存
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# pytype static type analyzer
+.pytype/
+
+# Black 格式化工具
+.black/
+
+# isort 配置缓存
+.isort.cfg
+
+# =================================
+# 容器和部署相关
+# =================================
+# Docker 数据卷
+docker/data/
+
+# Docker Compose 覆盖文件
+docker-compose.override.yml
+docker-compose.override.yaml
+
+# =================================
+# 文档生成
+# =================================
+docs/_build/
+site/
+
+# =================================
+# 备份文件
+# =================================
+*~
+*.orig
+*.rej
 

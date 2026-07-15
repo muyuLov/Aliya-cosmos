@@ -81,6 +81,7 @@ class GRAGConfig:
     similarity_threshold: float = 0.7
     session_tracking: bool = True
     ai_name: str = "Aliya"
+    user_name: str = "cosmos"
     neo4j: Neo4jConfig = field(default_factory=Neo4jConfig)
     extractor: ExtractorConfig = field(default_factory=ExtractorConfig)
     task_manager: TaskManagerConfig = field(default_factory=TaskManagerConfig)
@@ -142,7 +143,8 @@ def _load_grag_config(config_path: str) -> GRAGConfig:
     context_length = cfg.get("cosmos.service.grag.context_length", 10)
     similarity_threshold = cfg.get("cosmos.service.grag.similarity_threshold", 0.7)
     session_tracking = cfg.get("cosmos.service.grag.session_tracking", True)
-    ai_name = cfg.get("cosmos.agent.ai_name", "Aliya")
+    ai_name = cfg.get("cosmos.characters.ai_name", "Aliya")
+    user_name = cfg.get("cosmos.characters.user_name", "cosmos")
 
     # 类型和范围校验
     _check_type(grag_enabled, "cosmos.service.grag.enabled", bool)
@@ -150,7 +152,8 @@ def _load_grag_config(config_path: str) -> GRAGConfig:
     _check_type(context_length, "cosmos.service.grag.context_length", int, min_val=1)
     _check_type(similarity_threshold, "cosmos.service.grag.similarity_threshold", (int, float), min_val=0.0, max_val=1.0)
     _check_type(session_tracking, "cosmos.service.grag.session_tracking", bool)
-    _check_type(ai_name, "cosmos.agent.ai_name", str)
+    _check_type(ai_name, "cosmos.characters.ai_name", str)
+    _check_type(user_name, "cosmos.characters.user_name", str)
 
     # 加载 Neo4j 配置
     neo4j_cfg = cfg.get("cosmos.service.grag.neo4j") or {}
@@ -222,6 +225,7 @@ def _load_grag_config(config_path: str) -> GRAGConfig:
         similarity_threshold=similarity_threshold,
         session_tracking=session_tracking,
         ai_name=ai_name,
+        user_name=user_name,
         neo4j=neo4j,
         extractor=extractor,
         task_manager=task_manager,

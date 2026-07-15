@@ -129,15 +129,10 @@ class AliyaAgent:
         self._max_refine = max_refine
 
         self._progress_task: asyncio.Task | None = None
-        self._current_task: asyncio.Task | None = None
 
     async def handle_user_message(self, text: str) -> None:
         await self._notify({"type": "brain_start"})
         self._progress_task = asyncio.create_task(self._push_progress())
-
-        current_task = asyncio.current_task()
-        if current_task:
-            self._current_task = current_task
 
         final_reply = ""
 
@@ -237,13 +232,6 @@ class AliyaAgent:
                 return
         await self._conv.clear_history()
         logger.info("对话历史已清空")
-
-    def cancel_background_tasks(self) -> None:
-        if self._progress_task and not self._progress_task.done():
-            self._progress_task.cancel()
-        if self._current_task and not self._current_task.done():
-            self._current_task.cancel()
-            logger.debug("取消当前对话任务")
 
     async def _save_memory(self, user_input: str, ai_reply: str) -> None:
         if not self._memory_manager or not hasattr(self._memory_manager, "add_conversation_memory"):

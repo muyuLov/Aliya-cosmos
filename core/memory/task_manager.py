@@ -167,10 +167,28 @@ class QuintupleTaskManager:
             self.is_running = False
             raise
 
-    async def shutdown(self) -> None:
-        """停止任务管理器"""
+    async def shutdown(self, drain_timeout: float = 60.0) -> None:
+        """停止任务管理器
+
+        先等待队列中所有任务处理完毕（或超时），再取消 worker。
+
+        Args:
+            drain_timeout: 等待队列排空的最长秒数，超时后强制取消剩余任务
+        """
         if not self.is_running:
             return
+
+        # 等待队列排空（graceful drain）
+        if self.task_queue is not None and not self.task_queue.empty():
+            logger.info(
+                "等待队列排空（剩余 %d 个任务，超时 %.0fs）...",
+                self.task_queue.qsize(), drain_timeout,
+            )
+            try:
+                await asyncio.wait_for(self.task_queue.join(), timeout=drain_timeout)
+                logger.info("队列已排空")
+            except asyncio.TimeoutError:
+                logger.warning("等待队列排空超时（%.0fs），强制停止", drain_timeout)
 
         self.is_running = False
 
@@ -194,15 +212,19 @@ class QuintupleTaskManager:
 
         logger.info("任务管理器已停止")
 
-    def _generate_task_id(self, text: str) -> str:
+    def _generate_task_id(self, text: str, timeline: str = "") -> str:
         """生成唯一的任务ID"""
-        text_hash = hashlib.sha256(text.encode()).hexdigest()
+        # 包含时间链信息确保不同时间链的相同文本生成不同ID
+        text_with_timeline = f"{text}|{timeline}" if timeline else text
+        text_hash = hashlib.sha256(text_with_timeline.encode()).hexdigest()
         timestamp = int(time.time() * 1000)
         return f"extract_{text_hash[:8]}_{timestamp}"
 
-    def _generate_text_hash(self, text: str) -> str:
-        """生成文本哈希值"""
-        return hashlib.sha256(text.encode()).hexdigest()
+    def _generate_text_hash(self, text: str, timeline: str = "") -> str:
+        """生成文本哈希值（包含时间链信息）"""
+        # 包含时间链信息确保不同时间链的相同文本生成不同哈希
+        text_with_timeline = f"{text}|{timeline}" if timeline else text
+        return hashlib.sha256(text_with_timeline.encode()).hexdigest()
 
     async def add_task(
         self, text: str, source_text: str = "", session_id: str = "",
@@ -234,8 +256,8 @@ class QuintupleTaskManager:
 
         self._ensure_async_objects()
 
-        text_hash = self._generate_text_hash(text)
-        task_id = self._generate_task_id(text)
+        text_hash = self._generate_text_hash(text, timeline)
+        task_id = self._generate_task_id(text, timeline)
 
         # 检查重复 + 创建 + 添加（原子操作，消除竞态窗口，O(1) 去重）
         async with self.lock:  # type: ignore[union-attr]

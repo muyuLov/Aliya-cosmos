@@ -53,6 +53,8 @@ from core.memory.graph import (
     get_day_nodes_async,
     get_graph_stats,
     get_graph_stats_async,
+    delete_day,
+    delete_day_async,
     get_graph_store,
     query_graph_by_keywords,
     query_graph_by_keywords_async,
@@ -118,6 +120,8 @@ def create_memory_service(
         "query_async": query_graph_by_keywords_async,
         "query_by_day_async": query_quintuples_by_day_async,
         "get_day_nodes_async": get_day_nodes_async,
+        "delete_day": delete_day,
+        "delete_day_async": delete_day_async,
         "get_all": get_all_quintuples,
         "get_all_async": get_all_quintuples_async,
         "clear": clear_all_quintuples,
@@ -170,6 +174,7 @@ __all__ = [
     "get_all_quintuples",
     "clear_all_quintuples",
     "get_graph_stats",
+    "delete_day",
     # 图谱操作（异步）
     "store_quintuples_async",
     "query_graph_by_keywords_async",
@@ -178,6 +183,7 @@ __all__ = [
     "get_all_quintuples_async",
     "clear_all_quintuples_async",
     "get_graph_stats_async",
+    "delete_day_async",
     # 图谱存储管理（测试隔离）
     "GraphStore",
     "get_graph_store",

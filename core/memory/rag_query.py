@@ -12,6 +12,8 @@ RAG 查询路径：
 from __future__ import annotations
 
 import asyncio
+import datetime
+import re
 import threading
 from typing import Callable, List, Optional, Tuple
 
@@ -65,7 +67,82 @@ ANSWER_PROMPT_TEMPLATE = """基于以下从知识图谱检索到的五元组关�
 
 请根据检索到的关系，自然地回答问题。
 如果检索结果与问题相关，请基于事实回答。
-如果检索结果不相关，请说明无法从已知信息中回答。"""
+       如果检索结果不相关，请说明无法从已知信息中回答。"""
+
+
+def _extract_time_range(text: str) -> Optional[Tuple[str, str]]:
+    """从文本中解析时间表达式，返回 (start_date, end_date) 字符串；无法解析返回 None。
+
+    支持：YYYY年M月D日 / YYYY-M-D、M月D日(号)、M月、今天/昨天/前天。
+    粒度到「天」，用于按存储日期（day_date）召回记忆。
+    """
+    now = datetime.datetime.now()
+    year = now.year
+
+    # 完整日期：2026年7月5日 / 2026-07-05
+    m = re.search(
+        r"(\d{4})\s*[-/年]\s*(\d{1,2})\s*[-/月]\s*(\d{1,2})\s*[日号]?",
+        text,
+    )
+    if m:
+        try:
+            day = datetime.datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+            s = day.strftime("%Y-%m-%d")
+            return (s, s)
+        except ValueError:
+            pass
+
+    # M月D日 / M月D号
+    m = re.search(r"(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]", text)
+    if m:
+        try:
+            day = datetime.datetime(year, int(m.group(1)), int(m.group(2)))
+            s = day.strftime("%Y-%m-%d")
+            return (s, s)
+        except ValueError:
+            pass
+
+    # M月（整月范围）
+    m = re.search(r"(\d{1,2})\s*月", text)
+    if m:
+        mo = int(m.group(1))
+        if 1 <= mo <= 12:
+            start = datetime.datetime(year, mo, 1)
+            end = (
+                datetime.datetime(year, 12, 31)
+                if mo == 12
+                else datetime.datetime(year, mo + 1, 1) - datetime.timedelta(days=1)
+            )
+            return (start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"))
+
+    # 相对日期
+    for kw, delta in (("今天", 0), ("昨日", 1), ("昨天", 1), ("前天", 2)):
+        if kw in text:
+            d = now - datetime.timedelta(days=delta)
+            s = d.strftime("%Y-%m-%d")
+            return (s, s)
+
+    return None
+
+
+async def _query_by_time_range(
+    start_date: str, end_date: str, limit: int = 200
+) -> List[QuintupleType]:
+    """按时间范围从图谱召回五元组（user 与 aliya 两条时间链）。
+
+    aliya 时间链落库日期已 +1000 年，query_quintuples_by_day 内部会自动偏移，
+    因此两条链都传入正常时间范围即可。
+    """
+    results: List[QuintupleType] = []
+    for tl in ("user", "aliya"):
+        try:
+            q = await asyncio.to_thread(
+                graph.query_quintuples_by_day, tl, start_date, end_date, limit
+            )
+            results.extend(q)
+        except Exception as e:
+            logger.warning("按时间范围查询失败 (timeline=%s): %s", tl, e)
+    return results
 
 
 class RAGQueryEngine:
@@ -147,6 +224,16 @@ class RAGQueryEngine:
                 query_fn, keywords,
                 similarity_threshold=cfg.similarity_threshold,
             )
+
+            # 2.5 关键词未命中时，按问题中的时间表达式兜底召回
+            # （解决"X月活动"等时间类查询：图谱按天存储，可凭时间范围召回）
+            if not quintuples:
+                time_range = _extract_time_range(question)
+                if time_range:
+                    start_date, end_date = time_range
+                    logger.info("关键词未命中，按时间范围补充召回: %s ~ %s", start_date, end_date)
+                    quintuples = await _query_by_time_range(start_date, end_date)
+
             if not quintuples:
                 logger.info("图谱中未找到相关关系")
                 return None

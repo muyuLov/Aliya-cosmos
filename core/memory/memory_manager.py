@@ -120,7 +120,7 @@ class GRAGMemoryManager:
         添加对话记忆到知识图谱
 
         timeline 以 "|" 分隔可指定多条时间链，如 "aliya|user" 同时写入两条链。
-        每条链均存储完整的 conversation_text（双方回复）。
+        每条链只提取并存储当前时间链对应角色的发言文本，避免跨链实体串扰。
         """
         if not self.enabled:
             return False
@@ -134,11 +134,21 @@ class GRAGMemoryManager:
             self._trim_context_by_chars()
 
             for tl in timeline.split("|") if timeline else ["aliya"]:
-                logger.debug(f"提交时间链任务: timeline={tl.strip()}")
-                if self.auto_extract:
-                    await self._submit_extraction_task(
-                        conversation_text, session_id, day_date, tl.strip(),
-                    )
+                tl = tl.strip()
+                logger.debug(f"提交时间链任务: timeline={tl}")
+                if not self.auto_extract:
+                    continue
+                # 按时间链选择对应角色文本：
+                # user 链只提取用户发言，aliya 链只提取 AI 发言。
+                if tl.lower() == "aliya":
+                    chain_text = f"{self.ai_name}: {ai_response}"
+                elif tl.lower() == "user":
+                    chain_text = f"{self.user_name}: {user_input}"
+                else:
+                    chain_text = conversation_text
+                await self._submit_extraction_task(
+                    chain_text, session_id, day_date, tl,
+                )
 
             return True
 
@@ -192,39 +202,6 @@ class GRAGMemoryManager:
 
         except Exception as e:
             logger.error(f"提交提取任务失败: {e}")
-            # 回退到同步提取
-            await self._extract_and_store_sync(text, session_id, day_date, timeline)
-
-    async def _extract_and_store_sync(
-        self, text: str, session_id: str = "",
-        day_date: str = "", timeline: str = "",
-    ) -> bool:
-        """同步提取并存储五元组（回退方案）"""
-        try:
-            logger.info(f"使用回退方法提取五元组 (timeline={timeline}): {text[:100]}...")
-
-            # 提取五元组
-            quintuples = await self._get_extract_func()(text)
-            if not quintuples:
-                logger.debug("未提取到五元组")
-                return False
-
-            # 存储到图谱（使用异步接口）
-            success = await graph.store_quintuples_async(
-                quintuples,
-                source_text=text,
-                session_id=session_id,
-                day_date=day_date,
-                timeline=timeline,
-            )
-            if success:
-                logger.info(f"回退方法存储 {len(quintuples)} 个五元组成功")
-
-            return success
-
-        except Exception as e:
-            logger.error(f"同步提取存储失败: {e}")
-            return False
 
     def _on_task_completed_wrapper(self, task: task_manager_module.ExtractionTask) -> None:
         """任务完成回调包装（同步，由 task_manager worker 调用）
@@ -346,7 +323,7 @@ class GRAGMemoryManager:
                 "enabled": True,
                 "context_length": len(self.recent_context),
                 "cache_size": len(self.extraction_cache),
-                "inflight_count": len(self._inflight_hashes),
+                "inflight_count": len(self.active_tasks),
                 "active_tasks": len(self.active_tasks),
                 "task_manager": task_stats,
             }

@@ -168,7 +168,6 @@ class TestSubmitExtractionTask:
         with (
             patch.object(manager, "_hash_text", return_value="new_hash"),
             patch("core.memory.memory_manager.task_manager_module.get_task_manager") as mock_tm,
-            patch.object(manager, "_extract_and_store_sync", AsyncMock(return_value=True)),
         ):
             mgr = mock_tm.return_value
             mgr.is_running = True
@@ -177,26 +176,6 @@ class TestSubmitExtractionTask:
             await manager._submit_extraction_task("新文本")
             assert "new_hash" in manager._inflight_hashes
             mgr.add_task.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_fallback_on_failure(self, manager):
-        manager.enabled = True
-
-        with (
-            patch.object(manager, "_hash_text", return_value="fail_hash"),
-            patch("core.memory.memory_manager.task_manager_module.get_task_manager") as mock_tm,
-            patch.object(manager, "_extract_and_store_sync", AsyncMock(return_value=True)) as mock_fallback,
-        ):
-            mgr = mock_tm.return_value
-            mgr.is_running = True
-            mgr.add_task = AsyncMock(side_effect=RuntimeError("队列满"))
-
-            await manager._submit_extraction_task("失败文本")
-            # inflight_hash 应被清理
-            assert "fail_hash" not in manager._inflight_hashes
-            # 应调用回退
-            mock_fallback.assert_called_once()
-
 
 class TestInflightDedup:
     @pytest.mark.asyncio
@@ -213,7 +192,6 @@ class TestInflightDedup:
         with (
             patch.object(manager, "_hash_text", return_value="same_hash"),
             patch("core.memory.memory_manager.task_manager_module.get_task_manager") as mock_tm,
-            patch.object(manager, "_extract_and_store_sync", AsyncMock(return_value=True)),
         ):
             mgr = mock_tm.return_value
             mgr.is_running = True

@@ -7,7 +7,7 @@
 ```
 memory_manager.py   ← 集成层，对外统一入口
     ├── extractor.py    ← 五元组提取（LLM 调用）
-    ├── graph.py        ← Neo4j 图谱读写（Schema v4）
+    ├── graph.py        ← Neo4j 图谱读写（按天独立实体节点）
     ├── rag_query.py    ← RAG 知识检索（关键词提取 + 图谱查询 + 回答生成）
     ├── task_manager.py ← 异步并发任务队列
     ├── config.py       ← 配置加载与校验
@@ -124,22 +124,24 @@ builder, engine, recall, client, ext = create_memory_service()
 
 ---
 
-## 图谱 Schema（v4）
+## 图谱 Schema（按天独立实体节点，含角色）
 
 **节点**
 
-| 标签       | 关键属性                                  | 约束/索引                   |
-| ---------- | ----------------------------------------- | --------------------------- |
-| `Entity`   | `name`, `entity_type`, `aliases`, `*_at` | `name` 唯一约束             |
-| `Day`      | `date`, `timeline`, `*_at`               | `(date, timeline)` 组合唯一 |
+| 标签         | 关键属性                                              | 约束/索引                          |
+| ------------ | ----------------------------------------------------- | ---------------------------------- |
+| `Entity`  | `name`, `entity_type`, `aliases`, `day_date`, `timeline`, `*_at` | `(name, day_date, timeline)` 组合唯一（每天每条时间链独立节点，同一角色如 Aliya 在不同天/链是不同节点） |
+| 备注 | 实体即按天独立节点，无独立 EntityDay 节点 |  |
+| `Day`        | `date`, `timeline`, `*_at`                           | `(date, timeline)` 组合唯一        |
 
 **关系**
 
-| 关系类型      | 说明                                       |
-| ------------- | ------------------------------------------ |
-| 五元组谓语    | `(Entity)-[PREDICATE]->(Entity)`，支持 `occurrence` 累加 |
-| `ON_DAY`      | `(Entity)-[:ON_DAY]->(Day)`，实体与日期的关联 |
-| `NEXT_DAY`    | `(Day)-[:NEXT_DAY]->(Day)`，同一时间链上的时序链 |
+| 关系类型      | 说明                                                                  |
+| ------------- | --------------------------------------------------------------------- |
+| 五元组谓语    | `(Entity)-[PREDICATE {day_date, timeline}]->(Entity)，连接按天实体，`occurrence` 累加 |
+| `INSTANCE_OF` | 无 INSTANCE_OF 关系；ON_DAY 由 Day 直接连按天实体 |
+| `ON_DAY`      | `(Day)-[:ON_DAY]->(Entity)`，Day 关联当天被提及的按天实体（每个按天实体仅归属其唯一 Day）        |
+| `NEXT_DAY`    | `(Day)-[:NEXT_DAY]->(Day)`，同一时间链上的时序链（乱序落库也连续）                        |
 
 ---
 

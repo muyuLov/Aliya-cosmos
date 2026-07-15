@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import AsyncIterator
+
 from agent.tools.base import BaseTool, ToolContext, ToolResult
 
 
@@ -24,28 +26,35 @@ class TTSTool:
 
         if not context.tts_service:
             return ToolResult(success=False, error="TTS 服务不可用")
+        if not context.audio_player:
+            return ToolResult(success=False, error="音频播放器不可用")
+
+        from core.tts import TTSRequest
 
         try:
-            from core.tts import TTSRequest
-
             request = TTSRequest(text=text)
-            audio_chunks: list[bytes] = []
+            total_bytes = 0
 
-            async for chunk in context.tts_service.synthesize(request):
-                audio_chunks.append(chunk)
+            async def _count(chunks: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
+                nonlocal total_bytes
+                async for chunk in chunks:
+                    total_bytes += len(chunk)
+                    yield chunk
 
-            if not audio_chunks:
+            # 流式合成 + 流式播放：边接收音频块边播放，
+            # 避免全量缓冲，降低首字节延迟与内存占用
+            await context.audio_player.play_stream(
+                _count(context.tts_service.synthesize(request))
+            )
+
+            if total_bytes == 0:
                 return ToolResult(success=False, error="TTS 合成未产生音频数据")
 
-            all_audio = b"".join(audio_chunks)
-
-            if context.audio_player:
-                context.audio_player.play_bytes(all_audio)
             if context.send_message:
                 await context.send_message({
                     "type": "tts_complete",
                     "text": text,
-                    "audio_size": len(all_audio),
+                    "audio_size": total_bytes,
                 })
 
             return ToolResult(success=True)

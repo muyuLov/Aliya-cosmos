@@ -1,6 +1,4 @@
 """memory 模块使用示例
-
-基于《彼方的她-Aliya》的真实对话场景演示 GRAG 记忆系统的完整功能：
 - 对话记忆的添加与五元组提取
 - 知识图谱查询与 RAG 检索
 - 跨对话的记忆关联（Aliya、Kane、Ryoko、泰瑞斯公司）
@@ -22,6 +20,7 @@ if __name__ == "__main__":
         sys.path.insert(0, str(project_root))
 
 from core.exception import get_default_handler
+from core.logger import setup as setup_logger
 from core.memory import (
     create_memory_service,
     get_memory_manager,
@@ -29,6 +28,7 @@ from core.memory import (
     store_quintuples,
     query_graph_by_keywords,
     get_graph_stats,
+    get_day_nodes_async,
     start_task_manager,
     stop_task_manager,
     GRAGError,
@@ -67,8 +67,8 @@ async def example_basic_conversation() -> None:
             user_input=user_input,
             ai_response=ai_response,
             session_id="haita_session_001",
-            day_date="3024-07-11",
-            timeline="aliya",
+            day_date="2025-07-11",
+            timeline="aliya|user",
         )
         print(f"[{'OK' if success else 'FAIL'}] 第一轮对话记忆已{'添加' if success else '添加失败'}")
 
@@ -86,14 +86,20 @@ async def example_basic_conversation() -> None:
             user_input=user_input2,
             ai_response=ai_response2,
             session_id="haita_session_001",
-            day_date="3024-07-11",
-            timeline="aliya",
+            day_date="2025-07-11",
+            timeline="aliya|user",
         )
         print(f"[{'OK' if success2 else 'FAIL'}] 第二轮对话记忆已{'添加' if success2 else '添加失败'}")
 
         # 等待异步五元组提取完成
         print("\n等待五元组提取...")
-        await asyncio.sleep(3)
+        mgr2 = get_memory_manager()
+        for _ in range(60):  # 最多等 60 秒
+            await asyncio.sleep(1)
+            if mgr2.get_memory_stats().get("inflight_count", 0) == 0:
+                break
+        else:
+            print("[WARN] 等待超时，提取任务可能仍在进行中")
 
         # ── 查询：COSMOS 回忆 Aliya 的职业 ───────────────────────────────
         question = "Aliya 是做什么工作的？"
@@ -108,12 +114,12 @@ async def example_basic_conversation() -> None:
 
 
 async def example_graph_operations() -> None:
-    """示例 2：直接写入五元组，构建 Aliya 的人际关系图谱。
+    """示例 4：直接写入五元组，构建 Aliya 的人际关系图谱。
 
     将 Aliya、Kane、Ryoko 与泰瑞斯公司的关系直接存入 Neo4j，
     无需经过 LLM 提取，适合已结构化的角色背景数据。
     """
-    print("\n=== 示例 2：图谱写入（泰瑞斯公司人物关系）===")
+    print("\n=== 示例 4：图谱写入（泰瑞斯公司人物关系）===")
 
     try:
         # Aliya 的已知关系：来自游戏对话和背景设定
@@ -162,16 +168,16 @@ async def example_graph_operations() -> None:
     except GRAGError as e:
         get_default_handler().handle(e)
 
-    print("[OK] 示例 2 完成")
+    print("[OK] 示例 4 完成")
 
 
 async def example_task_management() -> None:
-    """示例 3：并发任务提取，模拟 COSMOS 一次性收到多段 Aliya 对话的场景。
+    """示例 5：并发任务提取，模拟 COSMOS 一次性收到多段 Aliya 对话的场景。
 
     三段对话同时提交到任务队列，由多个 worker 协程并发提取五元组，
     还原 Aliya 讲述 Kane 事迹、分享大头照、谈及归家愿望的场景。
     """
-    print("\n=== 示例 3：并发任务管理（批量提取 Aliya 对话片段）===")
+    print("\n=== 示例 5：并发任务管理（批量提取 Aliya 对话片段）===")
 
     try:
         await start_task_manager()
@@ -207,8 +213,8 @@ async def example_task_management() -> None:
                 text,
                 source_text=text,
                 session_id="haita_session_001",
-                day_date="3024-07-11",
-                timeline="aliya",
+                day_date="2025-07-11",
+                timeline="aliya|user",
             )
             task_ids.append(task_id)
             print(f"  [{label}] 任务ID: {task_id[:16]}...")
@@ -229,16 +235,16 @@ async def example_task_management() -> None:
     except GRAGError as e:
         get_default_handler().handle(e)
 
-    print("[OK] 示例 3 完成")
+    print("[OK] 示例 5 完成")
 
 
 async def example_rag_query() -> None:
-    """示例 4：RAG 查询，模拟 COSMOS 在后续对话中依靠记忆回忆 Aliya 说过的话。
+    """示例 6：RAG 查询，模拟 COSMOS 在后续对话中依靠记忆回忆 Aliya 说过的话。
 
     先向记忆系统写入多段对话，再以问题形式触发 RAG 检索链路：
     关键词提取 → 图谱查询 → LLM 生成回答。
     """
-    print("\n=== 示例 4：RAG 查询（COSMOS 回忆 Aliya 讲述的事情）===")
+    print("\n=== 示例 6：RAG 查询（COSMOS 回忆 Aliya 讲述的事情）===")
 
     try:
         mgr = get_memory_manager()
@@ -269,13 +275,18 @@ async def example_rag_query() -> None:
                 user_input=user_msg,
                 ai_response=ai_msg,
                 session_id="haita_session_002",
-                day_date="3024-07-11",
-                timeline="aliya",
+                day_date="2025-07-11",
+                timeline="aliya|user",
             )
             print(f"  对话 {i} 已写入")
 
         print("等待五元组提取完成...")
-        await asyncio.sleep(5)
+        for _ in range(60):
+            await asyncio.sleep(1)
+            if mgr.get_memory_stats().get("inflight_count", 0) == 0:
+                break
+        else:
+            print("[WARN] 等待超时，提取任务可能仍在进行中")
 
         # COSMOS 通过 RAG 回忆 Aliya 说过的话
         questions = [
@@ -293,12 +304,12 @@ async def example_rag_query() -> None:
     except GRAGError as e:
         get_default_handler().handle(e)
 
-    print("\n[OK] 示例 4 完成")
+    print("\n[OK] 示例 6 完成")
 
 
 async def example_memory_stats() -> None:
-    """示例 5：查看记忆系统当前状态，确认 Aliya 相关知识已存入图谱。"""
-    print("\n=== 示例 5：记忆统计（图谱当前状态）===")
+    """示例 3：查看记忆系统当前状态，确认 Aliya 相关知识已存入图谱。"""
+    print("\n=== 示例 3：记忆统计（图谱当前状态）===")
 
     try:
         graph_stats = get_graph_stats()
@@ -328,16 +339,16 @@ async def example_memory_stats() -> None:
     except GRAGError as e:
         get_default_handler().handle(e)
 
-    print("[OK] 示例 5 完成")
+    print("[OK] 示例 3 完成")
 
 
 async def example_memory_maintenance() -> None:
-    """示例 6：记忆维护，演示任务清理操作。
+    """示例 7：记忆维护，演示任务清理操作。
 
     清理已完成的历史提取任务，释放内存占用。
     实际清空图谱的操作已注释，避免误删 Aliya 的记忆数据。
     """
-    print("\n=== 示例 6：记忆维护（清理已完成任务）===")
+    print("\n=== 示例 7：记忆维护（清理已完成任务）===")
 
     try:
         mgr = get_memory_manager()
@@ -365,7 +376,76 @@ async def example_memory_maintenance() -> None:
     except GRAGError as e:
         get_default_handler().handle(e)
 
-    print("[OK] 示例 6 完成")
+    print("[OK] 示例 7 完成")
+
+
+async def example_multi_time() -> None:
+    """示例 2：多日期时间链演示（千年时空对照）。
+
+    在多个连续日期分别写入 user 与 aliya 两条时间链的记忆，
+    验证 Aliya 时间链的落库日期为正常时间 +1000 年，
+    并展示两条链各自按日期串联的 Day 节点分布。
+    """
+    print("\n=== 示例 2：多日期时间链（千年时空对照）===")
+
+    try:
+        mgr = get_memory_manager()
+
+        if not mgr.enabled:
+            print("[WARN] 记忆系统未启用，请检查配置文件")
+            return
+
+        # 三个连续日期，模拟 COSMOS 与 Aliya 跨越数日的交流
+        multi_dialogues = [
+            ("2025-07-11", "今天天气真好，你那边呢？", "我这边永远是星空与寂静，不过有你陪聊也不错。"),
+            ("2025-07-12", "你们深空探索一般持续多久？", "一次任务往往要以年来计，孤独是宇航员的常态。"),
+            ("2025-07-13", "如果有一天能见面就好了。", "千年后也许会有那样的机会，我会等。"),
+        ]
+
+        print("写入多日期对话（user + aliya 双时间链）...")
+        for day_date, user_msg, ai_msg in multi_dialogues:
+            print(f"  {day_date}: COSMOS「{user_msg}」")
+            await mgr.add_conversation_memory(
+                user_input=user_msg,
+                ai_response=ai_msg,
+                session_id="multi_time_session",
+                day_date=day_date,
+                timeline="aliya|user",
+            )
+
+        print("\n等待五元组提取完成...")
+        for _ in range(60):
+            await asyncio.sleep(1)
+            if mgr.get_memory_stats().get("inflight_count", 0) == 0:
+                break
+        else:
+            print("[WARN] 等待超时，提取任务可能仍在进行中")
+
+        # user 时间链 Day 节点（应为正常日期）
+        print("\nuser 时间链 Day 节点（正常时间）:")
+        user_days = await get_day_nodes_async(timeline="user")
+        for d in sorted(user_days, key=lambda x: x["date"]):
+            print(f"  {d['date']}  | 实体数: {d['entity_count']} | 五元组数: {d.get('quintuple_count', 0)}")
+
+        # aliya 时间链 Day 节点（应为正常日期 +1000 年）
+        print("\naliya 时间链 Day 节点（正常时间 +1000 年）:")
+        aliya_days = await get_day_nodes_async(timeline="aliya")
+        for d in sorted(aliya_days, key=lambda x: x["date"]):
+            print(f"  {d['date']}  | 实体数: {d['entity_count']} | 五元组数: {d.get('quintuple_count', 0)}")
+
+        # 显式对照：同一天在两条链上的落库日期差
+        print("\n时间链对照（同日落库日期差）:")
+        for d in sorted(user_days, key=lambda x: x["date"]):
+            aliya_match = next(
+                (a["date"] for a in aliya_days if a["date"] == f"{int(d['date'][:4]) + 1000}{d['date'][4:]}"),
+                "?",
+            )
+            print(f"  user {d['date']}  ↔  aliya {aliya_match}")
+
+    except GRAGError as e:
+        get_default_handler().handle(e)
+
+    print("[OK] 示例 2 完成")
 
 
 async def main() -> None:
@@ -390,12 +470,13 @@ async def main() -> None:
 
         print("\n[OK] 记忆系统已启用，开始演示...\n")
 
-        await example_basic_conversation()    # 示例 1：基础对话记忆
-        await example_graph_operations()     # 示例 2：直接写入人物关系五元组
-        await example_task_management()      # 示例 3：并发批量提取
-        await example_rag_query()            # 示例 4：跨对话 RAG 检索
-        await example_memory_stats()         # 示例 5：图谱统计
-        await example_memory_maintenance()   # 示例 6：任务清理
+        # await example_basic_conversation()    # 示例 1：基础对话记忆
+        await example_multi_time()           # 示例 2：多日期时间链对照
+        await example_memory_stats()         # 示例 3：图谱统计
+        # await example_graph_operations()     # 示例 4：直接写入人物关系五元组
+        # await example_task_management()      # 示例 5：并发批量提取
+        # await example_rag_query()            # 示例 6：跨对话 RAG 检索
+        # await example_memory_maintenance()   # 示例 7：任务清理
 
     except KeyboardInterrupt:
         print("\n演示被用户中断")
@@ -417,4 +498,5 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
+    setup_logger()   # 从 data/config/main.yml 加载日志配置（含 debug 级别）
     asyncio.run(main())
