@@ -423,12 +423,22 @@ class AudioPlayer:
         import os
         import subprocess as sp
 
-        ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
-        ffprobe_path = ffmpeg_path.replace("ffmpeg", "ffprobe")
-        # Windows 下处理 .exe 后缀
-        if not os.path.exists(ffprobe_path):
-            base, ext = os.path.splitext(ffmpeg_path)
-            ffprobe_path = f"{base.replace('ffmpeg', 'ffprobe')}{ext}"
+        # 优先使用 portable-ffmpeg 提供的 ffprobe
+        ffprobe_path = None
+        try:
+            import portable_ffmpeg
+            _, ffprobe_path = portable_ffmpeg.get_ffmpeg()
+        except ImportError:
+            pass
+        
+        # 回退到 imageio-ffmpeg 的逻辑
+        if not ffprobe_path or not os.path.exists(ffprobe_path):
+            ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
+            ffprobe_path = ffmpeg_path.replace("ffmpeg", "ffprobe")
+            # Windows 下处理 .exe 后缀
+            if not os.path.exists(ffprobe_path):
+                base, ext = os.path.splitext(ffmpeg_path)
+                ffprobe_path = f"{base.replace('ffmpeg', 'ffprobe')}{ext}"
 
         try:
             proc = sp.Popen(
@@ -461,14 +471,24 @@ class AudioPlayer:
             return 24000, 1
 
     def _decode_mp3_stream(self, mp3_data: bytes) -> bytes | None:
-        """使用 ffmpeg (imageio-ffmpeg) 解码 MP3 数据为 PCM。"""
+        """使用 ffmpeg 解码 MP3 数据为 PCM。"""
         if not mp3_data:
             return None
 
         try:
             import subprocess as sp
 
-            ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
+            # 优先使用 portable-ffmpeg 提供的 ffmpeg
+            ffmpeg_path = None
+            try:
+                import portable_ffmpeg
+                ffmpeg_path, _ = portable_ffmpeg.get_ffmpeg()
+            except ImportError:
+                pass
+            
+            # 回退到 imageio-ffmpeg
+            if not ffmpeg_path:
+                ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
 
             process = sp.Popen(
                 [

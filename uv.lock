@@ -91,9 +91,11 @@ dependencies = [
     { name = "numpy" },
     { name = "openai" },
     { name = "pillow" },
+    { name = "portable-ffmpeg" },
     { name = "psutil" },
     { name = "py2neo" },
     { name = "pydantic" },
+    { name = "pyffmpeg" },
     { name = "pystray" },
     { name = "pywebview" },
     { name = "pyyaml" },
@@ -130,10 +132,12 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.4.0,<3.0.0" },
     { name = "openai", specifier = ">=2.36.0,<3.0.0" },
     { name = "pillow", specifier = ">=11.0.0,<12.0.0" },
+    { name = "portable-ffmpeg", specifier = ">=0.2.0" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=4.6.0,<5.0.0" },
     { name = "psutil", specifier = ">=7.2.0,<8.0.0" },
     { name = "py2neo", specifier = ">=2021.2.4,<2022.0.0" },
     { name = "pydantic", specifier = ">=2.13.0,<3.0.0" },
+    { name = "pyffmpeg", specifier = ">=2.5.2.3.2" },
     { name = "pystray", specifier = ">=0.19.4,<1.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0.0,<10.0.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=1.3.0,<2.0.0" },
@@ -963,6 +967,15 @@ wheels = [
 ]
 
 [[package]]
+name = "portable-ffmpeg"
+version = "0.2.0"
+source = { registry = "https://pypi.tuna.tsinghua.edu.cn/simple" }
+sdist = { url = "https://pypi.tuna.tsinghua.edu.cn/packages/38/a3/80798d3050b6533041d1ba30957cfaccebe3d8a631a05493d59d809ce9f1/portable_ffmpeg-0.2.0.tar.gz", hash = "sha256:727793d625128a33b6e7c2a9143d9ef9399781344aade848cebfc56357ba4c7c", size = 32789, upload-time = "2026-03-22T22:32:35.944Z" }
+wheels = [
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/09/08/9dca3d72455dc456d01573353ddb613e0d1fa89d42e1839210f91e5341ed/portable_ffmpeg-0.2.0-py3-none-any.whl", hash = "sha256:ec3963b3f49849b54a26f687d89ee0a3534e46e87644e08bd59b0a706fdf7c6f", size = 8416, upload-time = "2026-03-22T22:32:34.71Z" },
+]
+
+[[package]]
 name = "pre-commit"
 version = "4.6.0"
 source = { registry = "https://pypi.tuna.tsinghua.edu.cn/simple" }
@@ -1146,6 +1159,20 @@ wheels = [
     { url = "https://pypi.tuna.tsinghua.edu.cn/packages/5c/4f/86a832a9d14df58e663bfdf4627dc00d3317c2bd583c4fb23390b0f04b8e/pydantic_core-2.46.3-graalpy312-graalpy250_312_native-macosx_11_0_arm64.whl", hash = "sha256:f00a0961b125f1a47af7bcc17f00782e12f4cd056f83416006b30111d941dfa3", size = 1932428, upload-time = "2026-04-20T14:40:45.781Z" },
     { url = "https://pypi.tuna.tsinghua.edu.cn/packages/11/1a/fe857968954d93fb78e0d4b6df5c988c74c4aaa67181c60be7cfe327c0ca/pydantic_core-2.46.3-graalpy312-graalpy250_312_native-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:57697d7c056aca4bbb680200f96563e841a6386ac1129370a0102592f4dddff5", size = 1997550, upload-time = "2026-04-20T14:44:02.425Z" },
     { url = "https://pypi.tuna.tsinghua.edu.cn/packages/17/eb/9d89ad2d9b0ba8cd65393d434471621b98912abb10fbe1df08e480ba57b5/pydantic_core-2.46.3-graalpy312-graalpy250_312_native-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:fd35aa21299def8db7ef4fe5c4ff862941a9a158ca7b63d61e66fe67d30416b4", size = 2137657, upload-time = "2026-04-20T14:42:45.149Z" },
+]
+
+[[package]]
+name = "pyffmpeg"
+version = "2.5.2.3.2"
+source = { registry = "https://pypi.tuna.tsinghua.edu.cn/simple" }
+sdist = { url = "https://pypi.tuna.tsinghua.edu.cn/packages/0a/77/3cf4cf950a8f004d2cd48d967bf4d4d8f59fb196212f72ee019ee0675919/pyffmpeg-2.5.2.3.2.tar.gz", hash = "sha256:2873dd2ddb0c102055c0bbaaa6ecdb04720fa04b76320d090a26b1613669f052", size = 16446, upload-time = "2026-02-27T20:00:39.337Z" }
+wheels = [
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/51/ab/f1dc7fb7e4016c5dfffa98b4db9c169983ae574283147fa49f83738245f8/pyffmpeg-2.5.2.3.2-py3-none-macosx_10_9_universal2.whl", hash = "sha256:7b4734bf6eb00703cc0f65a52f22a73ec5bb767600089af996e8cda888571b6c", size = 18961659, upload-time = "2026-02-27T19:54:41.874Z" },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/50/29/2cc3f4ea4c7d49a42a76608de368cbdfe6af0d12cd26317d7e07af8743ff/pyffmpeg-2.5.2.3.2-py3-none-macosx_10_9_x86_64.whl", hash = "sha256:dfd90b290b9e3cfe6393fada5df554179a6c734e8c1919a14eb19f52aa1cddbc", size = 18961659, upload-time = "2026-02-27T19:54:44.187Z" },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/a9/e1/86e41c124e0e1863d8a9d624dfe70aa522b92dc0e3553005c4a1c11d825b/pyffmpeg-2.5.2.3.2-py3-none-macosx_11_0_arm64.whl", hash = "sha256:f79fd224ea85505b70f1e31cb96d763d2fa5c624af9e7474ec162a82a4c98fa7", size = 18961659, upload-time = "2026-02-27T19:54:46.516Z" },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/71/9c/a872ca20c14453b400d7366edd6898fcda258289f8c48ac47412e9ab878b/pyffmpeg-2.5.2.3.2-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:1edf5d140d03fca14d1edea3e30f0844fad14292fe9ab416f9365acda49d27a3", size = 46514181, upload-time = "2026-02-27T20:12:29.439Z" },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/37/c1/330028d0c8bc7f528d7c8a5c6eed059816368f44151895f5b2711f1ad424/pyffmpeg-2.5.2.3.2-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:dcb244a702a62287d0130db1081ebc6382a09e10630daafc9a028080df82de4b", size = 46514181, upload-time = "2026-02-27T20:12:32.668Z" },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/9b/6d/6a0c537af6ccd6a4c0b557888c6214060d39706a68125dbe0472cf066ef8/pyffmpeg-2.5.2.3.2-py3-none-win_amd64.whl", hash = "sha256:01e7068ff0e4b01c0ef04daeeedd090d9b11b192b575c7591926c17550b87b4a", size = 45467876, upload-time = "2026-02-27T20:01:28.433Z" },
 ]
 
 [[package]]

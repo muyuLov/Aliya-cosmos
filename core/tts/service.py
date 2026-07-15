@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import AsyncGenerator, AsyncIterator
+from typing import TYPE_CHECKING, AsyncGenerator, AsyncIterator
 
 from core.logger import get_logger
 from core.tts.constants import (
@@ -17,6 +17,9 @@ from core.tts.exceptions import TTSRequestError, TTSSessionError
 from core.tts.models import TTSRequest, VoiceConfig
 from core.tts.providers.base import TTSProvider
 from core.tts.text_splitter import filter_actions, split_text
+
+if TYPE_CHECKING:
+    from core.tts.cache import TTSCache
 
 _logger = get_logger(__name__)
 
@@ -32,6 +35,7 @@ class TTSService:
         voice_config: 音色默认配置，为 None 时使用空配置。
         prefetch_queue_size: 预取队列大小，控制并发预取的段数，默认 16。
         max_concurrent_creates: 最大并发创建会话数，限制同时创建的 TTS 会话数量，默认 10。
+        cache: 音频缓存实例，为 None 时禁用缓存。按分段粒度缓存，命中时跳过 provider 请求。
     """
 
     def __init__(
@@ -41,6 +45,7 @@ class TTSService:
         prefetch_queue_size: int = DEFAULT_PREFETCH_QUEUE_SIZE,
         max_concurrent_creates: int = DEFAULT_MAX_CONCURRENT_CREATES,
         prefetch_window: int = DEFAULT_PREFETCH_WINDOW,
+        cache: "TTSCache | None" = None,
     ) -> None:
         # 参数验证（集中校验）
         from core.tts.validation import validate_tts_service_config
@@ -51,6 +56,7 @@ class TTSService:
         self.voice_config = voice_config or VoiceConfig()
         self.prefetch_queue_size = prefetch_queue_size
         self.prefetch_window = prefetch_window
+        self._cache = cache
         # 每个实例独立的 Semaphore，避免不同服务实例互相限流
         self._create_sem = asyncio.Semaphore(max_concurrent_creates)
 
@@ -99,48 +105,25 @@ class TTSService:
         start_time = time.monotonic()
         _completed = False
 
-        try:
-            # 单句直接合成，跳过分段开销；多句走并发流水线
-            segments = split_text(merged.text)
-            source: AsyncIterator[bytes]
-            if len(segments) == 1:
-                source = self._synthesize_single(merged)
-            else:
-                source = self._synthesize_segmented(merged)
+        # 单句直接合成，跳过分段开销；多句走并发流水线
+        segments = split_text(merged.text)
+        source: AsyncIterator[bytes]
+        if len(segments) == 1:
+            source = self._synthesize_single(merged)
+        else:
+            source = self._synthesize_segmented(merged)
 
-            try:
-                source_iter = source.__aiter__()
-                try:
-                    first = await source_iter.__anext__()
-                except StopAsyncIteration:
-                    pass
-                else:
+        first_chunk = True
+        try:
+            async for chunk in source:
+                if first_chunk:
+                    first_chunk = False
                     _logger.debug(
                         "TTS 首字节 | provider=%s | ttfb=%.3fs",
                         self.provider.provider_name,
                         time.monotonic() - start_time,
                     )
-                    yield first
-                    async for chunk in source_iter:
-                        yield chunk
-            finally:
-                # 安全关闭异步生成器，捕获可能的 RuntimeError
-                try:
-                    await source.aclose()
-                except RuntimeError as e:
-                    # 忽略 "asynchronous generator is already running" 错误
-                    if "already running" not in str(e):
-                        raise
-                    _logger.debug(
-                        "TTS 生成器关闭时检测到并发状态 | provider=%s",
-                        self.provider.provider_name,
-                    )
-                except Exception as e:
-                    _logger.debug(
-                        "TTS 生成器关闭失败 | provider=%s | error=%s",
-                        self.provider.provider_name,
-                        e,
-                    )
+                yield chunk
             _completed = True
         except (TTSRequestError, TTSSessionError):
             _logger.error(
@@ -151,6 +134,8 @@ class TTSService:
             )
             raise
         finally:
+            # 消费端提前退出时显式关闭底层生成器，释放会话资源
+            await self._safe_aclose(source)
             if _completed:
                 _logger.debug(
                     "TTS 合成完成 | provider=%s | elapsed=%.3fs",
@@ -158,9 +143,34 @@ class TTSService:
                     time.monotonic() - start_time,
                 )
 
+    async def _safe_aclose(self, source: AsyncIterator[bytes]) -> None:
+        """安全关闭异步生成器，吞掉关闭阶段的噪音异常。"""
+        aclose = getattr(source, "aclose", None)
+        if aclose is None:
+            return
+        try:
+            await aclose()
+        except RuntimeError as e:
+            # 忽略 "asynchronous generator is already running" 错误
+            if "already running" not in str(e):
+                raise
+            _logger.debug(
+                "TTS 生成器关闭时检测到并发状态 | provider=%s",
+                self.provider.provider_name,
+            )
+        except Exception as e:
+            _logger.debug(
+                "TTS 生成器关闭失败 | provider=%s | error=%s",
+                self.provider.provider_name,
+                e,
+            )
+
     async def _synthesize_single(self, request: TTSRequest) -> AsyncGenerator[bytes, None]:
         """
         单句直接合成，跳过分段与队列开销。
+
+        缓存命中时直接返回整段音频，跳过 provider 请求；未命中时边合成边收集，
+        成功消费完整段后回填缓存。
 
         Args:
             request: 已合并默认值的 TTS 请求。
@@ -168,11 +178,26 @@ class TTSService:
         Yields:
             音频字节块。
         """
+        # 缓存命中：直接返回整段音频，零 provider 调用
+        if self._cache is not None:
+            cached = self._cache.get(request)
+            if cached is not None:
+                yield cached
+                return
+
+        collected = bytearray() if self._cache is not None else None
+        completed = False
         session_id = await self.provider.create_session(request)
         try:
             async for chunk in self.provider.consume_session(session_id):
+                if collected is not None:
+                    collected.extend(chunk)
                 yield chunk
+            completed = True
         finally:
+            # 仅在完整消费成功时回填缓存，避免缓存半截音频
+            if completed and self._cache is not None and collected:
+                self._cache.set(request, bytes(collected))
             try:
                 await self.provider.close_session(session_id)
             except (TTSSessionError, TTSRequestError) as e:
@@ -214,18 +239,32 @@ class TTSService:
 
         async def _create_and_prefetch(seg: str, queue: asyncio.Queue[object]) -> None:
             """创建 session 后立即预取，异常写入队列由消费端在正确位置抛出。"""
+            seg_request = request.model_copy(update={"text": seg})
+
+            # 缓存命中：直接投递整段音频，跳过 session 创建
+            if self._cache is not None:
+                cached = self._cache.get(seg_request)
+                if cached is not None:
+                    await queue.put(cached)
+                    await queue.put(SENTINEL)
+                    return
+
             session_id: str | None = None
             session_iter: AsyncIterator[bytes] | None = None
+            collected = bytearray() if self._cache is not None else None
 
             try:
                 async with self._create_sem:
-                    session_id = await self.provider.create_session(
-                        request.model_copy(update={"text": seg})
-                    )
+                    session_id = await self.provider.create_session(seg_request)
                 session_iter = self.provider.consume_session(session_id)
                 async for chunk in session_iter:
+                    if collected is not None:
+                        collected.extend(chunk)
                     await queue.put(chunk)
                 await queue.put(SENTINEL)
+                # 完整消费成功后回填缓存
+                if self._cache is not None and collected:
+                    self._cache.set(seg_request, bytes(collected))
             except asyncio.CancelledError:
                 if session_iter is not None:
                     try:

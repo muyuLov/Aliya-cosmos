@@ -59,7 +59,7 @@ cosmos:
     # ── TTS 语音合成 ──────────────────────────────────
     tts:
       providers:
-        name: astra                    # 当前使用的提供商名
+        name: edge                    # 当前使用的提供商名
         config_path: data/config/TTSProviders.json   # 提供商配置文件（支持 ${ENV_VAR} 语法）
       voice:
         languages: [zh, en]            # 支持的语言列表
@@ -67,6 +67,10 @@ cosmos:
       service:
         prefetch_queue_size: 16        # 预取队列大小（分段数）
         max_concurrent_creates: 10     # 最大并发创建会话数
+      cache:
+        enabled: true                  # 启用音频缓存（按分段粒度复用重复文本合成结果）
+        max_age_seconds: 604800        # 缓存有效期（秒），默认 7 天
+        redis_url: null                # 可选 Redis 二级缓存 URL，如 redis://localhost:6379/0
       player:
         sample_rate: 32000             # 采样率（Hz）
         channels: 1                    # 声道数（1=单声道）

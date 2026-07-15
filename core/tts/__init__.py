@@ -5,7 +5,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from core.tts.cache import DEFAULT_CACHE_DIR, TTSCache, create_cache
 from core.tts.constants import (
+    DEFAULT_CACHE_ENABLED,
+    DEFAULT_CACHE_MAX_AGE,
     DEFAULT_FRAMES_PER_BUFFER,
     DEFAULT_MAX_CONCURRENT_CREATES,
     DEFAULT_PLAY_QUEUE_SIZE,
@@ -79,6 +82,7 @@ def create_service(
     prefetch_queue_size: int = DEFAULT_PREFETCH_QUEUE_SIZE,
     max_concurrent_creates: int = DEFAULT_MAX_CONCURRENT_CREATES,
     prefetch_window: int = DEFAULT_PREFETCH_WINDOW,
+    cache: TTSCache | None = None,
 ) -> TTSService:
     """
     根据提供商名称和配置创建 TTSService 实例。
@@ -90,6 +94,7 @@ def create_service(
         prefetch_queue_size: 预取队列大小，默认 16。
         max_concurrent_creates: 最大并发创建会话数，默认 10。
         prefetch_window: 滑动窗口大小，默认 3。
+        cache: 音频缓存实例，为 None 时禁用缓存。
 
     Returns:
         配置好的 TTSService 实例。
@@ -104,6 +109,7 @@ def create_service(
         prefetch_queue_size=prefetch_queue_size,
         max_concurrent_creates=max_concurrent_creates,
         prefetch_window=prefetch_window,
+        cache=cache,
     )
 
 
@@ -160,6 +166,7 @@ def create_from_config(
     voice_raw: dict = tts_section.get("voice", {})
     service_config: dict = tts_section.get("service", {})
     player_config: dict = tts_section.get("player", {})
+    cache_config: dict = tts_section.get("cache", {})
 
     voice_config = VoiceConfig.from_config(voice_raw)
     prefetch_queue_size = service_config.get("prefetch_queue_size", DEFAULT_PREFETCH_QUEUE_SIZE)
@@ -167,6 +174,16 @@ def create_from_config(
         "max_concurrent_creates", DEFAULT_MAX_CONCURRENT_CREATES
     )
     prefetch_window = service_config.get("prefetch_window", DEFAULT_PREFETCH_WINDOW)
+
+    # 构建音频缓存（默认启用，可通过 cache.enabled=false 关闭）
+    cache: TTSCache | None = None
+    if cache_config.get("enabled", DEFAULT_CACHE_ENABLED):
+        cache = TTSCache(
+            cache_dir=cache_config.get("cache_dir", DEFAULT_CACHE_DIR),
+            redis_url=cache_config.get("redis_url"),
+            enabled=True,
+            max_age_seconds=cache_config.get("max_age_seconds", DEFAULT_CACHE_MAX_AGE),
+        )
 
     # 创建提供商实例
     provider = TTSProviderFactory.create(provider_name, provider_config)
@@ -178,6 +195,7 @@ def create_from_config(
             prefetch_queue_size=prefetch_queue_size,
             max_concurrent_creates=max_concurrent_creates,
             prefetch_window=prefetch_window,
+            cache=cache,
         ),
         create_player(player_config),
     )
@@ -191,6 +209,8 @@ __all__ = [
     "EdgeTTSProvider",
     "TTSRequest",
     "VoiceConfig",
+    "TTSCache",
+    "create_cache",
     "AudioPlayer",
     "AudioPlayerError",
     "create_service",
