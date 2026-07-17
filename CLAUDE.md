@@ -6,6 +6,25 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 《彼方的她-Aliya》
 
+## 环境准备
+
+**Python 版本要求：`>=3.12,<3.14`**
+
+```bash
+# 1. 克隆后复制环境变量模板
+cp .env.example .env
+
+# 2. 编辑 .env 填入必要的 API Key
+# DEEPSEEK_API_KEY="sk-your-key-here"
+
+# 3. 创建虚拟环境并安装依赖（使用 uv）
+uv venv
+uv sync
+
+# 4. 启动基础设施（Neo4j + AstraTTS）
+cd docker && docker-compose up -d   # 首次需先构建 AstraTTS 镜像（见注意事项）
+```
+
 ## Git 工作流
 
 - 所有开发在 `dev` 分支上进行
@@ -135,3 +154,52 @@ GUI 悬浮窗与 Agent 通过 WebSocket（默认 127.0.0.1:8765）通信，消�
 - Neo4j Schema：`(:Entity:Person|Location|Object|Concept|Event|Time)` 节点 + `[:REL_TYPE]` 关系
 - LLM 输出格式：JSON 包含 `reply` + `tool_calls` 字段
 - 工具接口规范：每个工具定义 `input_schema`（JSON Schema 格式参数描述），通过 `ToolContext` 传入运行时依赖
+
+## 注意事项
+
+### AstraTTS Docker 镜像需手动构建
+
+首次启动 Docker 基础设施前，需先构建 AstraTTS 镜像：
+
+```bash
+cd docker
+./build_astratts.ps1   # Windows
+# 或 docker build -f Dockerfile.astratts -t astratts .
+docker-compose up -d
+```
+
+### 配置编辑方式
+
+- **LLM 提供商配置**：`data/config/main.yml` → `cosmos.service.llm`
+- **API Key 等敏感信息**：填入 `.env`（`DEEPSEEK_API_KEY`）或 `data/config/LLMProviders.json`
+- **TTS 提供商配置**：`data/config/TTSProviders.json`
+- 修改配置后无需重启进程，`ConfigManager` 支持热重载
+
+### 全局 CLAUDE.md 行为准则
+
+本项目的 `CLAUDE.md` 专注于项目架构和命令。全局行为准则（编码前先思考、简单优先、精准修改等）位于 `~/.claude/CLAUDE.md`。
+
+### CodeGraph 智能代码导航
+
+项目已建立 CodeGraph 索引（`.codegraph/`），在理解或查找代码时优先使用：
+
+```
+codegraph explore "<问题或符号名>"
+codegraph node <符号或文件路径>
+```
+
+一次 `codegraph explore` 调用即可返回相关符号的源代码及调用链路，比手动 grep+读取更高效。
+
+### test 目录结构
+
+```
+tests/
+├── agent/      # Agent 层测试
+└── memory/     # 记忆系统测试
+```
+
+运行单个模块测试：
+```bash
+pytest tests/agent/ -v
+pytest tests/memory/ -v
+```
