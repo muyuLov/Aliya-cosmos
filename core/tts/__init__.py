@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from core.logger import get_logger
 from core.tts.cache import DEFAULT_CACHE_DIR, TTSCache, create_cache
 from core.tts.constants import (
     DEFAULT_CACHE_ENABLED,
@@ -26,8 +27,12 @@ from core.tts.exceptions import (
     TTSSessionError,
 )
 from core.tts.models import TTSRequest, VoiceConfig
+from core.tts.player.sink import AudioSink, FileAudioSink, ResilientAudioPlayer
+from core.tts.player.ws_sink import WebSocketAudioSink
 from core.tts.providers import AstraTTSProvider, EdgeTTSProvider, TTSProvider, TTSProviderFactory
 from core.tts.service import TTSService
+
+_logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from core.tts.player import AudioPlayer
@@ -45,34 +50,42 @@ def __getattr__(name: str) -> Any:
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-def create_player(player_config: dict[str, Any] | None = None) -> AudioPlayer:
+def create_player(player_config: dict[str, Any] | None = None) -> AudioPlayer | None:
     """
     根据配置字典创建 AudioPlayer 实例。
+
+    若运行环境缺少音频硬件或 PortAudio/sounddevice 依赖，
+    构建失败时将返回 ``None``（不抛异常），由上层弹性播放器切换到
+    备用通道（WebSocket / 文件），避免 TTS 能力被整体禁用。
 
     Args:
         player_config: 支持 sample_rate、channels、pcm_format、frames_per_buffer、
             play_queue_size、queue_timeout。
 
     Returns:
-        配置好的 AudioPlayer 实例。
+        配置好的 AudioPlayer 实例；不可用则为 None。
     """
     from core.tts.player import AudioPlayer
 
     cfg = player_config or {}
-    return AudioPlayer(
-        **{
-            k: v
-            for k, v in cfg.items()
-            if k in (
-                "sample_rate",
-                "channels",
-                "pcm_format",
-                "frames_per_buffer",
-                "play_queue_size",
-                "queue_timeout",
-            )
-        }
-    )
+    try:
+        return AudioPlayer(
+            **{
+                k: v
+                for k, v in cfg.items()
+                if k in (
+                    "sample_rate",
+                    "channels",
+                    "pcm_format",
+                    "frames_per_buffer",
+                    "play_queue_size",
+                    "queue_timeout",
+                )
+            }
+        )
+    except Exception as e:
+        _logger.warning("AudioPlayer 初始化失败（将使用备用音频通道）: %s", e)
+        return None
 
 
 def create_service(
@@ -116,7 +129,7 @@ def create_service(
 def create_from_config(
     config_path: str | Path = "data/config/main.yml",
     config_prefix: str = "cosmos.service.tts",
-) -> tuple[TTSService, AudioPlayer]:
+) -> tuple[TTSService, AudioPlayer | None]:
     """
     从外部配置文件创建 TTSService 与 AudioPlayer。
 
@@ -185,20 +198,17 @@ def create_from_config(
             max_age_seconds=cache_config.get("max_age_seconds", DEFAULT_CACHE_MAX_AGE),
         )
 
-    # 创建提供商实例
-    provider = TTSProviderFactory.create(provider_name, provider_config)
-
-    return (
-        TTSService(
-            provider=provider,
-            voice_config=voice_config,
-            prefetch_queue_size=prefetch_queue_size,
-            max_concurrent_creates=max_concurrent_creates,
-            prefetch_window=prefetch_window,
-            cache=cache,
-        ),
-        create_player(player_config),
+    # 复用 create_service 构建 TTSService，避免重复 provider 创建与参数映射
+    service = create_service(
+        provider_name=provider_name,
+        provider_config=provider_config,
+        voice_config=voice_config,
+        prefetch_queue_size=prefetch_queue_size,
+        max_concurrent_creates=max_concurrent_creates,
+        prefetch_window=prefetch_window,
+        cache=cache,
     )
+    return service, create_player(player_config)
 
 
 __all__ = [
@@ -213,6 +223,10 @@ __all__ = [
     "create_cache",
     "AudioPlayer",
     "AudioPlayerError",
+    "ResilientAudioPlayer",
+    "FileAudioSink",
+    "WebSocketAudioSink",
+    "AudioSink",
     "create_service",
     "create_player",
     "create_from_config",

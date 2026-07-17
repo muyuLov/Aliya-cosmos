@@ -13,7 +13,6 @@ from core.logger import get_logger
 from agent.agent import AliyaAgent
 from agent.tools.registry import ToolRegistry
 from agent.tools.reply import ReplyTool
-from agent.tools.tts_speak import TTSTool
 from agent.tools.memory_query import MemoryQueryTool
 
 logger = get_logger(__name__)
@@ -28,12 +27,12 @@ def build_agent(
     tts_service: Any | None = None,
     memory_manager: Any | None = None,
     audio_player: Any | None = None,
+    audio_relay: Any | None = None,
 ) -> AliyaAgent:
     registry = ToolRegistry()
     registry.register(ReplyTool())
     registry.register(MemoryQueryTool())
-    if tts_service is not None:
-        registry.register(TTSTool())
+    # 注：TTS 已由 Agent 在生成最终回复后自动播放，不再作为 LLM 工具
 
     return AliyaAgent(
         conversation_service=conversation_service,
@@ -42,6 +41,7 @@ def build_agent(
         send_message=send_message,
         tts_service=tts_service,
         audio_player=audio_player,
+        audio_relay=audio_relay,
     )
 
 
@@ -72,6 +72,7 @@ def create_handler(
                 agent = build_agent(
                     conversation_service=conv,
                     send_message=_send,
+                    audio_relay=_send,
                     tts_service=tts_service,
                     memory_manager=memory_manager,
                     audio_player=audio_player,

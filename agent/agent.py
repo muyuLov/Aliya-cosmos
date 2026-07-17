@@ -118,6 +118,7 @@ class AliyaAgent:
         send_message: Callable[[dict], Awaitable[None]] | None = None,
         tts_service: Any | None = None,
         audio_player: Any | None = None,
+        audio_relay: Callable[[dict], Awaitable[None]] | None = None,
         max_refine: int = _MAX_REFINE,
     ) -> None:
         self._conv = conversation_service
@@ -126,6 +127,7 @@ class AliyaAgent:
         self._send_message = send_message
         self._tts_service = tts_service
         self._audio_player = audio_player
+        self._audio_relay = audio_relay
         self._max_refine = max_refine
 
         self._progress_task: asyncio.Task | None = None
@@ -148,58 +150,54 @@ class AliyaAgent:
             reply_text = await self._conv.asend(text)
             result = parse_llm_response(reply_text)
 
-            if not result.tool_calls:
-                final_reply = result.reply
-                await self._notify({"type": "brain_complete", "reply": result.reply})
-                return
-
             final_reply = result.reply
             await self._notify({
                 "type": "brain_complete",
                 "reply": result.reply,
-                "has_tool_calls": True,
+                **({"has_tool_calls": True} if result.tool_calls else {}),
             })
 
-            ctx = ToolContext(
-                tts_service=self._tts_service,
-                audio_player=self._audio_player,
-                memory_manager=self._memory_manager,
-                send_message=self._send_message,
-            )
-
-            for refine_round in range(self._max_refine):
-                tool_results = await self._registry.dispatch_all(result.tool_calls, ctx)
-                if not tool_results:
-                    break
-
-                summary = self._registry.format_tool_summary(tool_results)
-                await self._conv.append_message(
-                    "assistant", f"[工具执行结果]\n{summary}",
-                    metadata={"injected": True, "prefix": _TOOL_RESULT_MARKER},
+            if result.tool_calls:
+                ctx = ToolContext(
+                    tts_service=self._tts_service,
+                    audio_player=self._audio_player,
+                    memory_manager=self._memory_manager,
+                    send_message=self._send_message,
                 )
 
-                await self._notify({
-                    "type": "brain_progress",
-                    "message": f"根据工具结果优化回复（第 {refine_round + 1} 轮）",
-                })
+                for refine_round in range(self._max_refine):
+                    tool_results = await self._registry.dispatch_all(result.tool_calls, ctx)
+                    if not tool_results:
+                        break
 
-                result = await self._think_with_context(
-                    "请根据以上工具执行结果生成最终回复。"
-                )
+                    summary = self._registry.format_tool_summary(tool_results)
+                    await self._conv.append_message(
+                        "assistant", f"[工具执行结果]\n{summary}",
+                        metadata={"injected": True, "prefix": _TOOL_RESULT_MARKER},
+                    )
 
-                final_reply = result.reply
-                await self._notify({
-                    "type": "brain_refine",
-                    "reply": result.reply,
-                })
+                    await self._notify({
+                        "type": "brain_progress",
+                        "message": f"根据工具结果优化回复（第 {refine_round + 1} 轮）",
+                    })
 
-                if not result.tool_calls:
-                    break
+                    result = await self._think_with_context(
+                        "请根据以上工具执行结果生成最终回复。"
+                    )
 
-                logger.debug(
-                    "refine 第 %d 轮仍有 %d 个工具调用",
-                    refine_round + 1, len(result.tool_calls),
-                )
+                    final_reply = result.reply
+                    await self._notify({
+                        "type": "brain_refine",
+                        "reply": result.reply,
+                    })
+
+                    if not result.tool_calls:
+                        break
+
+                    logger.debug(
+                        "refine 第 %d 轮仍有 %d 个工具调用",
+                        refine_round + 1, len(result.tool_calls),
+                    )
 
         except asyncio.CancelledError:
             logger.info("agent 处理被取消")
@@ -211,6 +209,10 @@ class AliyaAgent:
             if final_reply:
                 await self._save_memory(text, final_reply)
 
+            # 自动语音播放最终回复（失败不影响对话主流程）
+            if final_reply and self._tts_service:
+                await self._speak(final_reply)
+
             try:
                 await self._conv.discard_messages(_TOOL_RESULT_MARKER, _MAX_REFINE + 1)
             except Exception:
@@ -219,6 +221,21 @@ class AliyaAgent:
             if self._progress_task and not self._progress_task.done():
                 self._progress_task.cancel()
             self._progress_task = None
+
+    async def _speak(self, text: str) -> None:
+        """自动语音播放最终回复；任何异常都被吞掉，避免影响对话主流程。"""
+        try:
+            from agent.tools.tts_speak import speak_text
+
+            ctx = ToolContext(
+                tts_service=self._tts_service,
+                audio_player=self._audio_player,
+                send_message=self._send_message,
+                audio_relay=self._audio_relay,
+            )
+            await speak_text(text, ctx)
+        except Exception as e:
+            _logger.warning("TTS 自动播放失败（已忽略）: %s", e)
 
     async def _think_with_context(self, text: str) -> BrainResult:
         """利用本轮已注入的 context injection 进行 LLM 调用"""

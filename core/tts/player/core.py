@@ -133,91 +133,92 @@ class AudioPlayer:
         Raises:
             AudioPlayerError: 播放线程已报错时抛出。
         """
-        self._check_play_error()
+        async with self._drain_lock:
+            self._check_play_error()
 
-        # ---- 模式1：已确定为 MP3，累积数据并解码播放 ----
-        if self._is_mp3 is True:
-            self._mp3_buffer.extend(chunk)
-            if len(self._mp3_buffer) >= 65536 or len(chunk) == 0:
-                pcm_data = self._decode_mp3_stream(bytes(self._mp3_buffer))
-                self._mp3_buffer.clear()
-                if pcm_data:
-                    await self._enqueue(pcm_data)
-            return
-
-        # ---- 模式2：已确定为 PCM，检查是否遇到新段落 ----
-        if self._is_wav is False and self._is_mp3 is False:
-            if chunk[:4] == RIFF_MAGIC:
-                await self._flush_and_reset()
-            elif any(chunk[:2] == sync for sync in _MP3_SYNC_BYTES):
-                await self._flush_and_reset()
-            else:
-                await self._enqueue(chunk)
-            return
-
-        self._header_buf.extend(chunk)
-
-        if self._is_wav is None and self._is_mp3 is None:
-            if len(self._header_buf) < 4:
+            # ---- 模式1：已确定为 MP3，累积数据并解码播放 ----
+            if self._is_mp3 is True:
+                self._mp3_buffer.extend(chunk)
+                if len(self._mp3_buffer) >= 65536 or len(chunk) == 0:
+                    pcm_data = await self._decode_mp3_stream(bytes(self._mp3_buffer))
+                    self._mp3_buffer.clear()
+                    if pcm_data:
+                        await self._enqueue(pcm_data)
                 return
-            if any(self._header_buf[:2] == sync for sync in _MP3_SYNC_BYTES):
-                _logger.debug("检测到 MP3 格式，开始解码")
-                self._is_mp3 = True
-                self._mp3_buffer.extend(self._header_buf)
-                self._header_buf.clear()
-                return
-            if self._header_buf[:4] == RIFF_MAGIC:
-                self._is_wav = True
-            else:
-                self._is_wav = False
-                self._is_mp3 = False
-                self._start_pcm()
-                await self._enqueue(bytes(self._header_buf))
-                self._header_buf.clear()
-            return
 
-        # ---- 模式3：WAV 头部解析 ----
-        if self._is_wav is True:
-            if len(self._header_buf) >= 44:
-                data = bytes(self._header_buf)
-                try:
-                    fmt_info = parse_wav_header(data)
-                    pcm_start = fmt_info.pcm_start
-                    _logger.debug(
-                        "WAV 头部解析成功（增量） | buffered_bytes=%d | sample_rate=%d | channels=%d",
-                        len(self._header_buf),
-                        fmt_info.sample_rate,
-                        fmt_info.channels,
-                    )
-                    self._open_stream(
-                        fmt_info.sample_rate, fmt_info.channels, fmt_info.sample_width, fmt_info.pa_format
-                    )
-                    self._is_wav = False
-                    self._is_mp3 = False
-                    data = bytes(self._header_buf[pcm_start:])
-                    self._header_buf.clear()
-                    if data:
-                        await self._enqueue(data)
+            # ---- 模式2：已确定为 PCM，检查是否遇到新段落 ----
+            if self._is_wav is False and self._is_mp3 is False:
+                if chunk[:4] == RIFF_MAGIC:
+                    await self._flush_and_reset()
+                elif any(chunk[:2] == sync for sync in _MP3_SYNC_BYTES):
+                    await self._flush_and_reset()
+                else:
+                    await self._enqueue(chunk)
+                return
+
+            self._header_buf.extend(chunk)
+
+            if self._is_wav is None and self._is_mp3 is None:
+                if len(self._header_buf) < 4:
                     return
-                except Exception as e:
-                    if len(self._header_buf) < WAV_DETECT_SIZE:
-                        _logger.debug(
-                            "WAV 头部不完整，继续缓冲 | buffered_bytes=%d | reason=%s",
-                            len(self._header_buf),
-                            e,
-                        )
-                        return
-                    _logger.warning(
-                        "WAV 头部解析失败，回退到 PCM | buffered_bytes=%d | reason=%s",
-                        len(self._header_buf),
-                        e,
-                    )
+                if any(self._header_buf[:2] == sync for sync in _MP3_SYNC_BYTES):
+                    _logger.debug("检测到 MP3 格式，开始解码")
+                    self._is_mp3 = True
+                    self._mp3_buffer.extend(self._header_buf)
+                    self._header_buf.clear()
+                    return
+                if self._header_buf[:4] == RIFF_MAGIC:
+                    self._is_wav = True
+                else:
                     self._is_wav = False
                     self._is_mp3 = False
                     self._start_pcm()
                     await self._enqueue(bytes(self._header_buf))
                     self._header_buf.clear()
-                    return
+                return
+
+            # ---- 模式3：WAV 头部解析 ----
+            if self._is_wav is True:
+                if len(self._header_buf) >= 44:
+                    data = bytes(self._header_buf)
+                    try:
+                        fmt_info = parse_wav_header(data)
+                        pcm_start = fmt_info.pcm_start
+                        _logger.debug(
+                            "WAV 头部解析成功（增量） | buffered_bytes=%d | sample_rate=%d | channels=%d",
+                            len(self._header_buf),
+                            fmt_info.sample_rate,
+                            fmt_info.channels,
+                        )
+                        self._open_stream(
+                            fmt_info.sample_rate, fmt_info.channels, fmt_info.sample_width, fmt_info.pa_format
+                        )
+                        self._is_wav = False
+                        self._is_mp3 = False
+                        data = bytes(self._header_buf[pcm_start:])
+                        self._header_buf.clear()
+                        if data:
+                            await self._enqueue(data)
+                        return
+                    except Exception as e:
+                        if len(self._header_buf) < WAV_DETECT_SIZE:
+                            _logger.debug(
+                                "WAV 头部不完整，继续缓冲 | buffered_bytes=%d | reason=%s",
+                                len(self._header_buf),
+                                e,
+                            )
+                            return
+                        _logger.warning(
+                            "WAV 头部解析失败，回退到 PCM | buffered_bytes=%d | reason=%s",
+                            len(self._header_buf),
+                            e,
+                        )
+                        self._is_wav = False
+                        self._is_mp3 = False
+                        self._start_pcm()
+                        await self._enqueue(bytes(self._header_buf))
+                        self._header_buf.clear()
+                        return
 
     async def _flush_and_reset(self) -> None:
         """等待当前段播放完毕，然后重置格式状态以接受下一段音频。"""
@@ -253,7 +254,7 @@ class AudioPlayer:
         async with self._drain_lock:
             # 处理残留的 MP3 数据
             if self._is_mp3 is True and self._mp3_buffer:
-                pcm_data = self._decode_mp3_stream(bytes(self._mp3_buffer))
+                pcm_data = await self._decode_mp3_stream(bytes(self._mp3_buffer))
                 self._mp3_buffer.clear()
                 if pcm_data:
                     await self._enqueue(pcm_data)
@@ -278,7 +279,7 @@ class AudioPlayer:
                         if any(self._header_buf[:2] == sync for sync in _MP3_SYNC_BYTES):
                             self._is_mp3 = True
                             self._mp3_buffer.extend(self._header_buf)
-                            pcm_data = self._decode_mp3_stream(bytes(self._mp3_buffer))
+                            pcm_data = await self._decode_mp3_stream(bytes(self._mp3_buffer))
                             self._mp3_buffer.clear()
                             self._header_buf.clear()
                             if pcm_data:
@@ -372,7 +373,12 @@ class AudioPlayer:
         self._current_sample_width = sample_width
         self._current_dtype = dtype
 
-        self._stream.start()
+        try:
+            self._stream.start()
+        except Exception:
+            # 启动失败需关闭已创建的流，避免 sounddevice 资源泄漏
+            self._close_stream()
+            raise
 
         self._play_thread = threading.Thread(
             target=self._play_loop,
@@ -470,11 +476,11 @@ class AudioPlayer:
             _logger.warning("MP3 探查失败，回退到默认值 | reason=%s", e)
             return 24000, 1
 
-    def _decode_mp3_stream(self, mp3_data: bytes) -> bytes | None:
-        """使用 ffmpeg 解码 MP3 数据为 PCM。"""
+    @staticmethod
+    def _ffmpeg_decode_sync(mp3_data: bytes) -> bytes | None:
+        """同步 ffmpeg 解码（在 executor 线程中执行，避免阻塞事件循环）。"""
         if not mp3_data:
             return None
-
         try:
             import subprocess as sp
 
@@ -485,7 +491,7 @@ class AudioPlayer:
                 ffmpeg_path, _ = portable_ffmpeg.get_ffmpeg()
             except ImportError:
                 pass
-            
+
             # 回退到 imageio-ffmpeg
             if not ffmpeg_path:
                 ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
@@ -514,27 +520,38 @@ class AudioPlayer:
                 )
                 return None
 
-            pcm_data = stdout
-            _logger.debug("MP3 解码成功 | mp3_bytes=%d | pcm_bytes=%d", len(mp3_data), len(pcm_data))
-
-            if self._stream is None:
-                sample_rate, channels = self._probe_mp3(mp3_data)
-                sample_width = 2  # s16le = 16-bit = 2 bytes
-                self._mp3_sample_width = sample_width
-                _logger.debug(
-                    "MP3 流参数 | sample_rate=%d | channels=%d",
-                    sample_rate,
-                    channels,
-                )
-                self._open_stream(sample_rate, channels, sample_width, "int16")
-
-            return pcm_data
+            _logger.debug("MP3 解码成功 | mp3_bytes=%d | pcm_bytes=%d", len(mp3_data), len(stdout))
+            return stdout
         except sp.TimeoutExpired:
             _logger.warning("MP3 解码超时")
             return None
         except Exception as e:
             _logger.warning("MP3 解码异常 | reason=%s", e)
             return None
+
+    async def _decode_mp3_stream(self, mp3_data: bytes) -> bytes | None:
+        """使用 ffmpeg 解码 MP3 数据为 PCM。
+
+        解码与采样率探测均在 executor 线程中执行，避免同步 subprocess
+        阻塞 asyncio 事件循环（发现 A）。流创建仍在事件循环线程进行。
+        """
+        if not mp3_data:
+            return None
+        loop = asyncio.get_running_loop()
+        pcm_data = await loop.run_in_executor(None, self._ffmpeg_decode_sync, mp3_data)
+        if pcm_data is None:
+            return None
+        if self._stream is None:
+            sample_rate, channels = await loop.run_in_executor(None, self._probe_mp3, mp3_data)
+            sample_width = 2  # s16le = 16-bit = 2 bytes
+            self._mp3_sample_width = sample_width
+            _logger.debug(
+                "MP3 流参数 | sample_rate=%d | channels=%d",
+                sample_rate,
+                channels,
+            )
+            self._open_stream(sample_rate, channels, sample_width, "int16")
+        return pcm_data
 
     def _play_loop(self) -> None:
         """

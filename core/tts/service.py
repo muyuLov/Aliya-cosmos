@@ -281,6 +281,16 @@ class TTSService:
                     queue.put_nowait(e)
                 except asyncio.QueueFull:
                     await queue.put(e)
+            except Exception as e:
+                # 兜底：未被预期异常类型覆盖的错误（如超时、缓存后端错误）也必须
+                # 投递到队列，否则消费端 queue.get() 会永久挂起，导致合成协程卡死
+                _logger.error(
+                    "TTS 分段任务异常 | segment 预取失败 | error=%s", e, exc_info=True
+                )
+                try:
+                    queue.put_nowait(e)
+                except asyncio.QueueFull:
+                    await queue.put(e)
             finally:
                 if session_id is not None:
                     try:

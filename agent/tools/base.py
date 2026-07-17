@@ -19,6 +19,8 @@ class ToolContext:
     audio_player: Any | None = None
     memory_manager: Any | None = None
     send_message: Callable[[dict], Awaitable[None]] | None = None
+    # 音频转发通道（仅 WebSocket 模式可用）；控制台模式为 None，避免向终端推送音频
+    audio_relay: Callable[[dict], Awaitable[None]] | None = None
 
 
 class BaseTool(Protocol):

@@ -45,7 +45,6 @@ _check_venv()
 from agent.agent import AliyaAgent
 from agent.tools.registry import ToolRegistry
 from agent.tools.reply import ReplyTool
-from agent.tools.tts_speak import TTSTool
 from agent.tools.memory_query import MemoryQueryTool
 from agent.ws import create_handler
 from core.config import get_config_instance
@@ -98,7 +97,6 @@ def _init_components(config_path: str = "data/config/main.yml"):
     audio_player: Any | None = None
     try:
         tts_service, audio_player = create_tts(config_path=config_path)
-        registry.register(TTSTool())
     except Exception as e:
         logger.warning("TTS 初始化失败（跳过）: %s", e)
 
@@ -124,6 +122,7 @@ async def chat_loop():
             send_message=console.send_json,
             tts_service=tts_service,
             audio_player=audio_player,
+            audio_relay=None,
         )
         print("Aliya 聊天模式（输入 /exit 退出, /clear 清空历史）\n")
         while True:
