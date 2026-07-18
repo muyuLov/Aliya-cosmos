@@ -108,7 +108,10 @@ class TTSService:
         # 单句直接合成，跳过分段开销；多句走并发流水线
         segments = split_text(merged.text)
         source: AsyncIterator[bytes]
-        if len(segments) == 1:
+        if len(segments) == 0:
+            _logger.debug("TTS 空文本，跳过合成 | provider=%s", self.provider.provider_name)
+            return
+        elif len(segments) == 1:
             source = self._synthesize_single(merged)
         else:
             source = self._synthesize_segmented(merged)

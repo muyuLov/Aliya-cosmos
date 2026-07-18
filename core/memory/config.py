@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from core.config import get_config_instance
+from core.config.env_resolver import mask_sensitive
 from core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -181,6 +182,13 @@ def _load_grag_config(config_path: str) -> GRAGConfig:
         password=neo4j_password,
         database=neo4j_database,
     )
+
+    _log_masked_cfg = mask_sensitive({
+        "uri": neo4j_uri,
+        "user": neo4j_user,
+        "password": neo4j_password,
+    })
+    logger.debug("Neo4j 连接配置: %s", _log_masked_cfg)
 
     # 加载提取器配置
     extractor_cfg = cfg.get("cosmos.service.grag.extractor") or {}

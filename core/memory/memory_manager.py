@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from core.logger import get_logger
 
 from core.memory.config import get_grag_config
-from core.memory.exceptions import GRAGNotEnabledError, GRAGError
+# GRAG 异常类（预备供未来细粒度异常处理使用）
 from core.memory import extractor, graph, rag_query, task_manager as task_manager_module
 
 logger = get_logger(__name__)
@@ -169,12 +169,6 @@ class GRAGMemoryManager:
         while self._context_char_count > _MAX_CONTEXT_CHARS and self.recent_context:
             removed = self.recent_context.popleft()
             self._context_char_count -= len(removed)
-
-    def _cache_mark_done(self, task_id: str) -> None:
-        """标记任务完成到提取缓存（基于task_id，支持多时间链）"""
-        # 不再使用文本哈希进行缓存，改为简单的完成状态跟踪
-        # 如果需要缓存优化，可以在这里实现基于task_id的缓存逻辑
-        pass
 
     async def _submit_extraction_task(
         self, text: str, session_id: str = "",

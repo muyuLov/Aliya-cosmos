@@ -4,12 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-import logging
 import os
+import time
 from pathlib import Path
 from typing import Any
-
-import numpy as np
 
 from core.logger import get_logger
 from core.tts.models import TTSRequest, VoiceConfig
@@ -124,8 +122,6 @@ class TTSCache:
         # 本地文件缓存
         cache_file = self._get_file_path(cache_key)
         if cache_file.exists():
-            import time
-
             # 检查是否过期
             age = time.time() - cache_file.stat().st_mtime
             if age > self._max_age_seconds:
@@ -151,8 +147,8 @@ class TTSCache:
                             self._max_age_seconds,
                             data,
                         )
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        _logger.debug("TTS 缓存写回 Redis 失败（可忽略）| key=%s | error=%s", cache_key, e)
                 return data
             except OSError as e:
                 _logger.warning("读取缓存文件失败 | file=%s | error=%s", cache_file, e)

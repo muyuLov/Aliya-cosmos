@@ -235,7 +235,7 @@ class AliyaAgent:
             )
             await speak_text(text, ctx)
         except Exception as e:
-            _logger.warning("TTS 自动播放失败（已忽略）: %s", e)
+            logger.warning("TTS 自动播放失败（已忽略）: %s", e)
 
     async def _think_with_context(self, text: str) -> BrainResult:
         """利用本轮已注入的 context injection 进行 LLM 调用"""
@@ -244,7 +244,14 @@ class AliyaAgent:
 
     async def handle_clear_history(self, confirm: bool = False) -> None:
         if confirm:
-            reply = input("确认清空历史？(y/n): ").strip().lower()
+            # 仅终端模式下可用 interactive 确认；WS 模式下跳过确认直接执行
+            try:
+                loop = asyncio.get_running_loop()
+                reply = await loop.run_in_executor(
+                    None, lambda: input("确认清空历史？(y/n): ").strip().lower()
+                )
+            except (RuntimeError, EOFError):
+                reply = "y"
             if reply != "y":
                 return
         await self._conv.clear_history()

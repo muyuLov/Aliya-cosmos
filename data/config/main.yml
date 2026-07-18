@@ -36,7 +36,7 @@ cosmos:
       neo4j:
         uri: bolt://localhost:7687      # Neo4j 连接地址
         user: neo4j                     # 用户名
-        password: Aliya_neo4j           # 密码
+        password: ${NEO4J_PASSWORD:Aliya_neo4j}  # 密码（支持环境变量覆盖，默认 Aliya_neo4j）
         database: neo4j                 # 数据库名
       extractor:
         max_retries: 2                 # 五元组提取最大重试次数

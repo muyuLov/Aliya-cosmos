@@ -67,7 +67,7 @@ ANSWER_PROMPT_TEMPLATE = """基于以下从知识图谱检索到的五元组关�
 
 请根据检索到的关系，自然地回答问题。
 如果检索结果与问题相关，请基于事实回答。
-       如果检索结果不相关，请说明无法从已知信息中回答。"""
+如果检索结果不相关，请说明无法从已知信息中回答。"""
 
 
 def _extract_time_range(text: str) -> Optional[Tuple[str, str]]:
@@ -128,21 +128,24 @@ def _extract_time_range(text: str) -> Optional[Tuple[str, str]]:
 async def _query_by_time_range(
     start_date: str, end_date: str, limit: int = 200
 ) -> List[QuintupleType]:
-    """按时间范围从图谱召回五元组（user 与 aliya 两条时间链）。
+    """按时间范围从图谱并行召回五元组（user 与 aliya 两条时间链）。
 
     aliya 时间链落库日期已 +1000 年，query_quintuples_by_day 内部会自动偏移，
     因此两条链都传入正常时间范围即可。
     """
-    results: List[QuintupleType] = []
-    for tl in ("user", "aliya"):
+    async def _query_tl(tl: str) -> List[QuintupleType]:
         try:
-            q = await asyncio.to_thread(
+            return await asyncio.to_thread(
                 graph.query_quintuples_by_day, tl, start_date, end_date, limit
             )
-            results.extend(q)
         except Exception as e:
             logger.warning("按时间范围查询失败 (timeline=%s): %s", tl, e)
-    return results
+            return []
+
+    results = await asyncio.gather(
+        _query_tl("user"), _query_tl("aliya"),
+    )
+    return [r for sublist in results for r in sublist]
 
 
 class RAGQueryEngine:

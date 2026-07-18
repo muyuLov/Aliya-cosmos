@@ -108,13 +108,6 @@ def service_error_handler(
     return decorator
 
 
-__all__ = [
-    "catch_context",
-    "service_error_handler",
-    "async_service_error_handler",
-]
-
-
 def async_service_error_handler(
     default_return: Any = None,
     logger: Any | None = None,
@@ -155,3 +148,10 @@ def async_service_error_handler(
         return wrapper
 
     return decorator
+
+
+__all__ = [
+    "catch_context",
+    "service_error_handler",
+    "async_service_error_handler",
+]

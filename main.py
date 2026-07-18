@@ -29,14 +29,20 @@ def _check_venv() -> None:
         return
     venv_path = Path(__file__).parent / ".venv"
     if venv_path.is_dir():
-        venv_python = venv_path / "bin" / "python"
+        # Windows: Scripts/python.exe; Unix: bin/python
+        venv_python = venv_path / "Scripts" / "python.exe"
+        if not venv_python.exists():
+            venv_python = venv_path / "bin" / "python"
         if venv_python.exists():
             os.execv(str(venv_python), [str(venv_python)] + sys.argv)
+            return  # execv 成功则不执行后续
     raise SystemExit(
-        "错误：未检测到虚拟环境。请先运行：\n"
-        "  source .venv/bin/activate\n"
-        "或使用虚拟环境的 Python 启动：\n"
-        f"  {venv_path}/bin/python main.py"
+        "错误：未检测到虚拟环境。请先激活虚拟环境后重试。\n"
+        "  Windows: .venv\\Scripts\\activate\n"
+        "  Unix:    source .venv/bin/activate\n"
+        f"或直接使用虚拟环境的 Python 启动：\n"
+        f"  {venv_path / 'Scripts' / 'python.exe'} main.py (Windows)\n"
+        f"  {venv_path / 'bin' / 'python'} main.py (Unix)"
     )
 
 

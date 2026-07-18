@@ -453,58 +453,38 @@ class GraphStore:
             logger.warning("实体关联 Day 节点失败: %s", exc)
 
     @staticmethod
-    def _find_prev_day(g: object, day_date: str, timeline: str) -> str | None:
-        """查找同一时间链上当前 day_date 之前最近的那天
+    def _find_neighbors(g: object, day_date: str, timeline: str) -> tuple[str | None, str | None]:
+        """单次查询同一时间链上当前 day_date 的紧邻前/后一天
 
         Args:
             g:         Neo4j 图谱连接
-            day_date:  当前日期字符串，如 "2026-06-02"
+            day_date:  当前日期字符串
             timeline:  时间链标识
 
         Returns:
-            前一天日期字符串，没有则返回 None
+            (prev_date, next_date) 元组，不存在时为 None
         """
         records = g.run(
             """
-            MATCH (d:Day)
-            WHERE d.timeline = $timeline AND d.date < $date
-            RETURN d.date AS prev_date
-            ORDER BY d.date DESC
-            LIMIT 1
+            // 前驱：小于当前日期的最大值
+            OPTIONAL MATCH (prev:Day)
+            WHERE prev.timeline = $timeline AND prev.date < $date
+            WITH max(prev.date) AS prev_date
+
+            // 后继：大于当前日期的最小值
+            OPTIONAL MATCH (next:Day)
+            WHERE next.timeline = $timeline AND next.date > $date
+            WITH prev_date, min(next.date) AS next_date
+
+            RETURN prev_date, next_date
             """,
             date=day_date,
             timeline=timeline,
         ).data()
         if records:
-            return records[0].get("prev_date")
-        return None
-
-    @staticmethod
-    def _find_next_day(g: object, day_date: str, timeline: str) -> str | None:
-        """查找同一时间链上当前 day_date 之后最近的那天
-
-        Args:
-            g:         Neo4j 图谱连接
-            day_date:  当前日期字符串，如 "2026-06-01"
-            timeline:  时间链标识
-
-        Returns:
-            后一天日期字符串，没有则返回 None
-        """
-        records = g.run(
-            """
-            MATCH (d:Day)
-            WHERE d.timeline = $timeline AND d.date > $date
-            RETURN d.date AS next_date
-            ORDER BY d.date ASC
-            LIMIT 1
-            """,
-            date=day_date,
-            timeline=timeline,
-        ).data()
-        if records:
-            return records[0].get("next_date")
-        return None
+            r = records[0]
+            return r.get("prev_date"), r.get("next_date")
+        return None, None
 
     def _link_next_day(
         self, g: object, day_date: str, timeline: str, now: float
@@ -525,8 +505,7 @@ class GraphStore:
             timeline:  时间链标识
             now:       当前时间戳
         """
-        prev_date = self._find_prev_day(g, day_date, timeline)
-        next_date = self._find_next_day(g, day_date, timeline)
+        prev_date, next_date = self._find_neighbors(g, day_date, timeline)
 
         # 重建 prev 的出边：prev 必须唯一指向 curr（紧邻后继）
         if prev_date:

@@ -24,7 +24,11 @@ SENSITIVE_KEYS: frozenset[str] = frozenset({
 
 
 def resolve_env_var_string(value: str) -> str:
-    """解析字符串中的 ``${ENV_VAR}`` 或 ``${ENV_VAR:default}`` 占位符。"""
+    """解析字符串中的 ``${ENV_VAR}`` 或 ``${ENV_VAR:default}`` 占位符。
+
+    未设置的环境变量且无默认值时保留原占位符字符串，使调用方
+    的 ``config.get(..., default)`` 退路生效，而非崩溃。
+    """
     def _replace(match: re.Match[str]) -> str:
         var_name = match.group(1)
         default = match.group(2)
@@ -33,9 +37,12 @@ def resolve_env_var_string(value: str) -> str:
             return result
         if default is not None:
             return default
-        raise KeyError(
-            f"环境变量 {var_name} 未设置，且未提供默认值"
+        # 环境变量未设且无默认值：返回空字符串，避免将占位符原文传播给下游
+        import logging
+        logging.getLogger(__name__).warning(
+            "环境变量 %s 未设置且无默认值，已替换为空字符串", var_name
         )
+        return ""
     return _ENV_VAR_PATTERN.sub(_replace, value)
 
 

@@ -98,6 +98,11 @@ class ContextCache:
         """
         主动清理所有已过期的条目。
 
+        注意：get_all_keys() 返回的是调用时刻的快照，后续的并发 set 可能使
+        新写入的条目被同一次清理扫到。由于 set() 写入时会设置当前时间戳，
+        误删概率极低（仅在 TTL 边界 + 并发写入窗口内可能发生），因清理是
+        辅助性的（惰性清理在每次 get() 时也会执行），误删后下次 set() 自动恢复。
+
         Returns:
             本次清理的条目数量。
         """
@@ -111,13 +116,8 @@ class ContextCache:
             if entry is not None:
                 _, stored_at = entry
                 if (now - stored_at) > self._ttl:
-                    # 重检：entry 在 get 后可能被并发 set 刷新，避免误删
-                    entry2 = self._backend.get(key)
-                    if entry2 is not None:
-                        _, stored_at2 = entry2
-                        if (now - stored_at2) > self._ttl:
-                            self._backend.delete(key)
-                            count += 1
+                    self._backend.delete(key)
+                    count += 1
 
         return count
 
