@@ -26,6 +26,11 @@ class DeepSeekProvider(OpenAICompatibleProvider):
     def provider_name(self) -> str:
         return "deepseek"
 
+    @property
+    def supports_reasoning(self) -> bool:
+        """DeepSeek API 始终支持思维链推理 token 计数。"""
+        return True
+
     def _build_client(self, config: dict[str, Any]) -> AsyncOpenAI:
         return AsyncOpenAI(
             api_key=config.get("api_key") or config.get("key", ""),

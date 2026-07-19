@@ -1,27 +1,19 @@
 {
-    "_comment": "LLM 提供商配置（通过 main.yml 中的 providers.name 切换使用哪个）",
-    "_usage": "支持 ${ENV_VAR} 和 ${ENV_VAR:default} 语法引用系统环境变量",
-
     "deepseek": {
-        "_comment": "DeepSeek 在线 API — api_key 通过环境变量 DEEPSEEK_API_KEY 设置",
         "url": "https://api.deepseek.com",
         "api_key": "${DEEPSEEK_API_KEY}",
         "model": "deepseek-v4-flash",
         "max_retries": 3,
         "timeout": 60
     },
-
     "lmstudio": {
-        "_comment": "LM Studio 本地服务 — 本地无需认证",
         "url": "http://localhost:1234",
         "api_key": "lm-studio",
         "model": "deepseek-r1-0528-qwen3-8b@q4_k_m",
         "max_retries": 3,
         "timeout": 60
     },
-
     "ollama": {
-        "_comment": "Ollama 本地服务 — 本地无需认证",
         "url": "http://localhost:11434",
         "api_key": "",
         "model": "qwen2.5-7b-instruct",

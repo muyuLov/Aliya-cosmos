@@ -1,14 +1,12 @@
-"""Agent 模块
+"""Agent 模块"""
 
-架构：
-  agent/agent.py   — AliyaAgent 主编排器（含 LLM 思考、JSON 解析）
-  agent/ws.py      — WebSocket 端点处理器
-  agent/tools/     — 工具系统（注册、回复、TTS）
-"""
-
-from agent.agent import AliyaAgent, BrainResult
+from agent.agent import AgentConfig, AgentState, AliyaAgent, BrainResult, agent_config_from_yaml, parse_llm_response
 
 __all__ = [
+    "AgentConfig",
+    "AgentState",
     "AliyaAgent",
     "BrainResult",
+    "agent_config_from_yaml",
+    "parse_llm_response",
 ]

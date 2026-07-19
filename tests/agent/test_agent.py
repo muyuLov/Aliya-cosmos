@@ -1,10 +1,16 @@
-"""测试 Agent 核心逻辑：LLM 响应解析、BrainResult 构造"""
+"""测试 Agent 核心逻辑：LLM 响应解析、状态机、AgentConfig"""
 
 from __future__ import annotations
 
 import pytest
 
-from agent.agent import BrainResult, parse_llm_response
+from agent.agent import (
+    AgentConfig,
+    AgentState,
+    BrainResult,
+    AliyaAgent,
+    parse_llm_response,
+)
 
 
 class TestParseLlmResponse:
@@ -89,6 +95,13 @@ class TestParseLlmResponse:
         assert len(result.tool_calls) == 1
         assert result.tool_calls[0]["name"] == "memory_query"
 
+    def test_thought_with_newlines(self):
+        """多行 thought 内容（需要 re.DOTALL）"""
+        raw = '''{"reply": "好的", "thought": "步骤1：分析\n步骤2：拆解\n步骤3：输出"}'''
+        result = parse_llm_response(raw)
+        assert "步骤2" in result.thought
+        assert result.reply == "好的"
+
 
 class TestBrainResult:
     def test_default_tool_calls_empty(self):
@@ -98,3 +111,68 @@ class TestBrainResult:
     def test_default_finish_reason(self):
         br = BrainResult(reply="test")
         assert br.finish_reason == "stop"
+
+    def test_turn_default(self):
+        br = BrainResult(reply="test")
+        assert br.turn == 0
+
+    def test_turn_explicit(self):
+        br = BrainResult(reply="test", turn=3)
+        assert br.turn == 3
+
+
+class TestAgentConfig:
+    def test_default_config(self):
+        cfg = AgentConfig()
+        assert cfg.max_turns == 10
+        assert cfg.progress_interval == 2.0
+        assert cfg.max_refine_accum == 10
+        assert cfg.tool_format_version == "cot"
+
+    def test_custom_config(self):
+        cfg = AgentConfig(max_turns=20, progress_interval=5.0)
+        assert cfg.max_turns == 20
+        assert cfg.progress_interval == 5.0
+
+
+class TestAgentState:
+    def test_state_values(self):
+        assert AgentState.IDLE.value == "idle"
+        assert AgentState.THINKING.value == "thinking"
+        assert AgentState.COMPLETED.value == "completed"
+        assert AgentState.ERROR.value == "error"
+
+    def test_state_cycle_order(self):
+        """验证状态枚举之间的逻辑关系"""
+        states = [
+            AgentState.IDLE,
+            AgentState.CONTEXT_ASSEMBLY,
+            AgentState.THINKING,
+            AgentState.TOOL_EXECUTION,
+            AgentState.OBSERVING,
+            AgentState.COMPLETED,
+            AgentState.ERROR,
+            AgentState.CANCELLED,
+        ]
+        assert len(states) == 8
+        assert all(isinstance(s, AgentState) for s in states)
+
+
+class TestAgentConstruction:
+    """测试 AliyaAgent 构造（使用 mock）"""
+
+    @pytest.mark.asyncio
+    async def test_initial_state_is_idle(self, mocker):
+        conv = mocker.AsyncMock()
+        reg = mocker.MagicMock()
+        agent = AliyaAgent(conversation_service=conv, tool_registry=reg)
+        assert agent.state == AgentState.IDLE
+        assert agent.turn == 0
+
+    @pytest.mark.asyncio
+    async def test_custom_config(self, mocker):
+        conv = mocker.AsyncMock()
+        reg = mocker.MagicMock()
+        cfg = AgentConfig(max_turns=5)
+        agent = AliyaAgent(conversation_service=conv, tool_registry=reg, config=cfg)
+        assert agent._config.max_turns == 5

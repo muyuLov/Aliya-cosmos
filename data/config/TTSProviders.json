@@ -1,17 +1,12 @@
 {
-    "_comment": "TTS 语音合成提供商配置（通过 main.yml 中的 providers.name 切换使用哪个）",
-
     "astra": {
-        "_comment": "AstraTTS Docker 自建服务（需运行 docker-compose up -d）",
         "api_url": "http://127.0.0.1:5000",
         "default_avatar_id": "chenxing",
         "default_reference_id": null,
         "chunk_size": 4096,
         "timeout": 30
     },
-
     "edge": {
-        "_comment": "EdgeTTS 微软在线服务（无需 Docker，联网即可使用）",
         "voice": "zh-CN-XiaoxiaoNeural",
         "rate": "+0%",
         "volume": "+0%",

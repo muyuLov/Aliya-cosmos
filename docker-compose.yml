@@ -1,0 +1,119 @@
+# =====================================================================
+# Aliya-cosmos — 基础编排（开发 / 生产共用）
+# 使用方式：
+#   开发：docker compose up                       （自动合并 docker-compose.override.yml）
+#   生产：docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+# 环境变量来自同目录的 .env（由 .env.example 复制而来，已被 git 忽略）
+# =====================================================================
+name: aliya-cosmos
+
+services:
+  # ── 主应用：Aliya Agent WebSocket 服务 ──────────────────────────
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+      args:
+        UV_VERSION: 0.7.13
+    image: aliya-cosmos:${TAG:-latest}
+    container_name: aliya-cosmos-app
+    # 运行所需的环境变量（密钥来自 .env，见 env_file）
+    env_file:
+      - .env
+    environment:
+      WS_HOST: "0.0.0.0"
+      WS_PORT: "8765"
+      NEO4J_HOST: "neo4j"
+      NEO4J_PORT: "7687"
+      NEO4J_PASSWORD: "${NEO4J_PASSWORD:-Aliya_neo4j}"
+      DEEPSEEK_API_KEY: "${DEEPSEEK_API_KEY}"
+    ports:
+      - "${APP_PORT:-8765}:8765"
+    networks:
+      - aliya-net
+    depends_on:
+      neo4j:
+        condition: service_healthy
+    restart: unless-stopped
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,socket,sys; s=socket.socket(); s.settimeout(3); s.connect(('127.0.0.1', int(os.environ.get('WS_PORT','8765')))); s.close()"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ── 图数据库：Neo4j（GRAG 记忆系统）──────────────────────────
+  neo4j:
+    # 固定小版本以保证可复现；如需升级请同步更新
+    image: neo4j:5.26
+    container_name: aliya-cosmos-neo4j
+    volumes:
+      - neo4j-data:/data
+      - neo4j-logs:/logs
+    environment:
+      NEO4J_AUTH: "neo4j/${NEO4J_PASSWORD:-Aliya_neo4j}"
+      # 限制堆内存，避免无上限占用宿主机
+      NEO4J_dbms_memory_heap_initial__size: "256m"
+      NEO4J_dbms_memory_heap_max__size: "512m"
+    ports:
+      - "${NEO4J_BROWSER_PORT:-7474}:7474"
+      - "${NEO4J_PORT:-7687}:7687"
+    networks:
+      - aliya-net
+    restart: unless-stopped
+    stop_grace_period: 30s
+    healthcheck:
+      # Neo4j 镜像自带 curl，优先用 HTTP 端点探测；wget 兜底
+      test: ["CMD-SHELL", "curl -fsS http://localhost:7474 >/dev/null 2>&1 || wget -q -O /dev/null http://localhost:7474 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      start_period: 40s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1g
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ── 可选：AstraTTS 自建语音合成服务 ──────────────────────────
+  # 默认 TTS 提供商为 edge（联网即用，无需此服务）。
+  # 仅当提供 data/AstraTTS/Dockerfile 后，用 --profile tts 启用：
+  #   docker compose --profile tts up -d
+  astratts:
+    image: astratts-server:latest
+    build:
+      context: ./data/AstraTTS
+      dockerfile: Dockerfile
+    container_name: aliya-cosmos-astratts
+    profiles:
+      - tts
+    ports:
+      - "${ASTRA_PORT:-5000}:5000"
+    networks:
+      - aliya-net
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  neo4j-data:
+  neo4j-logs:
+
+networks:
+  aliya-net:
+    driver: bridge

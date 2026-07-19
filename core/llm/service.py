@@ -86,6 +86,9 @@ class ConversationService:
             self._context.system_prompt = system_prompt
             self._save()
 
+        # 上轮响应的 reasoning_content（DeepSeek 思考模式专有）
+        self._last_reasoning_content: str = ""
+
     # ── 上下文管理器协议 ──────────────────────────────────────────────────────
 
     async def __aenter__(self) -> "ConversationService":
@@ -97,6 +100,29 @@ class ConversationService:
     @property
     def usage(self) -> TokenUsage:
         return self._usage
+
+    @property
+    def supports_reasoning(self) -> bool:
+        """底层 LLM 提供商是否支持思维链/推理特性（reasoning_tokens 计数）。"""
+        return self._provider.supports_reasoning
+
+    @property
+    def supports_thinking(self) -> bool:
+        """底层 LLM 提供商是否支持思考模式（thinking mode / reasoning_content）。
+
+        与 ``supports_reasoning`` 的区别：
+        - supports_reasoning：API 响应中是否包含 reasoning_tokens（token 级计数）
+        - supports_thinking：API 是否支持思考模式（输出完整的 reasoning_content 文本）
+        """
+        from core.llm.providers.openai_compatible import OpenAICompatibleProvider
+        if isinstance(self._provider, OpenAICompatibleProvider):
+            return self._provider.supports_thinking
+        return False
+
+    @property
+    def last_reasoning_content(self) -> str:
+        """上轮 LLM 响应的思维链推理内容（仅思考模式下有值）。"""
+        return self._last_reasoning_content
 
     async def get_usage(self) -> TokenUsage:
         """持锁获取累计 token 用量。"""
@@ -219,6 +245,9 @@ class ConversationService:
         直接调用 ``provider.async_chat_completion()``，不阻塞事件循环。
         失败时自动重试最多 max_retries 次，退避间隔为 1s / 2s / 4s ...
 
+        如果底层提供商支持思考模式（thinking mode），会自动启用
+        并捕获 ``reasoning_content`` 通过 ``last_reasoning_content`` 暴露。
+
         Args:
             user_input: 用户输入文本。
             max_retries: 最大重试次数，默认 3。
@@ -236,11 +265,19 @@ class ConversationService:
         messages = await self._prepare_request(user_input, add_to_history=add_to_history)
         request = ChatRequest(messages=messages, model=self._provider.model, **kwargs)
 
+        # 每次调用开始时清除上一轮思考内容，避免失败重试场景下残留旧值
+        self._last_reasoning_content = ""
+
+        # 思考模式自动启用：仅当 provider 支持且用户未显式禁用时
+        if self.supports_thinking and request.thinking is None:
+            request.thinking = {"type": "enabled"}
+
         logger.debug(
-            "异步发送对话请求 | provider=%s | messages=%d | max_retries=%d",
+            "异步发送对话请求 | provider=%s | messages=%d | max_retries=%d | thinking=%s",
             self._provider.provider_name,
             len(messages),
             max_retries,
+            request.thinking,
         )
 
         last_error: LLMRequestError | None = None
@@ -250,11 +287,12 @@ class ConversationService:
                 try:
                     response = await self._provider.async_chat_completion(request)
                     await self._commit_response(response.content, response.usage)
+                    self._last_reasoning_content = response.reasoning_content
 
                     logger.debug(
                         "收到异步对话响应 | attempt=%d | finish_reason=%s | length=%d"
                         " | prompt=%d | completion=%d | total=%d"
-                        " | cache_hit=%d | cache_miss=%d | reasoning=%d",
+                        " | cache_hit=%d | cache_miss=%d | reasoning=%d | reasoning_content_len=%d",
                         attempt + 1,
                         response.finish_reason,
                         len(response.content),
@@ -264,6 +302,7 @@ class ConversationService:
                         response.usage.prompt_cache_hit_tokens,
                         response.usage.prompt_cache_miss_tokens,
                         response.usage.reasoning_tokens,
+                        len(response.reasoning_content),
                     )
 
                     return response.content
@@ -342,7 +381,9 @@ class ConversationService:
 
                     # 流式完成，无异常 — 缓冲区就绪后再 yield，防止重试时污染输出
                     full_reply = "".join(full_reply_parts)
-                    await self._commit_response(full_reply)
+                    # 累计流式 token 用量：provider 已将 usage 存入 last_stream_usage
+                    stream_usage = self._provider.last_stream_usage
+                    await self._commit_response(full_reply, usage=stream_usage)
                     for part in full_reply_parts:
                         yield part
 
@@ -397,11 +438,23 @@ class ConversationService:
         self,
         role: Literal["system", "user", "assistant"],
         content: str,
+        *,
+        reasoning_content: str = "",
         metadata: dict[str, Any] | None = None,
     ) -> None:
-        """手动追加一条消息到历史，用于 brain 推理循环中注入中间结果。"""
+        """手动追加一条消息到历史，用于 brain 推理循环中注入中间结果。
+
+        Args:
+            role: 消息角色。
+            content: 消息内容。
+            reasoning_content: 思维链推理内容（DeepSeek 思考模式专有）。
+                              有工具调用时必须回传，否则 API 返回 400。
+            metadata: 附加元数据。
+        """
         async with self._lock:
-            self._context.messages.append(Message(role=role, content=content, metadata=metadata))
+            self._context.messages.append(
+                Message(role=role, content=content, reasoning_content=reasoning_content, metadata=metadata)
+            )
             self._context.updated_at = time.time()
             self._trim_history()
             self._save()
@@ -540,7 +593,9 @@ class ConversationService:
         if system_parts:
             messages.append({"role": "system", "content": "\n\n".join(system_parts)})
 
-        messages.extend(m.to_api_dict() for m in self._context.messages)
+        # 使用 to_full_api_dict 确保带 reasoning_content 的 assistant 消息
+        # 在工具调用场景中被正确回传（符合 DeepSeek 思考模式规范）
+        messages.extend(m.to_full_api_dict() for m in self._context.messages)
         return messages
 
     def _save(self) -> None:

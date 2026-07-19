@@ -7,6 +7,7 @@
 """
 
 import asyncio
+import json
 import os
 import sys
 from contextlib import asynccontextmanager
@@ -48,7 +49,7 @@ def _check_venv() -> None:
 
 _check_venv()
 
-from agent.agent import AliyaAgent
+from agent.agent import AliyaAgent, agent_config_from_yaml
 from agent.tools.registry import ToolRegistry
 from agent.tools.reply import ReplyTool
 from agent.tools.memory_query import MemoryQueryTool
@@ -121,6 +122,19 @@ async def chat_loop():
     console = ConsoleOutput()
 
     async with tts_service or _nullctx(), audio_player or _nullctx():
+        agent_config = agent_config_from_yaml()
+
+        async def _console_confirm(tool_name: str, params: dict) -> bool:
+            """终端交互式确认：打印工具信息和参数，等待用户输入 y/n。"""
+            loop = asyncio.get_running_loop()
+            param_preview = json.dumps(params, ensure_ascii=False)[:120]
+            print(f"\n[权限确认] 工具 `{tool_name}` 请求执行")
+            print(f"  参数: {param_preview}")
+            reply = await loop.run_in_executor(
+                None, lambda: input("是否允许执行？(y/N): ").strip().lower()
+            )
+            return reply == "y"
+
         agent = AliyaAgent(
             conversation_service=conversation_service,
             tool_registry=registry,
@@ -129,6 +143,8 @@ async def chat_loop():
             tts_service=tts_service,
             audio_player=audio_player,
             audio_relay=None,
+            config=agent_config,
+            confirm_callback=_console_confirm,
         )
         print("Aliya 聊天模式（输入 /exit 退出, /clear 清空历史）\n")
         while True:

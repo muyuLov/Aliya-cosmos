@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
-from agent.tools.base import BaseTool, ToolContext, ToolResult
+from agent.tools.base import ToolBase, ToolContext, ToolResult, ToolPermission
 
 
-class MemoryQueryTool:
+class MemoryQueryTool(ToolBase):
+    """从记忆图谱中查询相关信息的工具。
+
+    只读（安全），可与其他只读工具并发执行。
+    """
+
     name = "memory_query"
     description = "从记忆图谱中查询相关信息。当需要回忆用户说过的话、过去的约定、偏好时使用此工具。"
     input_schema: dict = {
@@ -18,6 +23,8 @@ class MemoryQueryTool:
         },
         "required": ["query"],
     }
+    is_concurrency_safe = True
+    permission = ToolPermission.ALWAYS_ALLOW
 
     async def execute(self, params: dict, context: ToolContext) -> ToolResult:
         query = params["query"]

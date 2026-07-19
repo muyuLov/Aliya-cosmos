@@ -26,6 +26,14 @@ cosmos:
 
   # ── 服务配置 ──────────────────────────────────────────
   service:
+    # ── Agent WebSocket 服务 ──────────────────────────
+    agent:
+      ws_server:
+        host: ${WS_HOST:127.0.0.1}      # 监听地址（容器内设为 0.0.0.0 以对外暴露端口）
+        port: ${WS_PORT:8765}           # 监听端口
+      # ── Agent 权限配置 ──────────────────────────────────
+      permissions:
+        config_path: data/config/Permissions.yml  # 权限配置文件
     # ── GRAG 图记忆系统 ────────────────────────────────
     grag:
       enabled: true                    # 启用记忆系统
@@ -34,7 +42,7 @@ cosmos:
       similarity_threshold: 0.7        # 语义相似度阈值（0-1）
       session_tracking: true            # 启用会话追踪
       neo4j:
-        uri: bolt://localhost:7687      # Neo4j 连接地址
+        uri: bolt://${NEO4J_HOST:127.0.0.1}:${NEO4J_PORT:7687}   # Neo4j 连接地址（容器内环境覆盖为服务名）
         user: neo4j                     # 用户名
         password: ${NEO4J_PASSWORD:Aliya_neo4j}  # 密码（支持环境变量覆盖，默认 Aliya_neo4j）
         database: neo4j                 # 数据库名
@@ -55,6 +63,9 @@ cosmos:
         name: deepseek                 # 当前使用的提供商名
         config_path: data/config/LLMProviders.json  # 提供商配置文件
       history_max_chars: 90000         # 消息历史字符数阈值，超限时移除最旧消息
+      system_prompt_file: agent/prompts/aliya_system_prompt.md  # 系统角色设定 + 思维链引导提示词
+      cot_enabled: true                # 思维链（CoT）模式: true=启用, false=禁用
+      reasoning_effort: high           # 思考强度（DeepSeek 专有）: high / max / low
 
     # ── TTS 语音合成 ──────────────────────────────────
     tts:
@@ -66,9 +77,11 @@ cosmos:
         speed: 1.0                     # 语速倍率（0.5-2.0）
       service:
         prefetch_queue_size: 16        # 预取队列大小（分段数）
+        prefetch_window: 3             # 滑动窗口预取段数，减少资源浪费
         max_concurrent_creates: 10     # 最大并发创建会话数
       cache:
         enabled: true                  # 启用音频缓存（按分段粒度复用重复文本合成结果）
+        cache_dir: data/cache/tts      # 本地缓存目录
         max_age_seconds: 604800        # 缓存有效期（秒），默认 7 天
         redis_url: null                # 可选 Redis 二级缓存 URL，如 redis://localhost:6379/0
       player:

@@ -31,24 +31,70 @@ OPENAI_COMMON_EXCEPTIONS: tuple[type[BaseException], ...] = (
 )
 
 
+def _safe_int(value: Any) -> int:
+    """安全提取 int，None/非数字返回 0。"""
+    if value is None:
+        return 0
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _get_nested(obj: Any, *attrs: str, default: Any = None) -> Any:
+    """安全地链式访问嵌套属性。"""
+    current = obj
+    for attr in attrs:
+        if current is None:
+            return default
+        current = getattr(current, attr, None)
+    return current
+
+
 def extract_openai_usage(usage: Any) -> TokenUsage:
     """
     从 OpenAI SDK 的 usage 对象中提取 TokenUsage，字段缺失时默认 0。
 
-    适用于所有基于 OpenAI 兼容接口的提供商（DeepSeek、LM Studio 等）。
-    DeepSeek 专有字段（prompt_cache_hit/miss_tokens、reasoning_tokens）
-    在其他提供商中自然回退为 0。
+    适配多个 API 版本：
+    - **顶级字段**：prompt_tokens, completion_tokens, total_tokens（所有提供商均提供）
+    - **completion_tokens_details**（OpenAI/DeepSeek）:
+      - reasoning_tokens：思维链 token 数
+    - **prompt_tokens_details**（部分提供商）:
+      - cached_tokens：缓存命中 token 数
+    - **顶级扩展字段**（DeepSeek 专有）:
+      - prompt_cache_hit_tokens：缓存命中 token 数
+      - prompt_cache_miss_tokens：缓存未命中 token 数
+
+    字段缺失或为 None 时自动回退为 0，返回值与官方计费标准对齐。
     """
     if usage is None:
         return TokenUsage()
-    details = getattr(usage, "completion_tokens_details", None)
+
+    # 基础 token 字段（所有 OpenAI 兼容接口均提供）
+    prompt_tokens = _safe_int(getattr(usage, "prompt_tokens", None))
+    completion_tokens = _safe_int(getattr(usage, "completion_tokens", None))
+    api_total = _safe_int(getattr(usage, "total_tokens", None))
+
+    # total_tokens 以 API 返回值优先，缺失时由 prompt + completion 补齐
+    total_tokens = api_total if api_total > 0 else prompt_tokens + completion_tokens
+
+    # 缓存字段：优先读取 DeepSeek 顶层字段，再 fallback 到 prompt_tokens_details
+    cache_hit = _safe_int(getattr(usage, "prompt_cache_hit_tokens", None))
+    if cache_hit == 0:
+        cache_hit = _safe_int(_get_nested(usage, "prompt_tokens_details", "cached_tokens"))
+    cache_miss = _safe_int(getattr(usage, "prompt_cache_miss_tokens", None))
+
+    # 思维链 token：从 completion_tokens_details 读取
+    details = _get_nested(usage, "completion_tokens_details")
+    reasoning = _safe_int(getattr(details, "reasoning_tokens", None) if details is not None else None)
+
     return TokenUsage(
-        prompt_tokens=getattr(usage, "prompt_tokens", 0) or 0,
-        completion_tokens=getattr(usage, "completion_tokens", 0) or 0,
-        total_tokens=getattr(usage, "total_tokens", 0) or 0,
-        prompt_cache_hit_tokens=getattr(usage, "prompt_cache_hit_tokens", 0) or 0,
-        prompt_cache_miss_tokens=getattr(usage, "prompt_cache_miss_tokens", 0) or 0,
-        reasoning_tokens=getattr(details, "reasoning_tokens", 0) or 0 if details else 0,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=total_tokens,
+        prompt_cache_hit_tokens=cache_hit,
+        prompt_cache_miss_tokens=cache_miss,
+        reasoning_tokens=reasoning,
     )
 
 
@@ -67,6 +113,12 @@ class LLMProvider(ABC):
             response = await provider.async_chat_completion(request)
         # provider.aclose() 自动调用
 
+    Attributes:
+        supports_reasoning: 当前模型是否支持思维链/推理 token 特性。
+                            子类可覆盖此属性以实现自定义检测逻辑。
+        last_stream_usage: 最近一次流式调用的 token 用量，供上层累计统计。
+                            非流式场景请使用 async_chat_completion 返回值中的 usage。
+
     Args:
         config: 提供商配置字典，至少包含 model 字段。
     """
@@ -76,6 +128,17 @@ class LLMProvider(ABC):
         self.model: str = config.get("model", "")
         self.timeout: int = config.get("timeout", 600)
         self.max_retries: int = config.get("max_retries", 3)
+        self.last_stream_usage: TokenUsage = TokenUsage()
+
+    @property
+    def supports_reasoning(self) -> bool:
+        """当前模型是否支持思维链/推理特性。
+
+        默认实现基于模型名称检测（包含 deepseek/r1 关键词），
+        子类可覆盖此属性以实现更精确的检测逻辑。
+        """
+        model_lower = self.model.lower()
+        return "deepseek" in model_lower or "r1" in model_lower
 
     @abstractmethod
     async def async_chat_completion(self, request: ChatRequest) -> ChatResponse:

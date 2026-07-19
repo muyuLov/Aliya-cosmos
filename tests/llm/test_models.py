@@ -115,6 +115,38 @@ class TestChatRequest:
         req = ChatRequest(messages=[], model="m")
         assert req.extra == {}
 
+    def test_thinking_default_none(self):
+        req = ChatRequest(messages=[], model="m")
+        assert req.thinking is None
+        assert req.reasoning_effort is None
+
+    def test_thinking_enabled(self):
+        req = ChatRequest(messages=[], model="deepseek",
+                          thinking={"type": "enabled"}, reasoning_effort="high")
+        assert req.thinking == {"type": "enabled"}
+        assert req.reasoning_effort == "high"
+
+
+class TestMessageReasoning:
+    """测试 Message 的 reasoning_content 与 to_full_api_dict"""
+
+    def test_reasoning_content_default(self):
+        msg = Message(role="assistant", content="reply")
+        assert msg.reasoning_content == ""
+
+    def test_to_full_api_dict_without_reasoning(self):
+        msg = Message(role="assistant", content="reply")
+        d = msg.to_full_api_dict()
+        assert d == {"role": "assistant", "content": "reply"}
+        assert "reasoning_content" not in d
+
+    def test_to_full_api_dict_with_reasoning(self):
+        msg = Message(role="assistant", content="最终回复", reasoning_content="逐步推理...")
+        d = msg.to_full_api_dict()
+        assert d["role"] == "assistant"
+        assert d["content"] == "最终回复"
+        assert d["reasoning_content"] == "逐步推理..."
+
 
 class TestChatResponse:
     def test_minimal_response(self):
@@ -130,3 +162,12 @@ class TestChatResponse:
         assert resp.finish_reason == "length"
         assert resp.usage.total_tokens == 15
         assert resp.usage.prompt_tokens == 10
+
+    def test_reasoning_content_default(self):
+        resp = ChatResponse(content="reply")
+        assert resp.reasoning_content == ""
+
+    def test_reasoning_content_explicit(self):
+        resp = ChatResponse(content="最终回复", reasoning_content="逐步推理过程")
+        assert resp.reasoning_content == "逐步推理过程"
+        assert resp.content == "最终回复"

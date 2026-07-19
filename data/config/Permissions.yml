@@ -1,0 +1,13 @@
+# ── Agent 工具权限配置 ──────────────────────────────────────────
+# 全局控制每个工具的权限等级。
+#
+# 权限等级：
+#   always_allow  始终允许，无需确认
+#   confirm       需要用户确认（Agent 将询问用户是否允许执行）
+#   never_allow   始终禁止
+#
+# 未在此文件列出的工具使用代码自带的默认权限。
+#
+tools:
+  reply: always_allow
+  memory_query: always_allow
