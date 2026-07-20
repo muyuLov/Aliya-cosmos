@@ -63,9 +63,13 @@ cosmos:
         name: deepseek                 # 当前使用的提供商名
         config_path: data/config/LLMProviders.json  # 提供商配置文件
       history_max_chars: 90000         # 消息历史字符数阈值，超限时移除最旧消息
-      system_prompt_file: agent/prompts/aliya_system_prompt.md  # 系统角色设定 + 思维链引导提示词
       cot_enabled: true                # 思维链（CoT）模式: true=启用, false=禁用
       reasoning_effort: high           # 思考强度（DeepSeek 专有）: high / max / low
+
+    # ── 表达风格 ──────────────────────────────────
+    prompt:
+      style: default                   # 默认表达风格: default / lively / healing / sweet
+      auto_style: true           # 自动风格切换（纯 LLM 模式）
 
     # ── TTS 语音合成 ──────────────────────────────────
     tts:

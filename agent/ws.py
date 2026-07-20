@@ -14,6 +14,7 @@ from agent.agent import AliyaAgent, agent_config_from_yaml
 from agent.tools.registry import ToolRegistry
 from agent.tools.reply import ReplyTool
 from agent.tools.memory_query import MemoryQueryTool
+from agent.prompts import PromptManager, get_prompt_manager
 
 logger = get_logger(__name__)
 
@@ -29,6 +30,7 @@ def build_agent(
     audio_player: Any | None = None,
     audio_relay: Any | None = None,
     confirm_callback: Any | None = None,
+    prompt_manager: PromptManager | None = None,
 ) -> AliyaAgent:
     registry = ToolRegistry()
     registry.register(ReplyTool())
@@ -36,6 +38,11 @@ def build_agent(
     # 注：TTS 已由 Agent 在生成最终回复后自动播放，不再作为 LLM 工具
 
     agent_config = agent_config_from_yaml()
+
+    # 自动初始化分层 Prompt
+    if prompt_manager is None:
+        prompt_manager = get_prompt_manager()
+
     return AliyaAgent(
         conversation_service=conversation_service,
         tool_registry=registry,
@@ -46,6 +53,7 @@ def build_agent(
         audio_relay=audio_relay,
         config=agent_config,
         confirm_callback=confirm_callback,
+        prompt_manager=prompt_manager,
     )
 
 
@@ -193,6 +201,28 @@ def create_handler(
                         task = asyncio.create_task(a.handle_user_message(text))
                         task.add_done_callback(_log_task_error)
                         active_task = task
+                        continue
+
+                    if msg_type == "set_style":
+                        style = str(data.get("style", "default"))
+                        _ensure_agent().set_style(style)
+                        await _send({"type": "style_changed", "style": style})
+                        continue
+
+                    if msg_type == "set_emotion":
+                        feeling = str(data.get("feeling", ""))
+                        _ensure_agent().set_emotion(feeling)
+                        await _send({"type": "emotion_changed", "feeling": feeling})
+                        continue
+
+                    if msg_type == "get_prompt_config":
+                        config = _ensure_agent().get_prompt_config()
+                        await _send({"type": "prompt_config", **config})
+                        continue
+
+                    if msg_type == "get_feeling_scores":
+                        scores = _ensure_agent().get_feeling_scores()
+                        await _send({"type": "feeling_scores", "scores": scores, "dominant": _ensure_agent().get_emotion()})
                         continue
 
                     logger.debug("忽略未知 WS 消息类型: %s", msg_type)

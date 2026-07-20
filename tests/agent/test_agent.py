@@ -139,6 +139,7 @@ class TestAgentState:
     def test_state_values(self):
         assert AgentState.IDLE.value == "idle"
         assert AgentState.THINKING.value == "thinking"
+        assert AgentState.SOUL_PHASE.value == "soul_phase"
         assert AgentState.COMPLETED.value == "completed"
         assert AgentState.ERROR.value == "error"
 
@@ -150,11 +151,12 @@ class TestAgentState:
             AgentState.THINKING,
             AgentState.TOOL_EXECUTION,
             AgentState.OBSERVING,
+            AgentState.SOUL_PHASE,
             AgentState.COMPLETED,
             AgentState.ERROR,
             AgentState.CANCELLED,
         ]
-        assert len(states) == 8
+        assert len(states) == 9
         assert all(isinstance(s, AgentState) for s in states)
 
 

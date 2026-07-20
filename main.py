@@ -6,49 +6,6 @@
   python main.py --chat        终端交互式聊天（无前端的直接模式）
 """
 
-import asyncio
-import json
-import os
-import sys
-from contextlib import asynccontextmanager
-from pathlib import Path
-from typing import Any
-
-import uvicorn
-from fastapi import FastAPI
-from fastapi.routing import APIWebSocketRoute
-
-
-@asynccontextmanager
-async def _nullctx():
-    yield
-
-
-def _check_venv() -> None:
-    in_venv = sys.prefix != sys.base_prefix or os.environ.get("VIRTUAL_ENV")
-    if in_venv:
-        return
-    venv_path = Path(__file__).parent / ".venv"
-    if venv_path.is_dir():
-        # Windows: Scripts/python.exe; Unix: bin/python
-        venv_python = venv_path / "Scripts" / "python.exe"
-        if not venv_python.exists():
-            venv_python = venv_path / "bin" / "python"
-        if venv_python.exists():
-            os.execv(str(venv_python), [str(venv_python)] + sys.argv)
-            return  # execv 成功则不执行后续
-    raise SystemExit(
-        "错误：未检测到虚拟环境。请先激活虚拟环境后重试。\n"
-        "  Windows: .venv\\Scripts\\activate\n"
-        "  Unix:    source .venv/bin/activate\n"
-        f"或直接使用虚拟环境的 Python 启动：\n"
-        f"  {venv_path / 'Scripts' / 'python.exe'} main.py (Windows)\n"
-        f"  {venv_path / 'bin' / 'python'} main.py (Unix)"
-    )
-
-
-_check_venv()
-
 from agent.agent import AliyaAgent, agent_config_from_yaml
 from agent.tools.registry import ToolRegistry
 from agent.tools.reply import ReplyTool

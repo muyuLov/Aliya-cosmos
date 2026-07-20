@@ -152,6 +152,16 @@ class ConversationService:
 
     # ── 公开配置接口 ─────────────────────────────────────────────────────────
 
+    async def get_system_prompt(self) -> str:
+        """
+        获取当前系统提示词。
+
+        Returns:
+            当前系统提示词内容，未设置时返回空字符串。
+        """
+        async with self._lock:
+            return self._context.system_prompt or ""
+
     async def set_system_prompt(self, prompt: str) -> None:
         """
         设置或更新系统提示词。
