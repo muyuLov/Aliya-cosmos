@@ -1,7 +1,7 @@
 {
   "name": "aliya-cosmos-gui",
   "version": "0.1.1",
-  "description": "昔涟状态面板 - 轻量 Electron 桌面 GUI",
+  "description": "《彼方的她-Aliya》",
   "main": "main.js",
   "private": true,
   "scripts": {
