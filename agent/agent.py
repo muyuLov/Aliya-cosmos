@@ -159,6 +159,27 @@ _FORCE_SUMMARY_PROMPT = (
 # 最终降级回复（所有兜底都失败时使用）
 _FALLBACK_REPLY = "让我想想……嗯，你能再说一遍吗？"
 
+
+def _strip_json_prefix(text: str) -> str:
+    """移除 LLM 回复开头的 JSON 前缀（如 `{"tool_calls": []}\\n\\n`）。
+
+    灵魂阶段 LLM 有时会在自然语言回复前输出一段 JSON 格式的工具状态，
+    此函数将这部分剥离，只保留后面的正文。
+    """
+    text = text.strip()
+    if not text.startswith("{"):
+        return text
+    depth = 0
+    for i, ch in enumerate(text):
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                rest = text[i + 1:].strip()
+                return rest if rest else text
+    return text
+
 # 对话压缩 prompt
 _COMPRESSION_PROMPT = (
     "请用简洁中文总结以下对话的关键信息（保留所有事实、用户偏好、约定、重要情感记忆），"
@@ -196,6 +217,40 @@ def parse_llm_response(raw: str) -> BrainResult:
             )
     except json.JSONDecodeError:
         pass
+
+    # 第 1.5 层：以 { 开头但非完整 JSON → 尝试剥离头部 JSON 对象
+    # LLM 有时会输出 {"tool_calls": [], "reply": ""}\n\n自然语言正文...
+    if raw.startswith("{"):
+        depth = 0
+        for i, ch in enumerate(raw):
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    json_part = raw[:i + 1]
+                    rest = raw[i + 1:].strip()
+                    try:
+                        data = json.loads(json_part)
+                        if isinstance(data, dict):
+                            # JSON 中的 reply 非空 → 优先用 JSON 的 reply
+                            reply_from_json = _safe_str(data, "reply", "")
+                            if reply_from_json:
+                                return BrainResult(
+                                    reply=reply_from_json,
+                                    tool_calls=data.get("tool_calls", []),
+                                    thought=_safe_str(data, "thought", ""),
+                                )
+                            # JSON 中 reply 为空但尾部有自然语言正文 → 用尾部正文
+                            if rest:
+                                return BrainResult(
+                                    reply=rest,
+                                    tool_calls=data.get("tool_calls", []),
+                                    thought=_safe_str(data, "thought", ""),
+                                )
+                    except json.JSONDecodeError:
+                        pass
+                    break
 
     # 第 2 层：Markdown 代码块提取
     match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw, re.DOTALL)
@@ -305,6 +360,7 @@ class AliyaAgent:
         self._compressed_context: str = ""   # 压缩后的历史摘要
         self._consecutive_timeouts: int = 0  # 连续超时计数
         self._has_called_tools: bool = False  # 本轮是否调用了工具
+        self._reply_tool_called: bool = False  # 本轮是否调用了 ReplyTool
 
         logger.info(
             "[Init] Agent 初始化完成 | cot=%s | native=%s | format=%s | effort=%s | timeout=%.1f | style=%s",
@@ -337,6 +393,7 @@ class AliyaAgent:
         self._state = AgentState.IDLE
         self._consecutive_timeouts = 0
         self._has_called_tools = False
+        self._reply_tool_called = False
         self._compressed_context = ""
         final_reply = ""
 
@@ -401,6 +458,10 @@ class AliyaAgent:
 
                 tool_results = await self._registry.dispatch_all(result.tool_calls, tool_ctx)
 
+                # 记录本次工具执行中是否调用了 ReplyTool（用于 finally 判断是否跳过 brain_complete）
+                if not self._reply_tool_called:
+                    self._reply_tool_called = any(name == "reply" for name, _ in tool_results)
+
                 # Step 3b: 观察 — 将工具结果注入上下文
                 await self._transition(AgentState.OBSERVING)
                 summary = self._registry.format_tool_summary(tool_results)
@@ -430,7 +491,8 @@ class AliyaAgent:
                 })
 
             # ── Step 4: 灵魂阶段 ──
-            if self._has_called_tools:
+            # 条件：调用了工具（工具阶段有实质交互）或 首轮思考未生成回复（超时兜底）
+            if self._has_called_tools or not final_reply:
                 await self._transition(AgentState.SOUL_PHASE)
                 await self._notify({"type": "brain_progress", "message": "进入灵魂表达阶段"})
                 final_reply = await self._generate_soul_reply()
@@ -469,6 +531,10 @@ class AliyaAgent:
                 await self._save_memory(text, final_reply)
                 # 对话完成后情绪观察与平滑（在回复完成后触发）
                 await self._observe_and_smooth_emotion(text, final_reply)
+
+            # 发送最终回复通知到 UI：仅在 ReplyTool 未发送过时执行，避免重复
+            if final_reply and not self._reply_tool_called:
+                await self._notify({"type": "brain_complete", "reply": final_reply})
 
             # 自动 TTS 播放最终回复
             if final_reply and self._tts_service:
@@ -589,7 +655,18 @@ class AliyaAgent:
                 self._conv.asend(_SOUL_PHASE_PROMPT, store_history=False, **self._thinking_kwargs()),
                 timeout=self._config.round_timeout,
             )
-            return reply.strip() or _FALLBACK_REPLY
+            reply_stripped = reply.strip()
+            if not reply_stripped:
+                return _FALLBACK_REPLY
+
+            # 尝试解析为 JSON 提取纯净 reply 字段
+            parsed = parse_llm_response(reply_stripped)
+            if parsed.reply:
+                return parsed.reply
+
+            # 剥离开头可能残留的 JSON 前缀（如 {"tool_calls": []}\n\n）
+            clean = _strip_json_prefix(reply_stripped)
+            return clean or _FALLBACK_REPLY
         except (asyncio.TimeoutError, Exception) as e:
             logger.warning("[Soul] 灵魂阶段异常，使用兜底回复 | error=%s", e)
             return _FALLBACK_REPLY

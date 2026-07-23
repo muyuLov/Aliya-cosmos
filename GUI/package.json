@@ -1,0 +1,17 @@
+{
+  "name": "aliya-cosmos-gui",
+  "version": "0.1.1",
+  "description": "昔涟状态面板 - 轻量 Electron 桌面 GUI",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev"
+  },
+  "devDependencies": {
+    "electron": "^31.0.0"
+  },
+  "dependencies": {
+    "ws": "^8.21.1"
+  }
+}

@@ -127,7 +127,7 @@ class GRAGMemoryManager:
 
         try:
             conversation_text = f"{self.user_name}: {user_input}\n{self.ai_name}: {ai_response}"
-            logger.info(f"添加对话记忆: {conversation_text[:50]}...")
+            logger.info(f"添加对话记忆: \n{conversation_text[:50]}...")
 
             self.recent_context.append(conversation_text)
             self._context_char_count += len(conversation_text)

@@ -1,0 +1,57 @@
+/* ============================================================
+   基础样式（最小重置 + 字体设置）
+   ============================================================ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  font: var(--rb-text-body);
+  color: var(--rb-text-default);
+  background: transparent; /* Electron 透明背景 */
+  user-select: none;
+  overflow: hidden;
+  letter-spacing: 0.4px;
+}
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+}
+
+input, textarea, select {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  outline: none;
+}
+
+/* 自定义滚动条 */
+::-webkit-scrollbar {
+  width: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--rb-border-strong);
+  border-radius: 2px;
+}
