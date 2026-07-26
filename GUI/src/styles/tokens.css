@@ -1,20 +1,17 @@
 /* ============================================================
-   昔涟 设计令牌（Design Tokens）
-   严格参考 Cyrene-Agent 的视觉风格：
-   - 深紫底 + 粉紫渐变
-   - 玻璃质感（半透明 + 边框 + 内阴影）
-   - 大圆角（16-24px）
+   设计令牌（Design Tokens）
+   深紫基底 + 粉紫渐变玻璃质感，参考 Cyrene-Agent 视觉风格
    ============================================================ */
 
 :root {
-  /* ===== Surfaces（深色基底） ===== */
+  /* ----- 深色基底 ----- */
   --rb-bg-0: #08070f;
   --rb-bg-1: #0f0d1f;
   --rb-bg-2: #181432;
   --rb-bg-3: #221c46;
   --rb-bg-elevated: #2a2350;
 
-  /* ===== Brand pink scale ===== */
+  /* ----- 品牌粉色系 ----- */
   --rb-pink-50:  #fef1f7;
   --rb-pink-100: #fde0ed;
   --rb-pink-200: #fbb6d4;
@@ -25,32 +22,32 @@
   --rb-pink-700: #be185d;
   --rb-pink-glow: #ff6ec7;
 
-  /* ===== Accent purple ===== */
+  /* ----- 紫色强调色 ----- */
   --rb-violet-400: #b794f4;
   --rb-violet-500: #9f7aea;
   --rb-violet-600: #7c5fcc;
 
-  /* ===== Text ===== */
-  --rb-text-strong:   #fef7ff;
-  --rb-text-default:  #ebe5f5;
-  --rb-text-muted:    #a094c1;
-  --rb-text-faint:    #6b6388;
-  --rb-text-on-pink:  #ffffff;
+  /* ----- 文字色阶 ----- */
+  --rb-text-strong:  #fef7ff;
+  --rb-text-default: #ebe5f5;
+  --rb-text-muted:   #a094c1;
+  --rb-text-faint:   #6b6388;
+  --rb-text-on-pink: #ffffff;
 
-  /* ===== Borders ===== */
+  /* ----- 边框 ----- */
   --rb-border-faint:  rgba(236, 72, 153, 0.08);
   --rb-border-soft:   rgba(236, 72, 153, 0.18);
   --rb-border-strong: rgba(236, 72, 153, 0.40);
 
-  /* ===== Gradient ===== */
+  /* ----- 渐变 ----- */
   --rb-grad-pink:     linear-gradient(135deg, #ec4899 0%, #9f7aea 100%);
   --rb-grad-pink-hot: linear-gradient(135deg, #ff6ec7 0%, #ec4899 50%, #9f7aea 100%);
 
-  /* ===== Glow ===== */
-  --rb-glow-pink:  0 0 20px rgba(236, 72, 153, 0.35);
-  --rb-glow-soft:  0 0 12px rgba(236, 72, 153, 0.18);
+  /* ----- 光晕 ----- */
+  --rb-glow-pink: 0 0 20px rgba(236, 72, 153, 0.35);
+  --rb-glow-soft: 0 0 12px rgba(236, 72, 153, 0.18);
 
-  /* ===== Radius ===== */
+  /* ----- 圆角 ----- */
   --rb-radius-xs: 4px;
   --rb-radius-sm: 6px;
   --rb-radius-md: 8px;
@@ -60,17 +57,16 @@
   --rb-radius-xxxl: 24px;
   --rb-radius-full: 9999px;
 
-  /* ===== Spacing ===== */
+  /* ----- 间距 ----- */
   --rb-space-xs:  8px;
   --rb-space-sm:  12px;
   --rb-space-md:  16px;
   --rb-space-lg:  20px;
   --rb-space-xl:  24px;
 
-  /* ===== Typography ===== */
+  /* ----- 排版 ----- */
   --rb-font-sans: "Microsoft YaHei", "PingFang SC", -apple-system,
                   BlinkMacSystemFont, "Segoe UI", sans-serif;
-
   --rb-text-title:    600 18px/1.4 var(--rb-font-sans);
   --rb-text-body:     400 14px/1.5 var(--rb-font-sans);
   --rb-text-body-em:  500 15px/1.5 var(--rb-font-sans);
@@ -78,7 +74,7 @@
   --rb-text-small-em: 500 13px/1.5 var(--rb-font-sans);
   --rb-text-micro:    400 11px/1.5 var(--rb-font-sans);
 
-  /* ===== Shadows ===== */
+  /* ----- 阴影 ----- */
   --rb-shadow-card:     0 4px 16px rgba(0, 0, 0, 0.35);
   --rb-shadow-elevated: 0 12px 40px rgba(0, 0, 0, 0.55);
   --rb-shadow-pink:     0 8px 32px rgba(236, 72, 153, 0.35);

@@ -1,5 +1,5 @@
 /* ============================================================
-   基础样式（最小重置 + 字体设置）
+   基础重置 —— 配合 Electron 透明窗口使用
    ============================================================ */
 
 *,
@@ -19,7 +19,7 @@ html, body {
 body {
   font: var(--rb-text-body);
   color: var(--rb-text-default);
-  background: transparent; /* Electron 透明背景 */
+  background: transparent;
   user-select: none;
   overflow: hidden;
   letter-spacing: 0.4px;
@@ -44,7 +44,6 @@ input, textarea, select {
   outline: none;
 }
 
-/* 自定义滚动条 */
 ::-webkit-scrollbar {
   width: 4px;
 }
