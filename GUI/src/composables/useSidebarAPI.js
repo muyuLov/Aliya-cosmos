@@ -1,20 +1,22 @@
 import { ref } from 'vue';
-import { FEELING_EMOJI, DEFAULT_FEELING } from '../constants/mappings.js';
+import { FEELING_EMOJI, STATUS_EMOJI, DEFAULT_FEELING, DEFAULT_STATUS } from '../constants/mappings.js';
 
 /**
  * 封装 Electron preload 桥接 API 的访问
- * 提供心情更新、Token 用量等响应式状态自动订阅
+ * 提供心情更新、状态更新、Token 用量等响应式状态自动订阅
  */
 export function useSidebarAPI() {
   const api = window.sidebarAPI;
 
   // 响应式状态
   const currentFeeling = ref({ ...DEFAULT_FEELING });
+  const currentStatus = ref({ ...DEFAULT_STATUS });
   const tokenTotal = ref(0);
   const modelName = ref('获取中…');
-  const aiName = ref('昔涟');
+  const aiName = ref('Aliya');
 
   let emotionCleanup = null;
+  let statusCleanup = null;
   let tokenCleanup = null;
 
   // ---------- 窗口控制 ----------
@@ -59,10 +61,22 @@ export function useSidebarAPI() {
 
   function subscribeEmotion() {
     if (!api?.onEmotionChanged) return;
-    emotionCleanup = api.onEmotionChanged(({ feeling }) => {
+    emotionCleanup = api.onEmotionChanged(({ feeling, scores }) => {
       currentFeeling.value = {
         emoji: FEELING_EMOJI[feeling] || DEFAULT_FEELING.emoji,
         label: feeling || DEFAULT_FEELING.label,
+        scores: scores || null,
+      };
+    });
+  }
+
+  function subscribeStatus() {
+    if (!api?.onStatusChanged) return;
+    statusCleanup = api.onStatusChanged(({ status, state }) => {
+      currentStatus.value = {
+        emoji: STATUS_EMOJI[status] || DEFAULT_STATUS.emoji,
+        label: status || DEFAULT_STATUS.label,
+        state: state || '',
       };
     });
   }
@@ -81,16 +95,19 @@ export function useSidebarAPI() {
 
   function setupSubscriptions() {
     subscribeEmotion();
+    subscribeStatus();
     subscribeToken();
   }
 
   function teardownSubscriptions() {
     if (emotionCleanup) emotionCleanup();
+    if (statusCleanup) statusCleanup();
     if (tokenCleanup) tokenCleanup();
   }
 
   return {
     currentFeeling,
+    currentStatus,
     tokenTotal,
     modelName,
     aiName,

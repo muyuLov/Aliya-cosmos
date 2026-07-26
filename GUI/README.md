@@ -1,6 +1,6 @@
-# 昔涟状态面板（GUI）
+# Aliya状态面板（GUI）
 
-轻量 Electron 桌面应用，粉紫渐变玻璃质感风格的"昔涟"角色状态侧边栏面板。
+轻量 Electron 桌面应用，粉紫渐变玻璃质感风格的"Aliya"角色状态侧边栏面板。
 
 基于 **Vue 3 + Vite** 构建，与后端 Agent 服务通过 WebSocket 通信，实时展示角色心情、Token 用量等信息。
 

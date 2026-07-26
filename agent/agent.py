@@ -159,6 +159,19 @@ _FORCE_SUMMARY_PROMPT = (
 # 最终降级回复（所有兜底都失败时使用）
 _FALLBACK_REPLY = "让我想想……嗯，你能再说一遍吗？"
 
+# Agent 状态 → 前端展示映射
+_STATE_DISPLAY: dict[AgentState, str] = {
+    AgentState.IDLE: "陪伴中",
+    AgentState.CONTEXT_ASSEMBLY: "聆听中",
+    AgentState.THINKING: "思考中",
+    AgentState.TOOL_EXECUTION: "工作中",
+    AgentState.OBSERVING: "工作中",
+    AgentState.SOUL_PHASE: "思考中",
+    AgentState.COMPLETED: "陪伴中",
+    AgentState.ERROR: "陪伴中",
+    AgentState.CANCELLED: "陪伴中",
+}
+
 
 def _strip_json_prefix(text: str) -> str:
     """移除 LLM 回复开头的 JSON 前缀（如 `{"tool_calls": []}\\n\\n`）。
@@ -347,7 +360,7 @@ class AliyaAgent:
         # ── 分层 Prompt 管理 ──
         self._prompt_manager = prompt_manager or get_prompt_manager()
         self._current_style: str = self._config.prompt_style
-        self._current_emotion: str = ""  # 当前情绪状态（用于生成情绪补丁）
+        self._current_emotion: str = "平静"  # 当前情绪状态（用于生成情绪补丁）
 
         # ── 自动风格切换 ──
         self._auto_style_enabled: bool = self._config.auto_style_enabled
@@ -517,7 +530,7 @@ class AliyaAgent:
             self._progress_task = None
 
             if self._state not in (AgentState.ERROR, AgentState.CANCELLED):
-                self._state = AgentState.COMPLETED
+                await self._transition(AgentState.COMPLETED)
                 logger.info("[Complete] 回复完成 | turn=%d | reply_len=%d",
                             self._turn, len(final_reply))
 
@@ -534,7 +547,12 @@ class AliyaAgent:
 
             # 发送最终回复通知到 UI：仅在 ReplyTool 未发送过时执行，避免重复
             if final_reply and not self._reply_tool_called:
-                await self._notify({"type": "brain_complete", "reply": final_reply})
+                await self._notify({
+                    "type": "brain_complete",
+                    "reply": final_reply,
+                    "emotion": self._current_emotion,
+                    "feeling_scores": self._feeling_scores.scores,
+                })
 
             # 自动 TTS 播放最终回复
             if final_reply and self._tts_service:
@@ -728,11 +746,33 @@ class AliyaAgent:
         if not provider:
             return
 
+        old_emotion = self._current_emotion
         observed = await observe_feeling(user_input, ai_reply, provider)
         self._feeling_scores.smooth(observed)
         self._current_emotion = self._feeling_scores.dominant
-        logger.debug("[Emotion] 观察+平滑完成 | observed=%s → dominant=%s",
-                     observed, self._current_emotion)
+
+        # 情绪实际变化时 info 级别突出，不变时 debug 级别追踪
+        if self._current_emotion != old_emotion:
+            top3 = sorted(self._feeling_scores.scores.items(), key=lambda x: -x[1])[:3]
+            top3_str = " | ".join(f"{name}={score:.2f}" for name, score in top3)
+            logger.info(
+                "[Emotion] 情绪变化: %s → %s | observed=%s | top3=[%s]",
+                old_emotion or "无", self._current_emotion, observed, top3_str,
+            )
+        else:
+            logger.debug(
+                "[Emotion] 平滑完成 | observed=%s | dominant=%s",
+                observed, self._current_emotion,
+            )
+
+        # 情绪变更时实时推送到前端
+        if self._current_emotion != old_emotion:
+            await self._notify({
+                "type": "emotion_changed",
+                "feeling": self._current_emotion,
+                "scores": self._feeling_scores.scores,
+                "dominant": self._current_emotion,
+            })
 
     # ── 兜底降级 ────────────────────────────────────────────────────────────
 
@@ -764,6 +804,15 @@ class AliyaAgent:
                 "to": new_state.value,
                 "turn": self._turn,
             })
+            # 附加友好状态推送（仅 display 变化时才推送，避免重复）
+            new_display = _STATE_DISPLAY.get(new_state, "陪伴中")
+            old_display = _STATE_DISPLAY.get(old_state, "")
+            if new_display != old_display:
+                await self._notify({
+                    "type": "status_changed",
+                    "status": new_display,
+                    "state": new_state.value,
+                })
 
     # ── 外部接口 ────────────────────────────────────────────────────────────
 
@@ -805,8 +854,8 @@ class AliyaAgent:
         self._current_emotion = feeling
         if feeling in ALL_FEELINGS:
             self._feeling_scores.smooth(feeling)  # type: ignore[arg-type]
-        logger.debug("[Emotion] 情绪状态已更新 | feeling=%s | scores=%s",
-                     feeling, self._feeling_scores.dominant)
+        logger.info("[Emotion] 手动设置情绪: %s → dominant=%s",
+                    feeling, self._feeling_scores.dominant)
 
     def get_emotion(self) -> str:
         """获取当前情绪状态名称。"""

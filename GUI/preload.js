@@ -24,6 +24,13 @@ contextBridge.exposeInMainWorld('sidebarAPI', {
     return () => ipcRenderer.removeListener('sidebar:emotion', listener);
   },
 
+  // 状态更新（从 agent WebSocket 推送）
+  onStatusChanged: (handler) => {
+    const listener = (_evt, payload) => handler(payload);
+    ipcRenderer.on('sidebar:status', listener);
+    return () => ipcRenderer.removeListener('sidebar:status', listener);
+  },
+
   // Token 用量查询与推送
   getTokenUsage: () => ipcRenderer.invoke('sidebar:get-token-usage'),
   onTokenUsageChanged: (handler) => {

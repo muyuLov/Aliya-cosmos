@@ -338,13 +338,38 @@ function connectAgentWebSocket() {
       try {
         const data = JSON.parse(event.data);
         logger.debug('WS 收到消息', { type: data.type });
-        if (data.type === 'feeling_scores' && data.dominant) {
-          logger.info('心情更新', { feeling: data.dominant });
-          sidebarWindow?.webContents.send('sidebar:emotion', { feeling: data.dominant });
+        if (data.type === 'feeling_scores' && typeof data.dominant === 'string') {
+          logger.debug('心情查询结果', { feeling: data.dominant });
+          sidebarWindow?.webContents.send('sidebar:emotion', { feeling: data.dominant || '平静' });
+        }
+        // 实时情绪变更推送（Agent 主动推送，优先级最高）
+        if (data.type === 'emotion_changed' && data.feeling) {
+          logger.debug('实时心情推送', { feeling: data.feeling });
+          sidebarWindow?.webContents.send('sidebar:emotion', {
+            feeling: data.feeling,
+            scores: data.scores || null,
+          });
+        }
+        // 状态变更推送（陪伴中/思考中/聆听中等）
+        if (data.type === 'status_changed' && data.status) {
+          logger.debug('状态变更', { status: data.status });
+          sidebarWindow?.webContents.send('sidebar:status', {
+            status: data.status,
+            state: data.state || '',
+          });
         }
         if (data.type === 'brain_complete') {
           if (data.usage) accumulateToken(data.usage);
-          ws.send(JSON.stringify({ type: 'get_feeling_scores' }));
+          // brain_complete 现在携带情绪信息，直接推送
+          if (data.emotion) {
+            sidebarWindow?.webContents.send('sidebar:emotion', {
+              feeling: data.emotion,
+              scores: data.feeling_scores || null,
+            });
+          } else {
+            // 无情绪信息时兜底查询
+            ws.send(JSON.stringify({ type: 'get_feeling_scores' }));
+          }
           ws.send(JSON.stringify({ type: 'get_token_usage' }));
         }
         if (data.type === 'token_usage') {

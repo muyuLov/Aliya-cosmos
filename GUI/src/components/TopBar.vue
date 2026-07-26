@@ -36,7 +36,7 @@
 <script setup>
 defineProps({
   pinned: { type: Boolean, default: true },
-  aiName: { type: String, default: '昔涟' },
+  aiName: { type: String, default: 'Aliya' },
 });
 
 defineEmits(['toggle-pin', 'minimize', 'close']);

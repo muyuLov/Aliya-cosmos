@@ -1,20 +1,20 @@
 <template>
   <section class="card card--status">
     <div class="indicator">
-      <div class="indicator__emoji">🌸</div>
+      <div class="indicator__emoji">{{ statusEmoji }}</div>
       <div class="indicator__text">
         <span class="indicator__prefix">状态：</span>
-        <span class="indicator__label">陪伴中</span>
+        <span class="indicator__label">{{ statusLabel }}</span>
       </div>
     </div>
   </section>
 </template>
 
 <script setup>
-/**
- * 状态指示卡——展示角色当前活动状态（陪伴/思考/工作等）
- * 未来可由 WebSocket 推送动态更新
- */
+defineProps({
+  statusEmoji: { type: String, default: '🌸' },
+  statusLabel: { type: String, default: '陪伴中' },
+});
 </script>
 
 <style scoped>

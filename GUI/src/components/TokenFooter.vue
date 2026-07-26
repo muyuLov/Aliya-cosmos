@@ -13,7 +13,7 @@ import { computed } from 'vue';
 import { formatTokenCount } from '../utils/formatters.js';
 
 const props = defineProps({
-  aiName: { type: String, default: '昔涟' },
+  aiName: { type: String, default: 'Aliya' },
   tokenCount: { type: Number, default: 0 },
 });
 

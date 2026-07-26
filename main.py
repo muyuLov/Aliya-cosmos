@@ -326,6 +326,10 @@ def _init_server_deps(config_path: str = "data/config/main.yml"):
 
 
 def main():
+    # 加载日志配置（必须在任何 logger 使用前调用，否则 debug 配置不生效）
+    from core.logger import setup as setup_logger
+    setup_logger("data/config/main.yml")
+
     if "--chat-ws" in sys.argv:
         asyncio.run(chat_loop(ws_enabled=True))
     elif "--chat" in sys.argv:

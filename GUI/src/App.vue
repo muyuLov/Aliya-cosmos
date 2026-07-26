@@ -13,11 +13,14 @@
 
       <hr class="divider" />
 
-      <StatusCard />
+      <StatusCard
+        :status-emoji="statusEmoji"
+        :status-label="statusLabel"
+      />
 
       <MoodCard
-        :feeling-emoji="api.currentFeeling.value.emoji"
-        :feeling-label="api.currentFeeling.value.label"
+        :feeling-emoji="feelingEmoji"
+        :feeling-label="feelingLabel"
       />
 
       <ModelCard
@@ -32,7 +35,7 @@
 
       <TokenFooter
         :ai-name="aiName"
-        :token-count="api.tokenTotal.value"
+        :token-count="tokenCount"
       />
     </main>
 
@@ -41,7 +44,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { useSidebarAPI } from './composables/useSidebarAPI.js';
 import { formatModelName } from './utils/formatters.js';
 import TopBar from './components/TopBar.vue';
@@ -54,6 +57,16 @@ import TokenFooter from './components/TokenFooter.vue';
 import ToastNotification from './components/ToastNotification.vue';
 
 const api = useSidebarAPI();
+
+// 解构为顶层 ref，模板中自动解包（避免嵌套 .value 响应式追踪问题）
+const { currentFeeling, currentStatus, tokenTotal, aiName } = api;
+
+// computed 拆解，确保模板直接用属性名访问
+const statusEmoji = computed(() => currentStatus.value.emoji);
+const statusLabel = computed(() => currentStatus.value.label);
+const feelingEmoji = computed(() => currentFeeling.value.emoji);
+const feelingLabel = computed(() => currentFeeling.value.label);
+const tokenCount = computed(() => tokenTotal.value);
 
 const isPinned = ref(true);
 const modelDisplayName = ref('获取中…');
@@ -71,7 +84,7 @@ async function init() {
   try {
     const identity = await api.getIdentity();
     if (identity?.aiName) {
-      api.aiName.value = identity.aiName;
+      aiName.value = identity.aiName;
       document.title = `${identity.aiName} · 状态`;
     }
   } catch { /* 保持默认 */ }
@@ -85,7 +98,7 @@ async function init() {
 
   try {
     const usage = await api.getTokenUsage();
-    api.tokenTotal.value = usage.total ?? 0;
+    tokenTotal.value = usage.total ?? 0;
   } catch { /* 忽略 */ }
 
   api.setupSubscriptions();

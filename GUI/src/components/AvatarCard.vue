@@ -13,7 +13,7 @@
 import avatarSrc from '@/assets/avatar.png';
 
 defineProps({
-  aiName: { type: String, default: '昔涟' },
+  aiName: { type: String, default: 'Aliya' },
   online: { type: Boolean, default: true },
 });
 </script>

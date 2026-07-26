@@ -50,15 +50,18 @@ async def observe_feeling(
         conversation = f"用户: {user_input}\nAliya: {ai_reply}"
         prompt = _OBSERVER_PROMPT.format(conversation=conversation)
         messages = [{"role": "user", "content": prompt}]
-        request = ChatRequest(messages=messages, model=provider.model, max_tokens=10)
+        request = ChatRequest(
+            messages=messages, model=provider.model, max_tokens=500,
+            thinking={"type": "disabled"},  # 情绪观察无需思考，只需输出一个词
+        )
         response = await provider.async_chat_completion(request)
         raw = response.content.strip()
 
         if raw in ALL_FEELINGS:
-            logger.debug("[Emotion] 观察结果 | feeling=%s", raw)
+            logger.debug("[Emotion] LLM观察: %s", raw)
             return raw  # type: ignore[return-value]
 
-        logger.debug("[Emotion] 无效观察结果: %s", raw)
+        logger.warning("[Emotion] LLM 返回无效情绪: %s", raw)
     except Exception as e:
         logger.warning("[Emotion] 观察异常，使用默认 | error=%s", e)
 
