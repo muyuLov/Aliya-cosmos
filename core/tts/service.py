@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import TYPE_CHECKING, AsyncGenerator, AsyncIterator
+from typing import AsyncGenerator, AsyncIterator
 
 from core.logger import get_logger
 from core.tts.constants import (
@@ -17,9 +17,6 @@ from core.tts.exceptions import TTSRequestError, TTSSessionError
 from core.tts.models import TTSRequest, VoiceConfig
 from core.tts.providers.base import TTSProvider
 from core.tts.text_splitter import filter_actions, split_text
-
-if TYPE_CHECKING:
-    from core.tts.cache import TTSCache
 
 _logger = get_logger(__name__)
 
@@ -35,7 +32,6 @@ class TTSService:
         voice_config: 音色默认配置，为 None 时使用空配置。
         prefetch_queue_size: 预取队列大小，控制并发预取的段数，默认 16。
         max_concurrent_creates: 最大并发创建会话数，限制同时创建的 TTS 会话数量，默认 10。
-        cache: 音频缓存实例，为 None 时禁用缓存。按分段粒度缓存，命中时跳过 provider 请求。
     """
 
     def __init__(
@@ -45,7 +41,6 @@ class TTSService:
         prefetch_queue_size: int = DEFAULT_PREFETCH_QUEUE_SIZE,
         max_concurrent_creates: int = DEFAULT_MAX_CONCURRENT_CREATES,
         prefetch_window: int = DEFAULT_PREFETCH_WINDOW,
-        cache: "TTSCache | None" = None,
     ) -> None:
         # 参数验证（集中校验）
         from core.tts.validation import validate_tts_service_config
@@ -56,7 +51,6 @@ class TTSService:
         self.voice_config = voice_config or VoiceConfig()
         self.prefetch_queue_size = prefetch_queue_size
         self.prefetch_window = prefetch_window
-        self._cache = cache
         # 每个实例独立的 Semaphore，避免不同服务实例互相限流
         self._create_sem = asyncio.Semaphore(max_concurrent_creates)
 
@@ -172,35 +166,17 @@ class TTSService:
         """
         单句直接合成，跳过分段与队列开销。
 
-        缓存命中时直接返回整段音频，跳过 provider 请求；未命中时边合成边收集，
-        成功消费完整段后回填缓存。
-
         Args:
             request: 已合并默认值的 TTS 请求。
 
         Yields:
             音频字节块。
         """
-        # 缓存命中：直接返回整段音频，零 provider 调用
-        if self._cache is not None:
-            cached = self._cache.get(request)
-            if cached is not None:
-                yield cached
-                return
-
-        collected = bytearray() if self._cache is not None else None
-        completed = False
         session_id = await self.provider.create_session(request)
         try:
             async for chunk in self.provider.consume_session(session_id):
-                if collected is not None:
-                    collected.extend(chunk)
                 yield chunk
-            completed = True
         finally:
-            # 仅在完整消费成功时回填缓存，避免缓存半截音频
-            if completed and self._cache is not None and collected:
-                self._cache.set(request, bytes(collected))
             try:
                 await self.provider.close_session(session_id)
             except (TTSSessionError, TTSRequestError) as e:
@@ -210,7 +186,6 @@ class TTSService:
                     e,
                 )
             except Exception as e:
-                # 捕获所有其他异常（如 RuntimeError），避免清理阶段崩溃
                 _logger.debug(
                     "TTS 单句会话释放异常 | session_id=%s | error=%s",
                     session_id,
@@ -243,31 +218,16 @@ class TTSService:
         async def _create_and_prefetch(seg: str, queue: asyncio.Queue[object]) -> None:
             """创建 session 后立即预取，异常写入队列由消费端在正确位置抛出。"""
             seg_request = request.model_copy(update={"text": seg})
-
-            # 缓存命中：直接投递整段音频，跳过 session 创建
-            if self._cache is not None:
-                cached = self._cache.get(seg_request)
-                if cached is not None:
-                    await queue.put(cached)
-                    await queue.put(SENTINEL)
-                    return
-
             session_id: str | None = None
             session_iter: AsyncIterator[bytes] | None = None
-            collected = bytearray() if self._cache is not None else None
 
             try:
                 async with self._create_sem:
                     session_id = await self.provider.create_session(seg_request)
                 session_iter = self.provider.consume_session(session_id)
                 async for chunk in session_iter:
-                    if collected is not None:
-                        collected.extend(chunk)
                     await queue.put(chunk)
                 await queue.put(SENTINEL)
-                # 完整消费成功后回填缓存
-                if self._cache is not None and collected:
-                    self._cache.set(seg_request, bytes(collected))
             except asyncio.CancelledError:
                 if session_iter is not None:
                     try:
@@ -285,8 +245,6 @@ class TTSService:
                 except asyncio.QueueFull:
                     await queue.put(e)
             except Exception as e:
-                # 兜底：未被预期异常类型覆盖的错误（如超时、缓存后端错误）也必须
-                # 投递到队列，否则消费端 queue.get() 会永久挂起，导致合成协程卡死
                 _logger.error(
                     "TTS 分段任务异常 | segment 预取失败 | error=%s", e, exc_info=True
                 )

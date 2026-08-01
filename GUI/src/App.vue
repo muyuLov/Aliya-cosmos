@@ -1,42 +1,32 @@
 <template>
   <div class="sidebar">
-    <TopBar
-      :pinned="isPinned"
-      :ai-name="aiName"
-      @toggle-pin="handleTogglePin"
-      @minimize="handleMinimize"
-      @close="handleClose"
-    />
+    <TopBar />
 
     <main class="body">
-      <AvatarCard :ai-name="aiName" />
+      <AvatarCard />
 
       <hr class="divider" />
 
-      <StatusCard
-        :status-emoji="statusEmoji"
-        :status-label="statusLabel"
+      <IndicatorCard
+        :emoji="statusEmoji"
+        :label="statusLabel"
+        prefix="状态"
       />
 
-      <MoodCard
-        :feeling-emoji="feelingEmoji"
-        :feeling-label="feelingLabel"
+      <IndicatorCard
+        :emoji="feelingEmoji"
+        :label="feelingLabel"
+        prefix="心情"
+        variant="violet"
       />
 
-      <ModelCard
-        :model-name="modelDisplayName"
-        @open-chat="handleOpenChat"
-        @model-changed="handleModelChanged"
-      />
+      <ModelCard />
 
       <SettingsCard @open-settings="handleOpenSettings" />
 
       <hr class="divider" />
 
-      <TokenFooter
-        :ai-name="aiName"
-        :token-count="tokenCount"
-      />
+      <TokenFooter />
     </main>
 
     <ToastNotification ref="toastRef" />
@@ -45,93 +35,39 @@
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue';
-import { useSidebarAPI } from './composables/useSidebarAPI.js';
-import { formatModelName } from './utils/formatters.js';
+import { useAppStore } from './stores/appStore.js';
 import TopBar from './components/TopBar.vue';
 import AvatarCard from './components/AvatarCard.vue';
-import StatusCard from './components/StatusCard.vue';
-import MoodCard from './components/MoodCard.vue';
+import IndicatorCard from './components/IndicatorCard.vue';
 import ModelCard from './components/ModelCard.vue';
 import SettingsCard from './components/SettingsCard.vue';
 import TokenFooter from './components/TokenFooter.vue';
 import ToastNotification from './components/ToastNotification.vue';
 
-const api = useSidebarAPI();
+const store = useAppStore();
 
-// 解构为顶层 ref，模板中自动解包（避免嵌套 .value 响应式追踪问题）
-const { currentFeeling, currentStatus, tokenTotal, aiName } = api;
+const statusEmoji = computed(() => store.currentStatus.emoji);
+const statusLabel = computed(() => store.currentStatus.label);
+const feelingEmoji = computed(() => store.currentFeeling.emoji);
+const feelingLabel = computed(() => store.currentFeeling.label);
 
-// computed 拆解，确保模板直接用属性名访问
-const statusEmoji = computed(() => currentStatus.value.emoji);
-const statusLabel = computed(() => currentStatus.value.label);
-const feelingEmoji = computed(() => currentFeeling.value.emoji);
-const feelingLabel = computed(() => currentFeeling.value.label);
-const tokenCount = computed(() => tokenTotal.value);
-
-const isPinned = ref(true);
-const modelDisplayName = ref('获取中…');
 const toastRef = ref(null);
 
 function showToast(msg, dur) {
   toastRef.value?.show(msg, dur);
 }
 
-async function init() {
-  try {
-    isPinned.value = await api.isPinned();
-  } catch { /* 忽略 */ }
-
-  try {
-    const identity = await api.getIdentity();
-    if (identity?.aiName) {
-      aiName.value = identity.aiName;
-      document.title = `${identity.aiName} · 状态`;
-    }
-  } catch { /* 保持默认 */ }
-
-  try {
-    const model = await api.getModel();
-    if (model?.model && model.model !== '未知') {
-      modelDisplayName.value = formatModelName(model.model);
-    }
-  } catch { /* 保持默认 */ }
-
-  try {
-    const usage = await api.getTokenUsage();
-    tokenTotal.value = usage.total ?? 0;
-  } catch { /* 忽略 */ }
-
-  api.setupSubscriptions();
-}
-
-function handleTogglePin() {
-  api.togglePin().then((pinned) => {
-    isPinned.value = pinned;
-    showToast(pinned ? '已置顶' : '已取消置顶');
-  });
-}
-
-function handleMinimize() { api.minimize(); }
-function handleClose() { api.close(); }
-
-function handleOpenChat() {
-  api.openChat();
-  showToast('正在打开聊天…');
-}
-
 function handleOpenSettings() {
-  api.openSettings();
+  store.openSettings();
   showToast('正在打开设置…');
 }
 
-function handleModelChanged({ model }) {
-  modelDisplayName.value = formatModelName(model.model);
-  showToast('模型已切换');
-}
+let eventCleanup = null;
 
 onMounted(() => {
-  init();
-  api.subscribeEvents((payload) => {
+  store.init();
+
+  eventCleanup = store.subscribeEvents((payload) => {
     if (!payload?.type) return;
     switch (payload.type) {
       case 'open-chat':
@@ -148,7 +84,8 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
-  api.teardownSubscriptions();
+  if (eventCleanup) eventCleanup();
+  store.dispose();
 });
 </script>
 

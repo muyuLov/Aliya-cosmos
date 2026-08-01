@@ -9,7 +9,6 @@ __init__.py        ← 公共接口，工厂函数，提供商注册
 service.py         ← TTSService：分段流水线合成，管理会话生命周期
 text_splitter.py   ← 文本预处理：动作描写过滤、分句、短段合并
 models.py          ← TTSRequest / VoiceConfig 数据模型
-cache.py           ← TTSCache：本地文件 + 可选 Redis 音频缓存
 validation.py      ← 配置参数集中校验
 exceptions.py      ← 结构化异常（TTS_001~TTS_005）
 constants.py       ← 队列大小、缓冲区帧数等常量
@@ -216,25 +215,7 @@ split_text("你好。我是 Aliya。很高兴认识你！")
 
 ---
 
-## 音频缓存
-
-```python
-from core.tts.cache import TTSCache
-
-cache = TTSCache(
-    cache_dir="data/cache/tts",
-    redis_url=None,      # 可选，启用 Redis 二级缓存
-    enabled=True,
-    max_age_seconds=7 * 24 * 3600,  # 7 天
-)
-
-cached = cache.get(request, voice_config)
-if cached is None:
-    audio_data = b"".join([chunk async for chunk in tts_service.synthesize(request)])
-    cache.set(request, audio_data, voice_config)
-```
-
-缓存键由 `TTSRequest` + `VoiceConfig` 字段联合 MD5 计算，本地文件按前 2 位哈希字符分子目录存储。
+（TTS 音频缓存功能已移除）
 
 ---
 
@@ -261,4 +242,4 @@ if cached is None:
   - `sounddevice` + `numpy` — 音频播放
   - `imageio-ffmpeg` — MP3 解码（可选，不安装则无法播放 MP3）
   - `pydantic` — 数据模型
-  - `redis`（可选）— TTSCache Redis 二级缓存
+

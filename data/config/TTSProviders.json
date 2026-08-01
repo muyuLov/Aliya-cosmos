@@ -11,6 +11,8 @@
         "rate": "+0%",
         "volume": "+0%",
         "pitch": "+0Hz",
-        "timeout": 30
+        "timeout": 30,
+        "proxy": null,
+        "boundary": "SentenceBoundary"
     }
 }

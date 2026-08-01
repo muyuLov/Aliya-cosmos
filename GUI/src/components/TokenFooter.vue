@@ -1,6 +1,6 @@
 <template>
   <div>
-    <div class="version">{{ aiName }} v0.0.1</div>
+    <div class="version">{{ aiName }} v{{ appVersion }}</div>
     <div class="token-line">
       <span>Token：</span>
       <span class="token-line__value">{{ formattedToken }}</span>
@@ -10,14 +10,15 @@
 
 <script setup>
 import { computed } from 'vue';
+import { useAppStore } from '../stores/appStore.js';
 import { formatTokenCount } from '../utils/formatters.js';
 
-const props = defineProps({
-  aiName: { type: String, default: 'Aliya' },
-  tokenCount: { type: Number, default: 0 },
-});
+const store = useAppStore();
+const aiName = computed(() => store.aiName);
+const formattedToken = computed(() => formatTokenCount(store.tokenTotal));
 
-const formattedToken = computed(() => formatTokenCount(props.tokenCount));
+// Vite define 在 JS 中替换 __APP_VERSION__，template 通过此变量引用
+const appVersion = __APP_VERSION__;
 </script>
 
 <style scoped>

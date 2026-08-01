@@ -1,10 +1,10 @@
 <template>
-  <section class="card card--feeling">
+  <section class="card-base" :class="[`card--${variant}`]">
     <div class="indicator">
-      <div class="indicator__emoji">{{ feelingEmoji }}</div>
+      <div class="indicator__emoji">{{ emoji }}</div>
       <div class="indicator__text">
-        <span class="indicator__prefix">心情：</span>
-        <span class="indicator__label">{{ feelingLabel }}</span>
+        <span class="indicator__prefix">{{ prefix }}：</span>
+        <span class="indicator__label">{{ label }}</span>
       </div>
     </div>
   </section>
@@ -12,31 +12,21 @@
 
 <script setup>
 defineProps({
-  feelingEmoji: { type: String, default: '🌿' },
-  feelingLabel: { type: String, default: '平静' },
+  emoji: { type: String, default: '🌿' },
+  label: { type: String, default: '平静' },
+  prefix: { type: String, default: '状态' },
+  variant: {
+    type: String,
+    default: 'default',
+    validator: (v) => ['default', 'violet'].includes(v),
+  },
 });
 </script>
 
 <style scoped>
-.card {
-  position: relative;
-  overflow: hidden;
-  border-radius: var(--rb-radius-xl);
-  border: 1px solid rgba(255, 182, 220, 0.16);
-  background: rgba(255, 255, 255, 0.055);
-  box-shadow: var(--rb-shadow-card), inset 0 1px 0 rgba(255, 255, 255, 0.08);
-}
-
-.card::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
+/* card-base 的 ::before 径向渐变覆盖为 variant 专属 */
+.card--violet::before {
   background: radial-gradient(circle at 76% 12%, rgba(168, 85, 247, 0.18), transparent 42%);
-}
-
-.card--feeling {
-  padding: 12px;
 }
 
 .indicator {

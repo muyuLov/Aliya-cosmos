@@ -1,6 +1,6 @@
 {
   "name": "aliya-cosmos-gui",
-  "version": "0.2.0",
+  "version": "0.1.0",
   "description": "《彼方的她-Aliya》—— 状态面板",
   "main": "main.js",
   "private": true,
@@ -19,6 +19,9 @@
   },
   "dependencies": {
     "iconv-lite": "^0.7.3",
+    "pinia": "^4.0.2",
+    "pixi-live2d-display": "^0.4.0",
+    "pixi.js": "^6.5.10",
     "vue": "^3.4.0",
     "ws": "^8.21.1"
   }

@@ -178,6 +178,7 @@ def _strip_json_prefix(text: str) -> str:
 
     灵魂阶段 LLM 有时会在自然语言回复前输出一段 JSON 格式的工具状态，
     此函数将这部分剥离，只保留后面的正文。
+    JSON 后无正文时返回空字符串，由调用方决定回退策略。
     """
     text = text.strip()
     if not text.startswith("{"):
@@ -189,8 +190,7 @@ def _strip_json_prefix(text: str) -> str:
         elif ch == "}":
             depth -= 1
             if depth == 0:
-                rest = text[i + 1:].strip()
-                return rest if rest else text
+                return text[i + 1:].strip()
     return text
 
 # 对话压缩 prompt
@@ -281,7 +281,7 @@ def parse_llm_response(raw: str) -> BrainResult:
 
     # 第 3 层：正则兜底
     reply_match = re.search(r'"reply"\s*:\s*"((?:[^"\\]|\\.)*)"', raw)
-    reply = reply_match.group(1) if reply_match else raw
+    reply = reply_match.group(1) if reply_match else ""
     tool_calls: list[dict] = []
     tc_match = re.search(r'"tool_calls"\s*:\s*(\[.*?\])', raw, re.DOTALL)
     if tc_match:
@@ -677,14 +677,22 @@ class AliyaAgent:
             if not reply_stripped:
                 return _FALLBACK_REPLY
 
-            # 尝试解析为 JSON 提取纯净 reply 字段
+            # 三层净化链：
+            # ① parse_llm_response 提取 JSON 中的 reply 字段
             parsed = parse_llm_response(reply_stripped)
-            if parsed.reply:
-                return parsed.reply
+            candidate = parsed.reply
+            # 如果提取到的 reply 仍是 JSON（parse_llm_response 回退原文的情况），
+            # 尝试剥离 JSON 前缀后再判断
+            if candidate and not candidate.startswith("{"):
+                return candidate
 
-            # 剥离开头可能残留的 JSON 前缀（如 {"tool_calls": []}\n\n）
+            # ② 剥离开头可能残留的 JSON 前缀（如 {"tool_calls": []}\n\n）
             clean = _strip_json_prefix(reply_stripped)
-            return clean or _FALLBACK_REPLY
+            if clean and not clean.startswith("{"):
+                return clean
+
+            # ③ 全部净化失败，兜底回复
+            return _FALLBACK_REPLY
         except (asyncio.TimeoutError, Exception) as e:
             logger.warning("[Soul] 灵魂阶段异常，使用兜底回复 | error=%s", e)
             return _FALLBACK_REPLY

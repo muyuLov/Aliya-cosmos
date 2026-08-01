@@ -184,9 +184,19 @@ async def _run_ws_broadcast_server(broadcast: WSBroadcast, conversation_service:
         finally:
             broadcast.unregister(websocket)
 
+    # 配置 shutdown 事件以优雅地处理关闭
+    @app.on_event("shutdown")
+    async def shutdown_event():
+        logger.info("WS 广播服务器正在关闭...")
+        await broadcast.send_json({"type": "server_shutdown"})
+
     logger.info("WS 广播服务器启动 | ws=%s:%d", ws_host, ws_port)
     server = uvicorn.Server(uvicorn.Config(app, host=ws_host, port=ws_port, log_level="warning"))
-    await server.serve()
+    try:
+        await server.serve()
+    except asyncio.CancelledError:
+        logger.debug("WS 广播服务器已取消")
+        raise  # 重新抛出以便上层正确处理
 
 
 async def chat_loop(ws_enabled: bool = False):
@@ -267,11 +277,14 @@ async def chat_loop(ws_enabled: bool = False):
                     print(f"\n[错误] 处理消息时发生异常: {e}")
         finally:
             if ws_server_task and not ws_server_task.done():
+                logger.debug("正在关闭 WS 广播服务器...")
                 ws_server_task.cancel()
                 try:
                     await ws_server_task
                 except asyncio.CancelledError:
-                    pass
+                    logger.debug("WS 广播服务器已成功关闭")
+                except Exception as e:
+                    logger.warning("WS 广播服务器关闭时发生异常: %s", e)
 
 
 def start_server():

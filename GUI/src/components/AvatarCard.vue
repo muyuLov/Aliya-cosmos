@@ -10,12 +10,13 @@
 </template>
 
 <script setup>
+import { ref, computed } from 'vue';
+import { useAppStore } from '../stores/appStore.js';
 import avatarSrc from '@/assets/avatar.png';
 
-defineProps({
-  aiName: { type: String, default: 'Aliya' },
-  online: { type: Boolean, default: true },
-});
+const store = useAppStore();
+const aiName = computed(() => store.aiName);
+const online = ref(true);
 </script>
 
 <style scoped>

@@ -73,11 +73,48 @@ def _validate_edge(config: dict) -> None:
             f"rate 必须是字符串（如 '+0%'），当前类型: {type(rate).__name__}",
         )
 
-    timeout = config.get("timeout", 60)
-    if not isinstance(timeout, (int, float)) or not (1 <= timeout <= 600):
+    volume = config.get("volume", "+0%")
+    if volume and not isinstance(volume, str):
         raise TTSConfigError(
-            "timeout",
-            f"timeout 必须在 1-600 秒范围内，当前值: {timeout}",
+            "volume",
+            f"volume 必须是字符串（如 '+0%'），当前类型: {type(volume).__name__}",
+        )
+
+    pitch = config.get("pitch", "+0Hz")
+    if pitch and not isinstance(pitch, str):
+        raise TTSConfigError(
+            "pitch",
+            f"pitch 必须是字符串（如 '+0Hz'），当前类型: {type(pitch).__name__}",
+        )
+
+    boundary = config.get("boundary", "SentenceBoundary")
+    if boundary not in ("SentenceBoundary", "WordBoundary"):
+        raise TTSConfigError(
+            "boundary",
+            f"boundary 必须是 'SentenceBoundary' 或 'WordBoundary'，当前值: {boundary}",
+        )
+
+    # 超时：可共用（timeout）或分别指定 connect/receive
+    timeout = config.get("timeout")
+    if timeout is not None:
+        if not isinstance(timeout, (int, float)) or not (1 <= timeout <= 600):
+            raise TTSConfigError(
+                "timeout",
+                f"timeout 必须在 1-600 秒范围内，当前值: {timeout}",
+            )
+    for key in ("connect_timeout", "receive_timeout"):
+        val = config.get(key)
+        if val is not None and (not isinstance(val, (int, float)) or not (1 <= val <= 600)):
+            raise TTSConfigError(
+                key,
+                f"{key} 必须在 1-600 秒范围内，当前值: {val}",
+            )
+
+    proxy = config.get("proxy")
+    if proxy is not None and not isinstance(proxy, str):
+        raise TTSConfigError(
+            "proxy",
+            f"proxy 必须是字符串 URL，当前类型: {type(proxy).__name__}",
         )
 
 

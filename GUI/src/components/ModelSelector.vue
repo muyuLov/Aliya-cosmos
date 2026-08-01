@@ -21,16 +21,17 @@
 
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue';
+import { useAppStore } from '../stores/appStore.js';
 import { formatModelName } from '../utils/formatters.js';
+
+const store = useAppStore();
 
 const emit = defineEmits(['select', 'close']);
 
 const providers = ref([]);
 
 async function loadProviders() {
-  const api = window.sidebarAPI;
-  if (!api) return;
-  const list = await api.listProviders();
+  const list = await store.listProviders();
   providers.value = (list || []).slice().sort((a, b) =>
     a.isCurrent ? -1 : b.isCurrent ? 1 : 0
   );

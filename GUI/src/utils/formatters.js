@@ -15,6 +15,7 @@ export function formatModelName(raw) {
   if (!raw || raw === '未知') return '未选择模型';
   return raw
     .split(/[-_@]/)
+    .filter(Boolean)  // 过滤空分片（如 leading/trailing 分隔符）
     .map((seg) => seg.charAt(0).toUpperCase() + seg.slice(1))
     .join(' ');
 }

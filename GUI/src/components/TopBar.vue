@@ -6,7 +6,7 @@
       :class="{ 'is-active': pinned }"
       :aria-label="pinned ? '取消置顶' : '置顶'"
       :title="pinned ? '取消置顶' : '置顶'"
-      @click="$emit('toggle-pin')"
+      @click="handleTogglePin"
     >
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="M12 17v5"/>
@@ -18,12 +18,7 @@
       <span class="titlebar__hint">状态面板</span>
     </div>
     <div class="titlebar__actions">
-      <button type="button" class="win-btn" aria-label="最小化" title="最小化" @click="$emit('minimize')">
-        <svg width="9" height="2" viewBox="0 0 9 2" aria-hidden="true">
-          <rect width="9" height="2" rx="1" fill="currentColor"/>
-        </svg>
-      </button>
-      <button type="button" class="win-btn win-btn--close" aria-label="关闭" title="关闭" @click="$emit('close')">
+      <button type="button" class="win-btn win-btn--close" aria-label="关闭" title="关闭" @click="handleClose">
         <svg width="9" height="9" viewBox="0 0 9 9" aria-hidden="true">
           <line x1="2" y1="2" x2="7" y2="7" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
           <line x1="7" y1="2" x2="2" y2="7" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
@@ -34,12 +29,51 @@
 </template>
 
 <script setup>
-defineProps({
-  pinned: { type: Boolean, default: true },
-  aiName: { type: String, default: 'Aliya' },
-});
+import { computed, onMounted, onUnmounted } from 'vue';
+import { useAppStore } from '../stores/appStore.js';
 
-defineEmits(['toggle-pin', 'minimize', 'close']);
+const store = useAppStore();
+const pinned = computed(() => store.pinned);
+const aiName = computed(() => store.aiName);
+
+async function handleTogglePin() {
+  await store.togglePin();
+}
+
+function handleClose() { store.close(); }
+
+onMounted(() => {
+  // 窗口拖拽（工具栏区域）
+  let dragging = false;
+  let dragX = 0;
+  let dragY = 0;
+  const el = document.querySelector('.titlebar');
+
+  const onDown = (e) => {
+    if (e.target.closest('button')) return;
+    dragging = true;
+    dragX = e.screenX;
+    dragY = e.screenY;
+  };
+  const onMove = (e) => {
+    if (!dragging) return;
+    const dx = e.screenX - dragX;
+    const dy = e.screenY - dragY;
+    dragX = e.screenX;
+    dragY = e.screenY;
+    if (dx || dy) store.windowDragMove(dx, dy);
+  };
+  const onUp = () => { dragging = false; };
+
+  el?.addEventListener('mousedown', onDown);
+  window.addEventListener('mousemove', onMove);
+  window.addEventListener('mouseup', onUp);
+  onUnmounted(() => {
+    el?.removeEventListener('mousedown', onDown);
+    window.removeEventListener('mousemove', onMove);
+    window.removeEventListener('mouseup', onUp);
+  });
+});
 </script>
 
 <style scoped>
@@ -54,7 +88,6 @@ defineEmits(['toggle-pin', 'minimize', 'close']);
   padding: 0 12px 0 14px;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.10), rgba(255, 255, 255, 0.025));
   border-bottom: 1px solid var(--rb-border-soft);
-  -webkit-app-region: drag;
   flex-shrink: 0;
 }
 
@@ -87,12 +120,10 @@ defineEmits(['toggle-pin', 'minimize', 'close']);
   display: flex;
   align-items: center;
   gap: 6px;
-  -webkit-app-region: no-drag;
 }
 
 .icon-btn,
 .win-btn {
-  -webkit-app-region: no-drag;
   display: grid;
   place-items: center;
   width: 28px;
