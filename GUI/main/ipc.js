@@ -10,12 +10,18 @@ const {
   getModelConfig,
   getIdentity,
 } = require('./config');
-const { createSidebarWindow, calcLive2DRect } = require('./windows');
+const { createSidebarWindow, dockLive2D, syncLive2DPosition } = require('./windows');
 
 function registerIpcHandlers() {
   // ========== 窗口拖拽 ==========
   ipcMain.handle('live2d:drag-move', (_evt, dx, dy) => {
     if (!state.live2dWindow || state.live2dWindow.isDestroyed()) return;
+    // 用户手动拖动 Live2D → 解除停靠（侧边栏移动不再带动它）
+    if (state.live2dDocked) {
+      state.live2dDocked = false;
+      logger.debug('Live2D 拖动，解除停靠');
+      state.live2dWindow.webContents.send('live2d:docked-state', false);
+    }
     const [x, y] = state.live2dWindow.getPosition();
     state.live2dWindow.setPosition(x + dx, y + dy);
   });
@@ -24,14 +30,19 @@ function registerIpcHandlers() {
     if (!state.sidebarWindow || state.sidebarWindow.isDestroyed()) return;
     const [x, y] = state.sidebarWindow.getPosition();
     state.sidebarWindow.setPosition(x + dx, y + dy);
+    // 拖动结束前同步停靠位置（moved 事件兜底）
+    if (state.live2dDocked) {
+      syncLive2DPosition();
+    }
   });
 
+  // 贴靠到侧边栏：恢复停靠状态并吸附
   ipcMain.handle('live2d:snap-to-sidebar', () => {
-    if (!state.live2dWindow || state.live2dWindow.isDestroyed()) return;
-    const rect = calcLive2DRect();
-    if (rect) state.live2dWindow.setBounds(rect);
-    return true;
+    dockLive2D();
+    return state.live2dDocked;
   });
+
+  ipcMain.handle('live2d:is-docked', () => state.live2dDocked);
 
   // ========== 窗口控制 ==========
   ipcMain.handle('sidebar:minimize', () => {

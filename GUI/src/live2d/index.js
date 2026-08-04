@@ -1,78 +1,156 @@
-// Live2D 独立窗口渲染脚本
+// Live2D 独立窗口渲染脚本（Soullink Emotion SDK 版）
 // 由独立的透明 BrowserWindow 加载（live2d.html），不与状态面板耦合
+//
+// 表情/动作引擎：@soullink-emotion/engine（SoullinkRuntime）
+//   - VAD 情绪状态 → FACS 表情合成
+//   - 动作风格（motionStyle）+ 空闲微动 + 反应动作
+//   - TTS 音量口型（LipSyncController）+ 原生 exp3/motion3 播放
+// 渲染层：@soullink-emotion/live2d-pixi（Live2DRenderer）
 import * as PIXI from 'pixi.js';
-import { Live2DModel } from 'pixi-live2d-display/cubism4';
-import { LAYOUT, PHYSICS, IDLE_FPS, ACTIVE_FPS, TOOLBAR_HIDE_DELAY } from './constants.js';
-import { createLipSync } from './lip-sync.js';
+import { SoullinkRuntime, getVADPreset } from '@soullink-emotion/engine';
+import { Live2DRenderer, createScriptTagCubismLoader } from '@soullink-emotion/live2d-pixi';
+import { AKULU_PROFILE } from './profile.js';
+import { resolveEmotion } from './emotion-map.js';
+import { LAYOUT, PHYSICS, LIP_SYNC_CONFIG, TOOLBAR_HIDE_DELAY } from './constants.js';
 import '../styles/live2d.css';
 
 // pixi-live2d-display/cubism4 内部需通过 window.PIXI 访问 PixiJS 核心 API
 window.PIXI = PIXI;
 
-// 自动发现 assets/live2d/ 目录中的第一个 .model3.json 文件
-// 支持放置任意 Live2D 模型（如 阿库露_vts.model3.json），无需改代码
-const _modelFiles = import.meta.glob('../assets/live2d/*.model3.json');
-const _modelPaths = Object.keys(_modelFiles);
-// glob 返回相对 src/live2d/ 的路径；构建后资源位于 dist/assets/live2d/，
-// 而本页运行在 dist/live2d.html，故归一化为 './assets/...' 的相对文档路径
-const MODEL_PATH = (_modelPaths.length > 0 ? _modelPaths[0] : '../assets/live2d/default.model3.json')
-  .replace(/^\.\.\//, './');
-
-const canvas = document.getElementById('live2d-canvas');
-const errorEl = document.getElementById('live2d-error');
 const stage = document.getElementById('stage');
+const errorEl = document.getElementById('live2d-error');
 
-let app = null;
-let model = null;
-let resizeObserver = null;
+let renderer = null;
+let runtime = null;
+let rafId = null;
+let lastFrameTime = 0;
+let speechEndTimer = null;
 
-// ========== 口型同步引擎 ==========
-const lipSync = createLipSync();
+// ---- TTS 音频水平适配器（驱动 SDK 口型） ----
+// 主进程将后端 AudioPlayer 的实时音频特征经 IPC 推送到本窗口，
+// 这里把 volume 转成 SDK 的 AudioLevelAnalyzer 接口。
+const audioLevel = { level: 0, peak: 0, available: false };
+const audioAnalyzer = {
+  getLevel: () => audioLevel.level,
+  getPeak: () => audioLevel.peak,
+  isAvailable: () => audioLevel.available,
+  reset: () => { audioLevel.level = 0; audioLevel.peak = 0; },
+};
 
-// ---- 状态 ----
-
+// ---- 鼠标状态 ----
 const pointer = { x: 0, y: 0, active: false, lastMove: 0 };
-const vel = { x: 0, y: 0, prevX: 0, prevY: 0, prevTime: 0 };
-const focusTarget = { x: 0, y: 0 };
 
-let isTracking = false;
-let driftPhase = 0;
+// ---------- 帧循环（驱动表情/动作引擎） ----------
+
+function frame(now) {
+  rafId = requestAnimationFrame(frame);
+  if (!runtime || !renderer) return;
+
+  if (!lastFrameTime) lastFrameTime = now;
+  const timeSeconds = now / 1000;
+  const deltaSeconds = Math.min(Math.max((now - lastFrameTime) / 1000, 0), 0.05);
+  lastFrameTime = now;
+
+  // 鼠标静止超过 idleTimeout → 注视回归 SDK 默认视线
+  if (pointer.active && now - pointer.lastMove > PHYSICS.idleTimeout) {
+    pointer.active = false;
+    applyMouseGaze();
+  }
+
+  const snapshot = runtime.update(timeSeconds, deltaSeconds);
+  renderer.applyNativeAnimation(snapshot.nativeAnimation);
+  renderer.setParameters(snapshot.live2dParams);
+}
+
+// ---------- 情绪驱动（Agent 情绪 → SDK 表情/动作） ----------
+
+let lastEmotionKey = '';
+let lastEmotionAt = 0;
+
+function onEmotion(payload) {
+  if (!runtime) return;
+
+  const feeling = payload?.feeling || payload?.dominant;
+  const target = resolveEmotion(feeling);
+  const nowMs = performance.now();
+  const now = nowMs / 1000;
+
+  // 相同情绪在窗口内不重复触发，避免 feeling_scores 周期推送导致表情抖动
+  const key = `${target.emotion}:${target.variant}`;
+  if (key === lastEmotionKey && nowMs - lastEmotionAt < 2000) return;
+  lastEmotionKey = key;
+  lastEmotionAt = nowMs;
+
+  const vad = getVADPreset(target.emotion, target.variant);
+  // 非中性情绪加强表情幅度，让情绪响应更灵敏明显
+  const intensity = target.emotion === 'neutral'
+    ? target.intensity
+    : Math.min(1, target.intensity * 1.2);
+
+  runtime.triggerIntent({
+    emotion: target.emotion,
+    variant: target.variant,
+    naturalEmotion: target.emotion,
+    naturalVAD: vad,
+    intensity,
+    contextTags: ['agent_emotion'],
+  }, now, { vadTarget: vad });
+}
+
+// ---------- 口型同步（TTS 音量 → SDK 口型） ----------
+
+function onMouthOpen(data) {
+  if (!runtime) return;
+
+  const volume = Math.max(0, Math.min(1, Number(data?.volume) || 0));
+  audioLevel.level = volume;
+  audioLevel.peak = volume;
+  audioLevel.available = true;
+
+  if (volume > LIP_SYNC_CONFIG.volumeFloor) {
+    if (speechEndTimer) { clearTimeout(speechEndTimer); speechEndTimer = null; }
+    runtime.setVoicePlaybackActive(true);
+  } else if (!speechEndTimer) {
+    // 静音防抖：容忍语音中的短暂停顿
+    speechEndTimer = setTimeout(() => {
+      speechEndTimer = null;
+      audioLevel.level = 0;
+      audioLevel.peak = 0;
+      runtime.setVoicePlaybackActive(false);
+    }, 600);
+  }
+}
+
+// ---------- 鼠标注视（add 叠加在 SDK gaze 之上） ----------
+
+function applyMouseGaze() {
+  if (!runtime) return;
+
+  const w = Math.max(1, window.innerWidth);
+  const h = Math.max(1, window.innerHeight);
+
+  if (!pointer.active) {
+    runtime.setCustomChannel('mouseGazeX', 0);
+    runtime.setCustomChannel('mouseGazeY', 0);
+    return;
+  }
+
+  const gx = Math.max(-1, Math.min(1, ((pointer.x - w / 2) / (w / 2)) * 0.6));
+  const gy = Math.max(-1, Math.min(1, ((pointer.y - h / 2) / (h / 2)) * 0.6));
+  runtime.setCustomChannel('mouseGazeX', gx);
+  runtime.setCustomChannel('mouseGazeY', gy);
+}
 
 // ---------- 事件处理 ----------
 
 function onPointerMove(e) {
   const now = performance.now();
-
-  if (pointer.active) {
-    const rawDt = now - vel.prevTime;
-    if (rawDt > 0 && rawDt < 200) {
-      const rawVx = (e.clientX - vel.prevX) / rawDt * 1000;
-      const rawVy = (e.clientY - vel.prevY) / rawDt * 1000;
-      const s = PHYSICS.velocitySmoothing;
-      vel.x = rawVx * s + vel.x * (1 - s);
-      vel.y = rawVy * s + vel.y * (1 - s);
-    } else {
-      vel.x = 0;
-      vel.y = 0;
-    }
-  } else {
-    vel.x = 0;
-    vel.y = 0;
-  }
-  vel.prevX = e.clientX;
-  vel.prevY = e.clientY;
-  vel.prevTime = now;
-
-  if (pointer.active &&
-      Math.abs(e.clientX - pointer.x) < PHYSICS.mouseDeadZone &&
-      Math.abs(e.clientY - pointer.y) < PHYSICS.mouseDeadZone) {
-    return;
-  }
-
   pointer.x = e.clientX;
   pointer.y = e.clientY;
   pointer.active = true;
   pointer.lastMove = now;
+
+  applyMouseGaze();
 
   // 鼠标在窗口内时显示操作栏，停 2s 后自动隐藏
   showToolbar();
@@ -90,76 +168,9 @@ function onPointerMove(e) {
 
 function onPointerLeave() {
   pointer.active = false;
+  applyMouseGaze();
   // 鼠标离开窗口时隐藏操作栏
   hideToolbar(0);
-}
-
-// ---------- 焦点更新（每帧） ----------
-
-function updateFocus() {
-  if (!model || !app) return;
-
-  const now = performance.now();
-  const elapsed = now - pointer.lastMove;
-  const isIdle = !pointer.active || elapsed > PHYSICS.idleTimeout;
-
-  // 空闲时降低渲染帧率
-  if (isIdle && !isLowFps) {
-    app.ticker.maxFPS = IDLE_FPS;
-    isLowFps = true;
-  } else if (!isIdle && isLowFps) {
-    app.ticker.maxFPS = ACTIVE_FPS;
-    isLowFps = false;
-  }
-
-  const dt = Math.min(app.ticker.deltaMS / 1000, 0.05);
-
-  if (isIdle) {
-    if (isTracking) {
-      focusTarget.x = pointer.x;
-      focusTarget.y = pointer.y;
-      isTracking = false;
-    }
-
-    const decay = Math.exp(-PHYSICS.idleReturnRate * dt);
-    focusTarget.x = model.x + (focusTarget.x - model.x) * decay;
-    focusTarget.y = model.y + (focusTarget.y - model.y) * decay;
-
-    if (Math.abs(focusTarget.x - model.x) < PHYSICS.idleReturnDeadZone) focusTarget.x = model.x;
-    if (Math.abs(focusTarget.y - model.y) < PHYSICS.idleReturnDeadZone) focusTarget.y = model.y;
-
-    const atCenter = focusTarget.x === model.x && focusTarget.y === model.y;
-    if (atCenter && elapsed > PHYSICS.idleTimeout + PHYSICS.wanderDelay) {
-      driftPhase += dt * PHYSICS.wanderSpeed;
-      const wx = Math.sin(driftPhase) * PHYSICS.wanderAmplitude;
-      const wy = Math.cos(driftPhase * 0.7) * PHYSICS.wanderAmplitude * 0.8;
-      model.focus(focusTarget.x + wx, focusTarget.y + wy);
-    } else {
-      model.focus(focusTarget.x, focusTarget.y);
-    }
-  } else {
-    if (!isTracking) {
-      isTracking = true;
-      driftPhase = 0;
-    }
-
-    const px = pointer.x + computePrediction(vel.x);
-    const py = pointer.y + computePrediction(vel.y);
-    focusTarget.x = px;
-    focusTarget.y = py;
-    model.focus(focusTarget.x, focusTarget.y);
-  }
-
-  // ---- 口型同步（TTS 音量 → ParamMouthOpenY） ----
-  // 使用帧率无关 dt 确保 idle 20fps / active 60fps 行为一致
-  lipSync.update(dt);
-}
-
-function computePrediction(v) {
-  const speed = Math.abs(v);
-  if (speed < PHYSICS.velocityMinSpeed) return 0;
-  const raw = v * PHYSICS.predictionLookAhead / 1000;
-  return Math.max(-PHYSICS.predictionMaxPx, Math.min(PHYSICS.predictionMaxPx, raw));
 }
 
 // ========== 顶部操作栏 ==========
@@ -167,7 +178,6 @@ function computePrediction(v) {
 const toolbar = document.getElementById('toolbar');
 let toolbarTimer = null;
 let isPinned = true;
-let isLowFps = false;
 
 /** toolbar mouseleave 处理器引用，用于 cleanup */
 const onToolbarMouseLeave = () => hideToolbar();
@@ -268,7 +278,12 @@ function setupToolbar() {
           await api.toggleSidebar();
           btn.classList.toggle('is-active');
           break;
-        case 'snap':     api.snapToSidebar(); break;
+        case 'snap':
+          api.snapToSidebar().then((docked) => {
+            const snapBtn = toolbar.querySelector('[data-action="snap"]');
+            if (snapBtn) snapBtn.classList.toggle('is-docked', docked);
+          });
+          break;
         case 'minimize': api.minimize(); break;
         case 'close':    api.close(); break;
         case 'pin':
@@ -290,6 +305,20 @@ function setupToolbar() {
     if (pinBtn) pinBtn.classList.toggle('is-pinned', pinned);
   });
 
+  // 查询当前贴靠状态
+  api.isDocked().then((docked) => {
+    const snapBtn = toolbar.querySelector('[data-action="snap"]');
+    if (snapBtn) snapBtn.classList.toggle('is-docked', docked);
+  });
+
+  // 拖动解除停靠时实时更新按钮高亮
+  if (api.onDockedState) {
+    api.onDockedState((docked) => {
+      const snapBtn = toolbar.querySelector('[data-action="snap"]');
+      if (snapBtn) snapBtn.classList.toggle('is-docked', docked);
+    });
+  }
+
   // 监听侧边栏状态变更（侧边栏自身关闭时更新按钮）
   if (api.onSidebarState) {
     api.onSidebarState((visible) => {
@@ -299,15 +328,39 @@ function setupToolbar() {
   }
 }
 
-// ========== 窗口拖拽 ==========
+// ========== 窗口拖拽 + 互动反馈 ==========
+
+const INTERACTION = {
+  clickMoveThreshold: 8,   // 按下后位移超过该值视为拖拽
+  clickMaxMs: 500,         // 按下到抬起超过该时长视为拖拽
+  clickCooldownMs: 1800,   // 单击可爱反应冷却
+  doubleClickMs: 350,      // 双击判定间隔
+};
+
+// 单击可爱反应候选（随机触发）
+const CLICK_REACTIONS = [
+  { emotion: 'happy', variant: 'bright_smile', intensity: 0.6 },   // 眯眯眼笑
+  { emotion: 'surprised', variant: 'soft_surprise', intensity: 0.55 }, // 瞳孔缩小惊讶
+  { emotion: 'shy', variant: 'bashful', intensity: 0.55 },         // 害羞脸红
+];
 
 let isDragging = false;
 let dragLastX = 0;
 let dragLastY = 0;
+let pressX = 0;
+let pressY = 0;
+let pressTime = 0;
+let clickMoved = false;
+let lastClickTime = 0;
+let lastReactionAt = 0;
 
 function onMouseDown(e) {
   // 在工具栏或面板上按下时不触发拖动
   if (toolbar.contains(e.target) || picker.contains(e.target)) return;
+  pressX = e.clientX;
+  pressY = e.clientY;
+  pressTime = performance.now();
+  clickMoved = false;
   isDragging = true;
   dragLastX = e.screenX;
   dragLastY = e.screenY;
@@ -315,6 +368,10 @@ function onMouseDown(e) {
 
 function onMouseMove(e) {
   if (!isDragging) return;
+  // 位移超过阈值 → 判定为拖拽（点击反应失效）
+  if (!clickMoved && Math.hypot(e.clientX - pressX, e.clientY - pressY) > INTERACTION.clickMoveThreshold) {
+    clickMoved = true;
+  }
   const dx = e.screenX - dragLastX;
   const dy = e.screenY - dragLastY;
   dragLastX = e.screenX;
@@ -326,93 +383,125 @@ function onMouseMove(e) {
 
 function onMouseUp() {
   isDragging = false;
+  const now = performance.now();
+  // 位移小且时间短 → 视为点击，触发互动反应
+  if (!clickMoved && now - pressTime < INTERACTION.clickMaxMs) {
+    handleClick(now);
+  }
 }
 
-// ---------- 布局 ----------
+function handleClick(now) {
+  // 双击 → 挥挥手
+  if (now - lastClickTime < INTERACTION.doubleClickMs) {
+    lastClickTime = 0;
+    triggerWave();
+    return;
+  }
+  lastClickTime = now;
+  // 单击冷却，避免连点刷表情
+  if (now - lastReactionAt < INTERACTION.clickCooldownMs) return;
+  lastReactionAt = now;
+  triggerCuteReaction();
+}
 
-function layoutModel() {
-  if (!app || !model) return;
+function triggerIntentEmotion(pick, tags, intensity) {
+  if (!runtime) return;
+  const vad = getVADPreset(pick.emotion, pick.variant);
+  runtime.triggerIntent({
+    emotion: pick.emotion,
+    variant: pick.variant,
+    naturalEmotion: pick.emotion,
+    naturalVAD: vad,
+    intensity,
+    contextTags: tags,
+  }, performance.now() / 1000, { vadTarget: vad });
+}
 
-  const w = app.renderer.width / app.renderer.resolution;
-  const h = app.renderer.height / app.renderer.resolution;
+// 单击：随机一个可爱的表情反应
+function triggerCuteReaction() {
+  const pick = CLICK_REACTIONS[Math.floor(Math.random() * CLICK_REACTIONS.length)];
+  triggerIntentEmotion(pick, ['interaction'], pick.intensity);
+}
 
-  const lb = model.getLocalBounds();
-  const origW = lb.width;
-  const origH = lb.height;
-  if (!origW || !origH) return;
-
-  // 基础缩放：适配窗口（保留边距） × 用户倍率
-  const fitScale = Math.min(w / origW, h / origH) * (1 - LAYOUT.margin);
-  const scale = fitScale * LAYOUT.scaleMultiplier;
-  model.scale.set(scale);
-
-  // 定位：居中 + 用户偏移（以模型缩放后的实际像素计算）
-  model.pivot.set(lb.x + origW / 2, lb.y + origH / 2);
-  model.x = w / 2 + LAYOUT.offsetX;
-  model.y = h / 2 + LAYOUT.offsetY;
+// 双击：挥挥手（happy 映射到 motionMap 招手）
+function triggerWave() {
+  triggerIntentEmotion(
+    { emotion: 'happy', variant: 'bright_smile' },
+    ['interaction', 'wave'],
+    0.9
+  );
 }
 
 // ---------- 初始化 ----------
 
 async function init() {
-  const w = Math.max(1, window.innerWidth);
-  const h = Math.max(1, window.innerHeight);
-
   try {
-    app = new PIXI.Application({
-      view: canvas,
-      width: w,
-      height: h,
-      backgroundAlpha: 0,
-      resolution: Math.min(window.devicePixelRatio || 1, 2),
-      autoDensity: true,
-      antialias: false,                // 模型已含抗锯齿纹理，关闭 GPU MSAA
-      autoStart: true,
-      powerPreference: 'high-performance',
+    runtime = new SoullinkRuntime({
+      profile: AKULU_PROFILE,
+      audioLevelAnalyzer: audioAnalyzer,
+      // ── 表情更明显、过渡更自然 ──
+      personality: {
+        expressiveness: 0.95,   // 0.88 → 0.95：FACS 表情幅度更大
+        softness: 0.62,          // 0.7 → 0.62：动作更干脆利落
+        shyness: 0.55,
+        gazeStability: 0.58,     // 0.72 → 0.58：视线更活泼
+      },
+      // ── 情绪响应更灵敏、表情保持更久 ──
+      emotionPersonality: {
+        reactivity: 1.3,         // 1 → 1.3：情绪 nudge 幅度更强
+        decayRate: 0.012,        // 0.018 → 0.012：情绪回落更慢，表情不一闪而过
+        emotionHoldSeconds: 26,  // 18 → 26：表情保持时间更长
+        ambientDriftStrength: 0.052, // 0.034 → 0.052：待机情绪微漂移更丰富
+      },
+      // ── 待机动作更生动（介于 natural 与 lively 之间偏活泼） ──
+      motionStyle: {
+        spontaneity: 1.38,       // 自发小动作频率更高
+        gestureFrequency: 1.32,  // 表情过渡/手势更频繁
+        gazeStability: 0.58,     // 视线游移更多
+        blinkRate: 1.16,         // 眨眼稍快
+        breathRate: 1.08,        // 呼吸稍快
+        breathVariance: 0.62,    // 呼吸起伏更不规律
+        microMotionGain: 1.28,   // 头/面微小动作幅度更大
+        idleActionGain: 1.34,    // 待机动作幅度更大
+        avoidRepeatWindow: 4,
+        speechAccentGain: 1.12,  // 说话时语气重音更明显
+      },
     });
 
-    model = await Live2DModel.from(MODEL_PATH);
-    app.stage.addChild(model);
-    layoutModel();
+    renderer = new Live2DRenderer(stage, {
+      // live2d.html 已直接加载 ./lib/live2dcubismcore.min.js，
+      // createScriptTagCubismLoader 检测到 window.Live2DCubismCore 会直接放行
+      cubismLoader: createScriptTagCubismLoader('./lib/live2dcubismcore.min.js'),
+    });
 
-    model.autoInteract = false;
-    model.interactive = false;          // 使用自定义 pointer 事件，不启用 PIXI 交互系统
+    renderer.setViewScale(LAYOUT.scaleMultiplier);
+    renderer.setViewOffset({ x: LAYOUT.offsetX, y: LAYOUT.offsetY });
 
-    // 口型同步：patch coreModel.update() 在 motion/物理之后注入口型参数
-    if (model.internalModel?.coreModel) {
-      lipSync.patch(model.internalModel.coreModel);
+    const paramMeta = await renderer.load(AKULU_PROFILE.modelPath);
+    // 把模型全部参数元数据（min/max/default）传给 runtime，
+    // 否则 profile 的 privateEmotionMap（脸红/爱心眼/星星眼等 VTS 按键表情）不会激活
+    if (paramMeta) {
+      runtime.setPrivateVADParameters(paramMeta);
     }
-
-    focusTarget.x = model.x;
-    focusTarget.y = model.y;
-
-    vel.prevX = model.x;
-    vel.prevY = model.y;
-    vel.prevTime = performance.now();
 
     stage.addEventListener('pointermove', onPointerMove);
     stage.addEventListener('pointerleave', onPointerLeave);
     stage.addEventListener('mousedown', onMouseDown);
     stage.addEventListener('mousemove', onMouseMove);
     stage.addEventListener('mouseup', onMouseUp);
-    app.ticker.add(updateFocus);
 
     // ---- 操作栏 ----
     setupToolbar();
-    lipSync.setup(window.live2dAPI);
     toolbar.addEventListener('mouseenter', showToolbar);
     toolbar.addEventListener('mouseleave', onToolbarMouseLeave);
 
-    resizeObserver = new ResizeObserver(() => {
-      if (!app) return;
-      const nw = Math.max(1, window.innerWidth);
-      const nh = Math.max(1, window.innerHeight);
-      app.renderer.resize(nw, nh);
-      layoutModel();
-      focusTarget.x = model.x;
-      focusTarget.y = model.y;
-    });
-    resizeObserver.observe(document.body);
+    // ---- 外部数据通道（主进程推送） ----
+    const api = window.live2dAPI;
+    if (api?.onMouthOpen) api.onMouthOpen(onMouthOpen);
+    if (api?.onEmotion) api.onEmotion(onEmotion);
+
+    lastFrameTime = 0;
+    rafId = requestAnimationFrame(frame);
   } catch (err) {
     console.error('[Live2D] 模型加载失败', err);
     errorEl.textContent = 'Live2D 加载失败';
@@ -424,8 +513,10 @@ async function init() {
 // ---------- 统一清理 ----------
 
 function cleanup() {
+  if (speechEndTimer) { clearTimeout(speechEndTimer); speechEndTimer = null; }
   if (toolbarTimer) { clearTimeout(toolbarTimer); toolbarTimer = null; }
   if (pickerTimer) { clearTimeout(pickerTimer); pickerTimer = null; }
+  if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; }
 
   try { stage.removeEventListener('pointermove', onPointerMove); } catch {}
   try { stage.removeEventListener('pointerleave', onPointerLeave); } catch {}
@@ -436,14 +527,8 @@ function cleanup() {
   try { toolbar.removeEventListener('mouseenter', showToolbar); } catch {}
   try { toolbar.removeEventListener('mouseleave', onToolbarMouseLeave); } catch {}
 
-  if (resizeObserver) { resizeObserver.disconnect(); resizeObserver = null; }
-
-  if (model) { model.destroy({ children: true }); model = null; }
-  if (app) {
-    app.ticker.stop();
-    app.destroy(true);
-    app = null;
-  }
+  if (renderer) { renderer.destroy(); renderer = null; }
+  runtime = null;
 }
 
 window.addEventListener('pagehide', cleanup);

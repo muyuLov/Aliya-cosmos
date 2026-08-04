@@ -13,6 +13,8 @@ const state = {
   alwaysOnTop: true,
   currentZoom: 1.0,
   sidebarVisible: true,
+  // Live2D 是否贴靠状态面板（侧边栏移动时自动跟随）
+  live2dDocked: true,
 
   // Agent WebSocket
   agentWebSocket: null,

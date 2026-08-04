@@ -42,6 +42,13 @@ function flushSidebarState() {
   state.stateBuffer = { emotion: null, status: null, token: null };
   if (Object.keys(snap).length > 0) {
     state.sidebarWindow?.webContents.send('sidebar:state-snapshot', snap);
+    // 同步情绪到 Live2D 窗口，驱动 SDK 表情/动作系统
+    if (snap.feeling) {
+      state.live2dWindow?.webContents.send('live2d:emotion', {
+        feeling: snap.feeling,
+        scores: snap.scores || null,
+      });
+    }
   }
 }
 

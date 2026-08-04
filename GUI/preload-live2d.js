@@ -27,4 +27,19 @@ contextBridge.exposeInMainWorld('live2dAPI', {
     ipcRenderer.on('live2d:mouth-open', listener);
     return () => ipcRenderer.removeListener('live2d:mouth-open', listener);
   },
+  // 情绪驱动：接收 Agent 情绪变化驱动 Live2D 表情/动作
+  // 数据格式：{feeling: '开心', scores: {开心: 0.8, ...} | null}
+  onEmotion: (handler) => {
+    const listener = (_evt, data) => handler(data);
+    ipcRenderer.on('live2d:emotion', listener);
+    return () => ipcRenderer.removeListener('live2d:emotion', listener);
+  },
+  // 查询 Live2D 是否处于贴靠状态面板的停靠状态
+  isDocked: () => ipcRenderer.invoke('live2d:is-docked'),
+  // 监听停靠状态变更（拖动解除停靠时实时更新 UI）
+  onDockedState: (handler) => {
+    const listener = (_evt, docked) => handler(docked);
+    ipcRenderer.on('live2d:docked-state', listener);
+    return () => ipcRenderer.removeListener('live2d:docked-state', listener);
+  },
 });

@@ -49,6 +49,13 @@ function createSidebarWindow() {
   sidebarWindow.once('ready-to-show', () => {
     logger.info('侧边栏窗口已显示', { x, y });
     sidebarWindow.show();
+    // 侧边栏重建后，让停靠的 Live2D 回到贴靠位置
+    if (state.live2dDocked) syncLive2DPosition();
+  });
+
+  // 侧边栏被拖动时，停靠的 Live2D 实时跟随
+  sidebarWindow.on('moved', () => {
+    if (state.live2dDocked) syncLive2DPosition();
   });
 
   // 捕获 renderer 进程的 console 输出（含 vue/pixi 报错）写入主进程日志
@@ -87,15 +94,29 @@ function createSidebarWindow() {
 function calcLive2DRect() {
   if (!state.sidebarWindow || state.sidebarWindow.isDestroyed()) return null;
   const [sbX, sbY] = state.sidebarWindow.getPosition();
-  return {
-    x: sbX - LIVE2D_WIDTH - LIVE2D_GAP,
-    y: sbY,
-    width: LIVE2D_WIDTH,
-    height: LIVE2D_HEIGHT,
-  };
+  const display = screen.getDisplayNearestPoint({ x: sbX, y: sbY });
+  const wa = display.workArea;
+
+  // 默认贴靠侧边栏左侧；若左侧放不下（靠近屏幕左缘），改贴到右侧
+  let x = sbX - LIVE2D_WIDTH - LIVE2D_GAP;
+  if (x < wa.x) {
+    x = sbX + SIDEBAR_WIDTH + LIVE2D_GAP;
+  }
+  x = Math.max(wa.x, Math.min(x, wa.x + wa.width - LIVE2D_WIDTH));
+  const y = Math.max(wa.y, Math.min(sbY, wa.y + wa.height - LIVE2D_HEIGHT));
+
+  return { x, y, width: LIVE2D_WIDTH, height: LIVE2D_HEIGHT };
 }
 
+// 进入停靠状态并贴靠到侧边栏
+function dockLive2D() {
+  state.live2dDocked = true;
+  syncLive2DPosition();
+}
+
+// 同步停靠位置（仅处于停靠状态时生效）
 function syncLive2DPosition() {
+  if (!state.live2dDocked) return;
   if (!state.live2dWindow || state.live2dWindow.isDestroyed()) return;
   const rect = calcLive2DRect();
   if (!rect) return;
@@ -163,4 +184,5 @@ module.exports = {
   createLive2DWindow,
   calcLive2DRect,
   syncLive2DPosition,
+  dockLive2D,
 };

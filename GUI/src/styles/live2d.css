@@ -7,7 +7,8 @@
   background: transparent;
 }
 
-#live2d-canvas {
+/* SDK Live2DRenderer 自建 canvas */
+#stage canvas {
   display: block;
   width: 100%;
   height: 100%;
@@ -17,12 +18,19 @@
 #live2d-error {
   position: absolute;
   inset: 0;
+  z-index: 30;
   display: grid;
   place-items: center;
   font: 12px/1.5 "Microsoft YaHei", sans-serif;
   color: #a094c1;
   text-align: center;
   padding: 8px;
+}
+
+/* 关键：display:grid 会覆盖 HTML hidden 属性默认的 display:none，
+   导致隐藏状态的错误层以 z-index:30 挡在 UI 之上拦截所有点击 */
+#live2d-error[hidden] {
+  display: none;
 }
 
 body {
@@ -116,7 +124,8 @@ body {
 
 /* 置顶 / 面板开关激活态 */
 .tb-btn.is-pinned,
-.tb-btn.is-active {
+.tb-btn.is-active,
+.tb-btn.is-docked {
   background: linear-gradient(135deg, #ff6ec7, #ec4899, #9f7aea);
   color: #ffffff;
   box-shadow: 0 0 14px rgba(236, 72, 153, 0.40);
