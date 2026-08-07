@@ -7,13 +7,9 @@ from typing import TYPE_CHECKING, Any
 
 from core.logger import get_logger
 from core.tts.constants import (
-    DEFAULT_FRAMES_PER_BUFFER,
     DEFAULT_MAX_CONCURRENT_CREATES,
-    DEFAULT_PLAY_QUEUE_SIZE,
     DEFAULT_PREFETCH_QUEUE_SIZE,
     DEFAULT_PREFETCH_WINDOW,
-    SENTINEL,
-    WAV_DETECT_SIZE,
 )
 from core.tts.exceptions import (
     TTSConfigError,
@@ -32,7 +28,7 @@ from core.tts.service import TTSService
 _logger = get_logger(__name__)
 
 if TYPE_CHECKING:
-    from core.tts.player import AudioPlayer
+    from core.tts.player import AudioPlayer, AudioPlayerError
 
 
 TTSProviderFactory.register("astra", AstraTTSProvider)

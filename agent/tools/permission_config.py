@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from core.config import get_config_instance
 from core.logger import get_logger
 from agent.tools.base import ToolPermission

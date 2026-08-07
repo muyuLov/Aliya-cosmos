@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, AsyncGenerator, Literal
 
 from core.llm.cache import ContextCache
 from core.llm.exceptions import LLMRequestError
-from core.llm.models import ChatRequest, ChatResponse, ConversationContext, Message, TokenUsage
+from core.llm.models import ChatRequest, ConversationContext, Message, TokenUsage
 from core.logger import get_logger
 
 if TYPE_CHECKING:
@@ -100,6 +100,11 @@ class ConversationService:
     @property
     def usage(self) -> TokenUsage:
         return self._usage
+
+    @property
+    def provider(self) -> Any:
+        """底层 LLM 提供商实例（供风格切换等场景读取模型/能力信息）。"""
+        return self._provider
 
     @property
     def supports_reasoning(self) -> bool:
@@ -500,6 +505,36 @@ class ConversationService:
             if removed:
                 self._context.updated_at = time.time()
                 self._save()
+
+    async def replace_last_message(
+        self, content: str, reasoning_content: str = "",
+    ) -> None:
+        """替换历史最后一条消息（通常为工具阶段生成的 JSON 决策消息）。
+
+        用于工具阶段消息净化：将纯 JSON 决策替换为纯文本标记，
+        避免诱导后续阶段 LLM 模仿 JSON 输出。
+        """
+        async with self._lock:
+            if not self._context.messages:
+                return
+            last = self._context.messages[-1]
+            replaced = last.model_copy(
+                update={"content": content, "reasoning_content": reasoning_content}
+            )
+            self._context.messages[-1] = replaced
+            self._context.updated_at = time.time()
+            self._save()
+
+    async def truncate_messages(self, keep: int) -> None:
+        """截断历史，仅保留最后 keep 条消息（压缩对话时使用）。"""
+        if keep < 0:
+            raise ValueError("keep 必须为非负数")
+        async with self._lock:
+            if not self._context.messages:
+                return
+            self._context.messages = self._context.messages[-keep:] if keep else []
+            self._context.updated_at = time.time()
+            self._save()
 
     # ── 内部实现 ─────────────────────────────────────────────────────────────
 

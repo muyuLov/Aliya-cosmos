@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import pytest
 
-from agent.agent import (
-    AgentConfig,
-    AgentState,
-    BrainResult,
-    AliyaAgent,
-    parse_llm_response,
-)
+from unittest.mock import AsyncMock, MagicMock
+
+from agent.agent import AgentState, AliyaAgent
+from agent.config import AgentConfig
+from agent.brain import Brain, BrainResult, parse_llm_response, clean_soul_reply
+from core.llm.cache import ContextCache
+from core.llm.models import ChatResponse, TokenUsage
+from core.llm.service import ConversationService
 
 
 class TestParseLlmResponse:
@@ -135,6 +136,92 @@ class TestAgentConfig:
         assert cfg.progress_interval == 5.0
 
 
+class TestSoulCleaning:
+    """灵魂阶段回复净化。"""
+
+    def test_pure_text_passthrough(self):
+        """纯自然语言直接返回，不触发 JSON fallback。"""
+        assert clean_soul_reply("我也想你呀。") == "我也想你呀。"
+
+    def test_json_prefix_stripped(self):
+        """JSON 前缀 + 正文 → 保留正文。"""
+        raw = '{"tool_calls": []}\n\n我也想你呀。'
+        assert clean_soul_reply(raw) == "我也想你呀。"
+
+    def test_json_with_reply(self):
+        """JSON 中 reply 非空 → 提取 reply。"""
+        raw = '{"reply": "我也想你呀", "tool_calls": []}'
+        assert clean_soul_reply(raw) == "我也想你呀"
+
+    def test_pure_json_no_reply(self):
+        """纯 JSON 无 reply 无正文 → 返回空（触发重试/兜底）。"""
+        assert clean_soul_reply('{"thought": "分析", "tool_calls": []}') == ""
+
+    def test_empty_input(self):
+        assert clean_soul_reply("") == ""
+        assert clean_soul_reply("   ") == ""
+
+
+class TestToolPhaseSanitize:
+    """工具阶段 JSON 决策消息的历史净化。"""
+
+    def _make_service(self) -> ConversationService:
+        provider = MagicMock()
+        provider.model = "test-model"
+        provider.provider_name = "test"
+        provider.async_chat_completion = AsyncMock(
+            return_value=ChatResponse(content="", usage=TokenUsage())
+        )
+        provider.stream_chat_completion = AsyncMock()
+        provider.aclose = AsyncMock()
+        return ConversationService(
+            provider=provider,
+            cache=ContextCache(ttl=3600),
+            conversation_id="sanitize-test",
+        )
+
+    @pytest.mark.asyncio
+    async def test_json_decision_cleaned(self):
+        """纯 JSON 决策消息被替换为纯文本标记。"""
+        service = self._make_service()
+        brain = Brain(service, AgentConfig())
+        # 模拟工具阶段写入的 JSON assistant 消息
+        await service.append_message("assistant", '{"tool_calls": [], "reply": ""}')
+
+        result = BrainResult(reply="", tool_calls=[])
+        await brain._sanitize_tool_phase_message(result)
+
+        history = await service.get_history()
+        assert history[-1].content == "[无需调用工具，继续对话]"
+        assert history[-1].reasoning_content == ""
+
+    @pytest.mark.asyncio
+    async def test_real_reply_not_cleaned(self):
+        """工具阶段已产出正式回复时保留原文，不净化。"""
+        service = self._make_service()
+        brain = Brain(service, AgentConfig())
+        await service.append_message("assistant", "我已考虑好，接下来直接聊天")
+
+        result = BrainResult(reply="我已考虑好，接下来直接聊天", tool_calls=[])
+        await brain._sanitize_tool_phase_message(result)
+
+        history = await service.get_history()
+        assert history[-1].content == "我已考虑好，接下来直接聊天"
+
+    @pytest.mark.asyncio
+    async def test_tool_call_decision_cleaned(self):
+        """含工具调用的 JSON 决策消息被替换为标记。"""
+        service = self._make_service()
+        brain = Brain(service, AgentConfig())
+        await service.append_message("assistant", '{"tool_calls": [{"name": "memory_query"}]}')
+
+        result = BrainResult(reply="", tool_calls=[{"name": "memory_query", "params": {}}])
+        await brain._sanitize_tool_phase_message(result)
+
+        history = await service.get_history()
+        assert history[-1].content == "[已完成工具阶段分析]"
+
+
 class TestAgentState:
     def test_state_values(self):
         assert AgentState.IDLE.value == "idle"
@@ -178,3 +265,13 @@ class TestAgentConstruction:
         cfg = AgentConfig(max_turns=5)
         agent = AliyaAgent(conversation_service=conv, tool_registry=reg, config=cfg)
         assert agent._config.max_turns == 5
+
+    def test_style_single_source_through_pipeline(self, mocker):
+        """set_style / get_style / get_prompt_config 统一委托 pipeline（单一来源，防双源分叉）。"""
+        conv = mocker.AsyncMock()
+        reg = mocker.MagicMock()
+        agent = AliyaAgent(conversation_service=conv, tool_registry=reg)
+        agent.set_style("warm")
+        assert agent.get_style() == "warm"
+        assert agent._pipeline.current_style == "warm"
+        assert agent.get_prompt_config()["style"] == "warm"

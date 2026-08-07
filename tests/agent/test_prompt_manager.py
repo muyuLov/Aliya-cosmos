@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from agent.prompts import PromptManager, get_prompt_manager, ALL_STYLES
+from agent.prompts import PromptManager, get_prompt_manager
 
 
 class TestPromptManager:
@@ -71,20 +71,29 @@ class TestPromptManager:
         assert pm.build_emotion_patch("") == ""
 
     def test_build_emotion_patch_known(self):
-        """已知情绪返回非空补丁"""
+        """已知情绪返回非空补丁（SDK emotion 体系）"""
         pm = PromptManager()
-        assert len(pm.build_emotion_patch("开心")) > 0
-        assert len(pm.build_emotion_patch("难过")) > 0
+        assert len(pm.build_emotion_patch("happy")) > 0
+        assert len(pm.build_emotion_patch("sad")) > 0
+        assert len(pm.build_emotion_patch("concerned")) > 0
 
     def test_build_emotion_patch_unknown(self):
         """未知情绪返回空字符串"""
         pm = PromptManager()
         assert pm.build_emotion_patch("不存在") == ""
 
-    def test_build_emotion_patch_calm(self):
-        """平静情绪无补丁"""
+    def test_build_emotion_patch_extended(self):
+        """agent 扩展情绪有补丁"""
         pm = PromptManager()
-        assert pm.build_emotion_patch("平静") == ""
+        assert len(pm.build_emotion_patch("bored")) > 0
+        assert len(pm.build_emotion_patch("grateful")) > 0
+        assert len(pm.build_emotion_patch("relieved")) > 0
+        assert len(pm.build_emotion_patch("disgusted")) > 0
+
+    def test_build_emotion_patch_neutral(self):
+        """neutral 情绪无补丁"""
+        pm = PromptManager()
+        assert pm.build_emotion_patch("neutral") == ""
 
     def test_get_config_dict(self):
         """配置字典包含必需字段"""

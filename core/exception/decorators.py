@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Generator
+from collections.abc import Awaitable, Callable, Generator
 from contextlib import contextmanager
 from functools import wraps
 from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar
 
 if TYPE_CHECKING:
+    import logging
+
     from core.exception.handler import ExceptionHandler
-    from core.logger import Logger
 
 P = ParamSpec("P")
 R = TypeVar("R")
@@ -62,7 +63,7 @@ def _get_handler(handler: ExceptionHandler | None) -> ExceptionHandler:
 
 def service_error_handler(
     default_return: Any = None,
-    logger: Any | None = None,
+    logger: logging.Logger | None = None,
     error_message: str | None = None,
 ) -> Callable[[Callable[P, R]], Callable[P, R | Any]]:
     """
@@ -110,9 +111,9 @@ def service_error_handler(
 
 def async_service_error_handler(
     default_return: Any = None,
-    logger: Any | None = None,
+    logger: logging.Logger | None = None,
     error_message: str | None = None,
-) -> Callable[[Callable[P, R]], Callable[P, R | Any]]:
+) -> Callable[[Callable[P, Awaitable[R]]], Callable[P, Awaitable[R | Any]]]:
     """
     异步版本的 service 错误处理装饰器。
 
@@ -134,7 +135,7 @@ def async_service_error_handler(
         ...     return await memory.query(question)
     """
 
-    def decorator(func: Callable[P, R]) -> Callable[P, R | Any]:
+    def decorator(func: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[R | Any]]:
         @wraps(func)
         async def wrapper(*args: P.args, **kwargs: P.kwargs) -> R | Any:
             try:

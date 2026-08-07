@@ -186,4 +186,5 @@ site/
 *~
 *.orig
 *.rej
+_ignore_backup/
 

@@ -50,16 +50,18 @@ class EmbeddingConfig:
     """Embedding 生成器配置（固定使用 OpenAI 兼容 Embedding API）
 
     Attributes:
-        model:      embedding 模型名（如 text-embedding-3-small），必须显式配置
-        url:        API 服务地址，必须显式配置
-        api_key:    API 密钥（本地服务如 Ollama/LM Studio 可留空，使用占位符）
-        batch_size: 批量向量化的文本条数上限
-        dimension:  期望的向量维度（可选，0=未知由 API 返回自动推断）
+        model:       embedding 模型名（如 text-embedding-3-small），必须显式配置
+        url:         API 服务地址，必须显式配置
+        api_key:     API 密钥（本地服务如 Ollama/LM Studio 可留空，使用占位符）
+        batch_size:  批量向量化的文本条数上限
+        concurrency: 单次向量化并发批次上限（本地服务推理串行，过大只会排队）
+        dimension:   期望的向量维度（可选，0=未知由 API 返回自动推断）
     """
     model: str = ""
     url: str = ""
     api_key: str = ""
     batch_size: int = 16
+    concurrency: int = 4
     dimension: int = 0
 
 
@@ -85,7 +87,7 @@ _config_initialized = False
 _config_lock = threading.Lock()
 
 
-def _on_config_change(path: str, value: object) -> None:
+def _on_config_change(path: str, _value: object) -> None:
     """配置变更回调，清除缓存"""
     global _config
     with _config_lock:
@@ -151,12 +153,14 @@ def _load_vector_config(config_path: str) -> VectorConfig:
     embedding_url = embedding_cfg.get("url", "")
     embedding_api_key = embedding_cfg.get("api_key", "")
     batch_size = embedding_cfg.get("batch_size", 16)
+    concurrency = embedding_cfg.get("concurrency", 4)
     embedding_dimension = embedding_cfg.get("dimension", 0)
 
     _check_type(embedding_model, "cosmos.service.vector.embedding.model", str)
     _check_type(embedding_url, "cosmos.service.vector.embedding.url", str)
     _check_type(embedding_api_key, "cosmos.service.vector.embedding.api_key", str)
     _check_type(batch_size, "cosmos.service.vector.embedding.batch_size", int, min_val=1, max_val=128)
+    _check_type(concurrency, "cosmos.service.vector.embedding.concurrency", int, min_val=1, max_val=32)
     _check_type(
         embedding_dimension,
         "cosmos.service.vector.embedding.dimension",
@@ -170,6 +174,7 @@ def _load_vector_config(config_path: str) -> VectorConfig:
         url=embedding_url,
         api_key=embedding_api_key,
         batch_size=batch_size,
+        concurrency=concurrency,
         dimension=embedding_dimension,
     )
 

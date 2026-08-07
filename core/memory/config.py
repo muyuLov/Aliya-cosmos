@@ -94,7 +94,7 @@ _config_initialized = False
 _config_lock = threading.Lock()
 
 
-def _on_config_change(path: str, value: object) -> None:
+def _on_config_change(path: str, _value: object) -> None:
     """配置变更回调，清除缓存"""
     global _config
     with _config_lock:

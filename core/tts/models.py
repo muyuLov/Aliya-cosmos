@@ -36,7 +36,7 @@ class VoiceConfig(BaseModel):
     languages: list[str] | None = None
 
     # 预计算的 model_dump 结果，避免每次 apply_to_request 都重新序列化
-    _dump_cache: dict | None = PrivateAttr(default=None)
+    _dump_cache: dict = PrivateAttr(default_factory=dict)
 
     def model_post_init(self, __context: Any) -> None:
         """初始化后预计算 model_dump 缓存。"""

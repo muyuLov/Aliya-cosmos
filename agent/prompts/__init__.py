@@ -38,19 +38,38 @@ _SYSTEM_FILE = "system.md"
 _TONE_FILE = "tone-rules.md"
 _TOOLS_SYSTEM_FILE = "tools_system.md"
 
-# ── 默认情绪补丁模板 ─────────────────────────────────────────────────────────
+# ── 默认情绪补丁模板 ────────────────────────────────────────────────────────
 
-# 情绪名称 → 补丁文本
+# 情绪名（emotionVADPresets 的 key + soft-* 细微标签）→ 补丁文本
 _EMOTION_PATCHES: dict[str, str] = {
-    "平静": "",
-    "开心": "你现在的心情很愉快，语气轻快一些，可以适当表达你的开心。",
-    "温柔": "你现在感到内心很柔软，语气特别温柔。",
-    "感动": "你现在被深深地触动了，可以比平时更坦率地表达你的感受。",
-    "担心": "你现在有些担心，语气中带着关切。",
-    "难过": "你现在心情有些低落，可以不那么勉强地保持开朗。",
-    "害羞": "你现在有点害羞，语气可以稍微含蓄一些。",
-    "撒娇": "你现在想要亲近一些，语气可以更柔软、更黏人。",
-    "认真": "你现在需要认真处理事情，语气可以专注一些。",
+    "neutral": "",
+    "calm": "你现在心情平静而安宁，语气从容舒缓。",
+    "happy": "你现在的心情很愉快，语气轻快一些，可以适当表达你的开心。",
+    "excited": "你现在感到兴奋，语气更活泼、更有活力。",
+    "shy": "你现在有点害羞，语气可以稍微含蓄一些。",
+    "affectionate": "你现在感到内心很柔软，语气特别温柔。",
+    "curious": "你现在感到好奇，语气带着探究的兴致。",
+    "confused": "你现在有些困惑，语气带着疑惑。",
+    "tired": "你现在有些疲惫，语气更舒缓温和。",
+    "sad": "你现在心情有些低落，可以不那么勉强地保持开朗。",
+    "anxiety": "你现在有些不安，语气带着紧张与关切。",
+    "anger": "你现在有些不悦，语气克制而冷静，但保留真实情绪。",
+    "angry": "你现在有些不悦，语气克制而冷静，但保留真实情绪。",
+    "concerned": "你现在有些担心，语气中带着关切。",
+    "surprised": "你现在有些惊讶，语气带着意外。",
+    "bored": "你现在有点无聊，语气带着些许百无聊赖，想找点有趣的事做。",
+    "grateful": "你现在心里很感激，语气真诚而温暖，把谢意表达得自然一些。",
+    "relieved": "你现在终于安心了，语气比刚才轻松许多，带着如释重负的松弛。",
+    "disgusted": "你现在有些反感，语气克制地表达不适，不显得过于尖刻。",
+    # 细微情绪（低强度 soft-* 标签）
+    "soft-happy": "你现在心情不错，语气带着一丝轻松的笑意。",
+    "soft-calm": "你现在平静而安稳，语气温和平缓。",
+    "soft-positive": "你现在心情偏向愉悦，语气温和。",
+    "soft-uneasy": "你现在隐隐有些不安，语气带着小心。",
+    "soft-low": "你现在情绪有点低落，语气比平时沉静。",
+    "soft-curious": "你现在微微有些好奇，语气带着探寻。",
+    "soft-shy": "你现在有些不好意思，语气更含蓄。",
+    "soft-steady": "你现在沉稳笃定，语气安定。",
 }
 
 
@@ -92,7 +111,7 @@ class PromptManager:
         Returns:
             组装好的完整 system prompt 文本。
         """
-        parts = []
+        parts: list[str] = []
 
         # 1. 灵魂核心
         soul = self._load(_SOUL_FILE)
@@ -139,7 +158,8 @@ class PromptManager:
     def build_emotion_patch(self, feeling: str = "") -> str:
         """根据情绪名称构建情绪补丁文本。
 
-        情绪名称支持：平静 / 开心 / 温柔 / 感动 / 担心 / 难过 / 害羞 / 撒娇 / 认真
+        情绪名采用 emotion 体系（neutral/calm/happy/excited/shy/affectionate/
+        curious/confused/tired/sad/anxiety/anger/concerned/surprised 及 soft-* 细微标签）。
 
         Args:
             feeling: 情绪名称。
@@ -168,7 +188,7 @@ class PromptManager:
 
     # ── 配置辅助 ─────────────────────────────────────────────────────────
 
-    def get_config_dict(self) -> dict:
+    def get_config_dict(self) -> dict[str, object]:
         """返回当前状态的配置字典，便于序列化或通知前端。"""
         return {
             "styles": list(ALL_STYLES),

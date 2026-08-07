@@ -8,7 +8,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Awaitable, Callable, Protocol
 
@@ -89,7 +89,7 @@ class ToolBase:
     is_concurrency_safe: bool = False
     permission: ToolPermission = ToolPermission.ALWAYS_ALLOW
 
-    async def execute(self, params: dict, context: ToolContext) -> ToolResult:
+    async def execute(self, _params: dict, _context: ToolContext) -> ToolResult:
         raise NotImplementedError(f"工具 `{self.name}` 未实现 execute 方法")
 
     async def check_permissions(

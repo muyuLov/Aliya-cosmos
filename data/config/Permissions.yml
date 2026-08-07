@@ -9,5 +9,4 @@
 # 未在此文件列出的工具使用代码自带的默认权限。
 #
 tools:
-  reply: always_allow
   memory_query: always_allow

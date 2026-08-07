@@ -22,7 +22,7 @@ from core.logger import get_logger
 
 from core.memory.config import get_grag_config
 from core.memory import extractor
-from core.memory.exceptions import TaskQueueFullError, TaskTimeoutError, TaskExecutionError
+from core.memory.exceptions import TaskQueueFullError
 
 logger = get_logger(__name__)
 
@@ -366,9 +366,10 @@ class QuintupleTaskManager:
 
                 # 原子操作：检查 PENDING 并转为 RUNNING，与 cancel_task 互斥
                 assert self.lock is not None
+                assert self.task_queue is not None
                 async with self.lock:
                     if task.status != TaskStatus.PENDING:
-                        self.task_queue.task_done()  # type: ignore[union-attr]
+                        self.task_queue.task_done()
                         continue
                     task.status = TaskStatus.RUNNING
                     task.started_at = time.time()

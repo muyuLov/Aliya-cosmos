@@ -219,7 +219,7 @@ class TTSService:
             """创建 session 后立即预取，异常写入队列由消费端在正确位置抛出。"""
             seg_request = request.model_copy(update={"text": seg})
             session_id: str | None = None
-            session_iter: AsyncIterator[bytes] | None = None
+            session_iter: AsyncGenerator[bytes, None] | None = None
 
             try:
                 async with self._create_sem:

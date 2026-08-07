@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import pytest
-
-from agent.tools.base import ToolContext, ToolPermission, ToolResult
+from agent.tools.base import ToolPermission, ToolResult
 from agent.tools.registry import ToolRegistry, partition_tool_calls
 
 
@@ -147,10 +145,12 @@ class TestToolRegistry:
             is_concurrency_safe = True
             permission = ToolPermission.ALWAYS_ALLOW
 
-            async def execute(self, params, ctx):
+            async def execute(self, params: dict, context):
+                _ = (params, context)
                 return ToolResult(success=True)
 
-            async def check_permissions(self, params, ctx):
+            async def check_permissions(self, params: dict, context):
+                _ = (params, context)
                 return True, None
 
         registry = ToolRegistry()
@@ -166,10 +166,12 @@ class TestToolRegistry:
             is_concurrency_safe = True
             permission = ToolPermission.ALWAYS_ALLOW
 
-            async def execute(self, params, ctx):
+            async def execute(self, params: dict, context):
+                _ = (params, context)
                 return ToolResult(success=True)
 
-            async def check_permissions(self, params, ctx):
+            async def check_permissions(self, params: dict, context):
+                _ = (params, context)
                 return True, None
 
         registry = ToolRegistry()
@@ -187,10 +189,12 @@ class TestToolRegistry:
             is_concurrency_safe = False
             permission = ToolPermission.CONFIRM
 
-            async def execute(self, params, ctx):
+            async def execute(self, params: dict, context):
+                _ = (params, context)
                 return ToolResult(success=True)
 
-            async def check_permissions(self, params, ctx):
+            async def check_permissions(self, params: dict, context):
+                _ = (params, context)
                 return True, None
 
         registry = ToolRegistry()
@@ -213,10 +217,12 @@ class TestToolRegistry:
             description = ""
             input_schema = {"type": "object", "properties": {}}
 
-            async def execute(self, params, ctx):
+            async def execute(self, params: dict, context):
+                _ = (params, context)
                 return ToolResult(success=True)
 
-            async def check_permissions(self, params, ctx):
+            async def check_permissions(self, params: dict, context):
+                _ = (params, context)
                 return True, None
 
         registry = ToolRegistry()

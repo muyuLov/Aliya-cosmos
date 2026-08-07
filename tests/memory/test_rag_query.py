@@ -8,25 +8,35 @@ from core.memory import rag_query
 class TestExtractTimeRange:
     def test_month_only(self):
         # "7月" 应解析为当年 7 月整月范围
-        start, end = rag_query._extract_time_range("我7月有什么活动")
+        result = rag_query._extract_time_range("我7月有什么活动")
+        assert result is not None
+        start, end = result
         assert start.endswith("-07-01")
         assert end.endswith("-07-31")
 
     def test_month_and_day(self):
-        start, end = rag_query._extract_time_range("7月5号我去了哪")
+        result = rag_query._extract_time_range("7月5号我去了哪")
+        assert result is not None
+        start, end = result
         assert start == end
         assert start.endswith("-07-05")
 
     def test_full_date(self):
-        start, end = rag_query._extract_time_range("2026年3月15日发生了什么")
+        result = rag_query._extract_time_range("2026年3月15日发生了什么")
+        assert result is not None
+        start, end = result
         assert start == end == "2026-03-15"
 
     def test_full_date_dash(self):
-        start, end = rag_query._extract_time_range("回顾一下 2026-12-25")
+        result = rag_query._extract_time_range("回顾一下 2026-12-25")
+        assert result is not None
+        start, end = result
         assert start == end == "2026-12-25"
 
     def test_relative_today(self):
-        start, end = rag_query._extract_time_range("今天我做了什么")
+        result = rag_query._extract_time_range("今天我做了什么")
+        assert result is not None
+        start, end = result
         assert start == end
 
     def test_no_time(self):

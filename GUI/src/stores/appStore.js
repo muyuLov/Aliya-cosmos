@@ -2,6 +2,7 @@ import { defineStore } from 'pinia';
 import { ref } from 'vue';
 import {
   FEELING_EMOJI,
+  FEELING_LABEL,
   STATUS_EMOJI,
   DEFAULT_FEELING,
   DEFAULT_STATUS,
@@ -39,7 +40,7 @@ export const useAppStore = defineStore('app', () => {
         if (state.feeling) {
           currentFeeling.value = {
             emoji: FEELING_EMOJI[state.feeling] || DEFAULT_FEELING.emoji,
-            label: state.feeling || DEFAULT_FEELING.label,
+            label: FEELING_LABEL[state.feeling] || state.feeling || DEFAULT_FEELING.label,
             scores: state.scores || null,
           };
         }

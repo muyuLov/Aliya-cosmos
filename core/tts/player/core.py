@@ -18,10 +18,9 @@ from core.logger import get_logger
 from core.tts.constants import (
     DEFAULT_FRAMES_PER_BUFFER,
     DEFAULT_PLAY_QUEUE_SIZE,
-    MP3_DECODE_THRESHOLD,
     WAV_DETECT_SIZE,
 )
-from core.tts.player.format_detector import FormatInfo, RIFF_MAGIC, find_wav_data_offset, parse_wav_header
+from core.tts.player.format_detector import RIFF_MAGIC, parse_wav_header
 
 _logger = get_logger(__name__)
 
@@ -76,7 +75,7 @@ class _Mp3StreamDecoder:
 
             ffmpeg_path, _ = portable_ffmpeg.get_ffmpeg()
             if ffmpeg_path:
-                return ffmpeg_path
+                return str(ffmpeg_path)
         except ImportError:
             pass
         return imageio_ffmpeg.get_ffmpeg_exe()
@@ -162,8 +161,11 @@ class _Mp3StreamDecoder:
     def _reader_loop(self) -> None:
         """后台读取线程：将 stdout 的 PCM 数据持续推入队列。"""
         try:
-            while self._proc is not None and self._proc.poll() is None:
-                data = self._proc.stdout.read(self._PCM_READ_SIZE)
+            proc = self._proc
+            while proc is not None and proc.poll() is None:
+                if proc.stdout is None:
+                    break
+                data = proc.stdout.read(self._PCM_READ_SIZE)
                 if not data:
                     break
                 self._pcm_queue.put(data)
@@ -184,9 +186,12 @@ class _Mp3StreamDecoder:
         if not self._started or self._proc is None:
             return None
         try:
+            stdin = self._proc.stdin
+            if stdin is None:
+                return None
             if mp3_data:
-                self._proc.stdin.write(mp3_data)
-                self._proc.stdin.flush()
+                stdin.write(mp3_data)
+                stdin.flush()
 
             # 收集当前队列中所有 PCM 数据（非阻塞）
             chunks: list[bytes] = []
@@ -212,7 +217,9 @@ class _Mp3StreamDecoder:
         if not self._started or self._proc is None:
             return None
         try:
-            self._proc.stdin.close()
+            stdin = self._proc.stdin
+            if stdin is not None:
+                stdin.close()
         except Exception:
             pass
         # 等待读取线程结束（最多 5 秒）
@@ -241,7 +248,9 @@ class _Mp3StreamDecoder:
         self._started = False
         if self._proc is not None:
             try:
-                self._proc.stdin.close()
+                stdin = self._proc.stdin
+                if stdin is not None:
+                    stdin.close()
             except Exception:
                 pass
             try:
@@ -758,7 +767,8 @@ class AudioPlayer:
 
         正确处理 int24 格式：先将 3 字节/样本转换为 4 字节 int32，再写入流。
         """
-        if not audio_data:
+        stream = self._stream
+        if not audio_data or stream is None:
             self._last_volume = 0.0
             self._last_centroid = 0.5
             self._last_zcr = 0.0
@@ -780,7 +790,7 @@ class AudioPlayer:
             samples_i32 = b0 | b1 | b2
             samples_i32[samples_i32 >= 0x800000] -= 0x1000000
             self._compute_volume(samples_i32.astype(np.float64), 8388608.0)
-            self._stream.write(samples_i32)
+            stream.write(samples_i32)
             return
 
         arr = np.frombuffer(audio_data, dtype=np.dtype(dtype))
@@ -794,7 +804,7 @@ class AudioPlayer:
             self._compute_volume(arr.astype(np.float64), 128.0)
         else:
             self._compute_volume(arr.astype(np.float64), 1.0)
-        self._stream.write(arr)
+        stream.write(arr)
 
     def _compute_volume(self, samples: np.ndarray, peak_max: float) -> None:
         """提取音频特征用于口型同步（RMS + 频谱质心 + 过零率）。

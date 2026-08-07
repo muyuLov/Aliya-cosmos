@@ -1,5 +1,7 @@
 """测试 core.vector 向量模块：存储检索、配置、工厂、资源管理"""
 
+# pyright: reportAttributeAccessIssue=false
+
 from __future__ import annotations
 
 import math
@@ -357,10 +359,10 @@ class TestEmbeddingProviderDimension:
         )
         provider = OpenAIEmbeddingProvider(config)
 
-        async def fake_create(**kwargs):
+        async def fake_create(**_kwargs):
             return SimpleNamespace(data=[SimpleNamespace(embedding=[0.0] * 1024)])
 
-        provider._client = SimpleNamespace(embeddings=SimpleNamespace(create=fake_create))
+        provider._client = SimpleNamespace(embeddings=SimpleNamespace(create=fake_create))  # pyright: ignore[reportAttributeAccessIssue,reportAssignmentType]
         with pytest.raises(DimensionMismatchError):
             await provider.embed(["文本"])
 

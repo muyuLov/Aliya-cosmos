@@ -170,14 +170,28 @@ class GRAGMemoryManager:
             removed = self.recent_context.popleft()
             self._context_char_count -= len(removed)
 
+    def _cache_mark_done(self, text_hash: str) -> None:
+        """标记文本已成功提取（LRU 缓存）。
+
+        提取完成并落库成功后调用；再次遇到相同文本直接跳过提取，
+        避免重复 LLM 调用与图谱冗余写入。
+        """
+        self.extraction_cache[text_hash] = True
+        self.extraction_cache.move_to_end(text_hash)
+        if len(self.extraction_cache) > self._max_cache_size:
+            self.extraction_cache.popitem(last=False)
+
     async def _submit_extraction_task(
         self, text: str, session_id: str = "",
         day_date: str = "", timeline: str = "",
     ) -> None:
         """提交五元组提取任务
-        
-        每个时间链都会独立提取和处理，不进行跨时间链的去重。
-        相同文本的不同时间链会分别处理，因为它们可能产生不同的实体关联。
+
+        去重策略（按时间链独立）：
+        - 每个时间链独立提取，不进行跨时间链去重——相同文本的不同时间链
+          分别处理，因为它们可能产生不同的实体关联。
+        - 同一时间链内：已完成提取的文本（缓存命中）或正在提取的文本
+          （inflight 命中）直接跳过，避免重复 LLM 调用与图谱冗余写入。
         """
         try:
             mgr = self._get_task_manager()
@@ -186,7 +200,18 @@ class GRAGMemoryManager:
             if not mgr.is_running:
                 await task_manager_module.start_task_manager()
 
-            # 为每个时间链独立提交任务，不进行文本去重
+            # 同一时间链内的去重键
+            text_hash = self._hash_text(f"{timeline}|{text}")
+            if text_hash in self.extraction_cache:
+                logger.debug("文本已提取过（缓存命中），跳过: timeline=%s", timeline)
+                return
+            if text_hash in self._inflight_hashes:
+                logger.debug("文本提取进行中（inflight 命中），跳过: timeline=%s", timeline)
+                return
+
+            # 标记 inflight，避免同一时间链内并发重复提交
+            self._inflight_hashes.add(text_hash)
+
             task_id = await mgr.add_task(
                 text, source_text=text, session_id=session_id,
                 day_date=day_date, timeline=timeline,
@@ -203,6 +228,8 @@ class GRAGMemoryManager:
         职责：清理活跃任务集合，再将异步处理调度到事件循环。
         """
         self.active_tasks.discard(task.task_id)
+        # 同步清理 inflight 标记，避免任务失败/无结果时卡死
+        self._inflight_hashes.discard(self._hash_text(f"{task.timeline}|{task.source_text or ''}"))
         if not task.result:
             return
 
@@ -237,6 +264,10 @@ class GRAGMemoryManager:
             )
             if success:
                 logger.info("成功存储 %d 个五元组到图谱", len(task.result))
+                # 提取成功并落库 → 标记缓存，后续相同文本跳过提取
+                self._cache_mark_done(self._hash_text(f"{task.timeline}|{task.source_text or ''}"))
+            # 无论成败，从 inflight 集合移除（允许未来重试）
+            self._inflight_hashes.discard(self._hash_text(f"{task.timeline}|{task.source_text or ''}"))
 
         except Exception as e:
             logger.error("任务完成回调处理失败: %s", e)

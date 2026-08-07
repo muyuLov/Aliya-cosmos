@@ -1,22 +1,44 @@
-"""情绪连续性系统
+"""情绪系统
 
-根据 Cyrene-Agent 的 RuntimeState 情绪平滑算法实现：
-- FeelingScores：9 种情绪的分数追踪与衰减/观察平滑
-- observe_feeling：对话完成后 LLM 分析当前情绪
-- 快速上升情绪（担心/难过）权重更高，更快主导
+以 VAD（valence / arousal / dominance）三维向量表示情绪状态：
 
-情绪类型：平静 / 开心 / 温柔 / 激动 / 撒娇 / 担心 / 难过 / 感动 / 害羞
+- VADVector / emotionVADPresets：情绪 VAD 模型与预设
+- EmotionStateController：核心情绪状态机（推入 / 趋近 / 衰减 / 保持 / 环境漂移 / 推断）
+- EmbeddingMessageClassifier：向量情绪分类器（集成 core.vector，语义分类，neutral 兜底）
+- EmotionIntent：一次情绪推入意图
 """
 
 from __future__ import annotations
 
-from agent.emotion.feeling_scores import FeelingScores, FeelingName, ALL_FEELINGS, FAST_RISE
-from agent.emotion.observer import observe_feeling
+from agent.emotion.vad import (
+    VADVector,
+    EmotionIntent,
+    emotionVADPresets,
+    getVADPreset,
+    magnitude,
+    nearestVADPreset,
+    neutralVAD,
+    weightedVADDistance,
+)
+from agent.emotion.emotion_state import (
+    EmotionPersonality,
+    EmotionStateController,
+    VADRuntimeState,
+)
+from agent.emotion.vector_classifier import EmbeddingMessageClassifier, prewarm_emotion_corpus
 
 __all__ = [
-    "FeelingScores",
-    "FeelingName",
-    "ALL_FEELINGS",
-    "FAST_RISE",
-    "observe_feeling",
+    "VADVector",
+    "EmotionIntent",
+    "emotionVADPresets",
+    "getVADPreset",
+    "magnitude",
+    "nearestVADPreset",
+    "neutralVAD",
+    "weightedVADDistance",
+    "EmotionPersonality",
+    "EmotionStateController",
+    "VADRuntimeState",
+    "EmbeddingMessageClassifier",
+    "prewarm_emotion_corpus",
 ]

@@ -43,7 +43,7 @@ from core.memory.exceptions import (
     TaskTimeoutError,
     TaskExecutionError,
 )
-from core.memory.extractor import QuintupleExtractor, get_extractor
+from core.memory.extractor import get_extractor
 from core.memory.graph import (
     GraphStore,
     clear_all_quintuples,
@@ -64,10 +64,9 @@ from core.memory.graph import (
     store_quintuples,
     store_quintuples_async,
 )
-from core.memory.memory_manager import GRAGMemoryManager, get_memory_manager
-from core.memory.rag_query import RAGQueryEngine, get_rag_engine
+from core.memory.memory_manager import get_memory_manager
+from core.memory.rag_query import get_rag_engine
 from core.memory.task_manager import (
-    QuintupleTaskManager,
     get_task_manager,
     start_task_manager,
     stop_task_manager,
@@ -91,7 +90,7 @@ def _safe_start_task_manager():
 
 
 def create_memory_service(
-    config_path: str | Path = "data/config/main.yml",
+    _config_path: str | Path = "data/config/main.yml",
 ) -> Tuple[Any, Any, Any, Any, Any]:
     """
     创建记忆服务（兼容 agent.py 接口）

@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from abc import ABC, abstractmethod
 from typing import List, Optional, Sequence
 
@@ -53,7 +54,8 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
     """OpenAI 兼容 Embedding API 提供者
 
     通过 ``AsyncOpenAI`` 客户端调用 ``/v1/embeddings`` 接口，
-    支持按 ``batch_size`` 分批向量化。
+    支持按 ``batch_size`` 分批并**并发**向量化（并发数受 ``_EMBED_CONCURRENCY`` 限制）。
+    
 
     Args:
         config: EmbeddingConfig，必须包含 model 与 url。
@@ -76,6 +78,7 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
             max_retries=3,
         )
         self._batch_size = config.batch_size
+        self._concurrency = config.concurrency
 
     @property
     def dimension(self) -> int:
@@ -88,22 +91,31 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
     async def embed(self, texts: Sequence[str]) -> List[List[float]]:
         if not texts:
             return []
-        vectors: List[List[float]] = []
-        for i in range(0, len(texts), self._batch_size):
-            batch = list(texts[i : i + self._batch_size])
-            try:
-                response = await self._client.embeddings.create(
-                    model=self._config.model,
-                    input=batch,
-                )
-            except Exception as exc:
-                raise EmbeddingAPIError(
-                    message=str(exc),
-                    provider=self.provider_name,
-                    details={"model": self._config.model, "batch_size": len(batch)},
-                    cause=exc,
-                ) from exc
-            vectors.extend(item.embedding for item in response.data)
+        batches = [
+            list(texts[i : i + self._batch_size])
+            for i in range(0, len(texts), self._batch_size)
+        ]
+        semaphore = asyncio.Semaphore(self._concurrency)
+
+        async def _embed_batch(batch: Sequence[str]) -> List[List[float]]:
+            async with semaphore:
+                try:
+                    response = await self._client.embeddings.create(
+                        model=self._config.model,
+                        input=list(batch),
+                    )
+                except Exception as exc:
+                    raise EmbeddingAPIError(
+                        message=str(exc),
+                        provider=self.provider_name,
+                        details={"model": self._config.model, "batch_size": len(batch)},
+                        cause=exc,
+                    ) from exc
+                return [item.embedding for item in response.data]
+
+        # gather 结果按输入 batch 顺序返回，展开后与输入文本顺序一致
+        results = await asyncio.gather(*(_embed_batch(b) for b in batches))
+        vectors = [v for r in results for v in r]
 
         if vectors:
             actual = len(vectors[0])

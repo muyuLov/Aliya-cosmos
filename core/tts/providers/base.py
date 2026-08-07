@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, AsyncGenerator, AsyncIterator
+from typing import Any, AsyncGenerator
 
 from core.tts.models import TTSRequest
 
@@ -40,7 +40,7 @@ class TTSProvider(ABC):
         """创建合成会话，返回 session_id。"""
 
     @abstractmethod
-    def consume_session(self, session_id: str) -> AsyncIterator[bytes]:
+    def consume_session(self, session_id: str) -> AsyncGenerator[bytes, None]:
         """消费会话音频流，逐块 yield 音频数据。"""
 
     @abstractmethod

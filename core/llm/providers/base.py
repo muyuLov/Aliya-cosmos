@@ -15,7 +15,7 @@ from core.llm.models import ChatRequest, ChatResponse, TokenUsage
 # 避免各提供商各自维护重复的异常列表。
 
 #: 纯网络/API 层异常（连接失败、超时、限流、HTTP 状态码错误）
-OPENAI_NETWORK_EXCEPTIONS: tuple[type[BaseException], ...] = (
+OPENAI_NETWORK_EXCEPTIONS: tuple[type[Exception], ...] = (
     openai.APIConnectionError,
     openai.APITimeoutError,
     openai.RateLimitError,
@@ -23,7 +23,7 @@ OPENAI_NETWORK_EXCEPTIONS: tuple[type[BaseException], ...] = (
 )
 
 #: 完整异常元组：数据类型错误 + 网络层异常，适用于大多数调用点
-OPENAI_COMMON_EXCEPTIONS: tuple[type[BaseException], ...] = (
+OPENAI_COMMON_EXCEPTIONS: tuple[type[Exception], ...] = (
     ValueError,
     TypeError,
     AttributeError,

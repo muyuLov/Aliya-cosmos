@@ -56,7 +56,7 @@ class TestConversationService:
         assert history[1].content == "你好！"
 
     @pytest.mark.asyncio
-    async def test_asend_no_history(self, service, mock_provider):
+    async def test_asend_no_history(self, service):
         """store_history=False 时不写入用户消息"""
         await service.asend("你好", store_history=False)
         history = await service.get_history()
@@ -198,7 +198,7 @@ class TestConversationService:
         assert len(history) == 0  # 用户消息已回滚，没有 assistant 回复
 
     @pytest.mark.asyncio
-    async def test_usage_tracking(self, mock_provider, service):
+    async def test_usage_tracking(self, service):
         await service.asend("msg1")
         await service.asend("msg2")
         usage = await service.get_usage()
@@ -250,3 +250,40 @@ class TestConversationService:
         )
         assert svc.conversation_id is not None
         assert len(svc.conversation_id) > 0
+
+
+class TestReplaceLastMessage:
+    @pytest.mark.asyncio
+    async def test_replace_last_assistant_message(self, service):
+        await service.asend("你好")
+        await service.replace_last_message("[已完成工具阶段分析]", reasoning_content="")
+        history = await service.get_history()
+        assert history[-1].content == "[已完成工具阶段分析]"
+        assert history[-1].reasoning_content == ""
+
+    @pytest.mark.asyncio
+    async def test_replace_preserves_earlier_messages(self, service):
+        await service.asend("第一句")
+        await service.asend("第二句")
+        before = await service.get_history()
+        await service.replace_last_message("替换")
+        after = await service.get_history()
+        assert after[:-1] == before[:-1]
+        assert after[-1].content == "替换"
+
+
+class TestTruncateMessages:
+    @pytest.mark.asyncio
+    async def test_truncate_keeps_tail(self, service):
+        for _ in range(5):
+            await service.asend("对话")
+        await service.truncate_messages(keep=2)
+        history = await service.get_history()
+        assert len(history) == 2
+        assert history[-1].role == "assistant"
+
+    @pytest.mark.asyncio
+    async def test_truncate_keep_zero_clears_all(self, service):
+        await service.asend("你好")
+        await service.truncate_messages(keep=0)
+        assert await service.get_history() == []

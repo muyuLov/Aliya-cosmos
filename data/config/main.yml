@@ -34,15 +34,21 @@ cosmos:
       # ── Agent 权限配置 ──────────────────────────────────
       permissions:
         config_path: data/config/Permissions.yml  # 权限配置文件
+      # max_soul_retries: 2         # 净化失败重试次数（调用超时不重试）
       # ── 情感系统配置（SDK EmotionPersonality，可选） ──────────────────
       emotion:
         classifier: auto              # 情绪分类方式: rule（不创建向量分类器）/ vector / auto（auto 在向量可用时语义分类）
+        # max_samples_per_emotion: 30  # 每类情绪最多向量化入库的样本数（0=全量；调大提升近邻覆盖、调小缩短入库耗时）
         # 情绪人格参数（不设置则用 SDK 默认值）：
         # reactivity: 1.0              # 情绪响应性（0.2-2.5）
         # decayRate: 0.018             # 情绪衰减速率（0.002-0.4）
         # emotionHoldSeconds: 18.0     # 情绪保持时长（0-90 秒）
         # ambientDriftStrength: 0.034  # 环境漂移幅度（0-0.09，0 关闭）
         # emotionBias: {}              # 情绪偏置（按情绪名放大/缩小推入量）
+      # ── 认知引擎配置（LAAP 认知架构：PSI 需求驱动 + 五层记忆 + 世界模型 + 自我模型） ──
+      cognition:
+        enabled: true                  # 认知引擎总开关
+        maintenance_interval: 10       # 自主维护触发间隔（交互次数）
     # ── GRAG 图记忆系统 ────────────────────────────────
     grag:
       enabled: true                    # 启用记忆系统
@@ -74,7 +80,8 @@ cosmos:
         model: "text-embedding-qwen3-embedding-8b"   # 必须配置 embedding 模型名（如 text-embedding-3-small）
         url: "http://127.0.0.1:1234"   # 必须配置服务地址
         api_key: ""                    # API 密钥（本地服务如 Ollama/LM Studio 可留空）
-        batch_size: 16                 # 批量向量化文本条数
+        batch_size: 128                # 批量向量化文本条数（上限 128；调大可减少 API 往返，缩短语料批量入库耗时）
+        concurrency: 4                 # 单次向量化并发批次上限（上限 32；本地服务推理串行，过大只会排队）
         dimension: 4096                # 期望向量维度（0=由 API 返回自动推断；非 0 时校验一致性）
         
     # ── LLM 大语言模型 ────────────────────────────────

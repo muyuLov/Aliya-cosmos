@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections import OrderedDict, deque
+from collections import deque
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -184,7 +184,7 @@ class TestInflightDedup:
         manager.enabled = True
         call_count = 0
 
-        async def fake_add_task(text, **kwargs):
+        async def fake_add_task(_text, **_kwargs):
             nonlocal call_count
             call_count += 1
             return f"task_{call_count}"

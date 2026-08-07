@@ -175,6 +175,9 @@ class MonitoredQueueHandler(logging.handlers.QueueHandler):
 
     def enqueue(self, record: logging.LogRecord) -> None:
         """重写入队逻辑，添加队列监控"""
+        if not isinstance(self.queue, queue.Queue):
+            super().enqueue(record)
+            return
         try:
             # 检查队列深度
             qsize = self.queue.qsize()

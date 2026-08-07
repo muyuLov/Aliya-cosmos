@@ -10,9 +10,6 @@ import pytest
 from core.memory.task_manager import (
     QuintupleTaskManager,
     TaskStatus,
-    start_task_manager,
-    stop_task_manager,
-    get_task_manager,
 )
 
 
@@ -118,7 +115,7 @@ class TestQuintupleTaskManager:
         await mgr.start()
 
         # 创建一个会阻塞的任务（用 sleep 模拟）
-        async def slow_extract(text):
+        async def slow_extract(_text):
             await asyncio.sleep(100)
             return []
 
@@ -136,6 +133,7 @@ class TestQuintupleTaskManager:
 
             # 确认状态
             status = mgr.get_task_status(task_id)
+            assert status is not None
             assert status["status"] == TaskStatus.CANCELLED.value
 
         await mgr.shutdown()
@@ -186,7 +184,7 @@ class TestQuintupleTaskManager:
         mgr = QuintupleTaskManager(max_workers=2, max_queue_size=10)
         await mgr.start()
 
-        async def failing_extract(text):
+        async def failing_extract(_text):
             raise RuntimeError("提取失败")
 
         with patch("core.memory.extractor.extract_quintuples", failing_extract):

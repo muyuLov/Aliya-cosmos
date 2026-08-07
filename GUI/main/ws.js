@@ -31,7 +31,7 @@ function connectAgentWebSocket() {
       const queryAgent = (label) => {
         try {
           logger.debug('WS 查询 Agent 状态', { label });
-          ws.send(JSON.stringify({ type: 'get_feeling_scores' }));
+          ws.send(JSON.stringify({ type: 'get_emotion_state' }));
           ws.send(JSON.stringify({ type: 'get_token_usage' }));
         } catch {}
       };
@@ -41,16 +41,18 @@ function connectAgentWebSocket() {
 
     // WS 消息分发映射表（按 type 路由到对应处理函数）
     const WS_HANDLERS = {
-      feeling_scores(data) {
-        if (typeof data.dominant !== 'string') return;
-        logger.debug('心情查询结果', { feeling: data.dominant });
-        pushSidebarState({ emotion: { feeling: data.dominant || '平静' } });
+      emotion_state(data) {
+        const feeling = data.dominant || '';
+        if (typeof feeling !== 'string' || !feeling) return;
+        logger.debug('心情查询结果', { feeling });
+        pushSidebarState({ emotion: { feeling } });
       },
       emotion_changed(data) {
-        if (!data.feeling) return;
-        logger.debug('实时心情推送', { feeling: data.feeling });
+        const feeling = data.emotion || data.feeling;
+        if (!feeling) return;
+        logger.debug('实时心情推送', { feeling });
         pushSidebarState({
-          emotion: { feeling: data.feeling, scores: data.scores || null },
+          emotion: { feeling, scores: data.scores || null },
         });
       },
       status_changed(data) {
@@ -63,11 +65,9 @@ function connectAgentWebSocket() {
       brain_complete(data) {
         if (data.usage) accumulateToken(data.usage);
         if (data.emotion) {
-          pushSidebarState({
-            emotion: { feeling: data.emotion, scores: data.feeling_scores || null },
-          });
+          pushSidebarState({ emotion: { feeling: data.emotion } });
         } else {
-          ws.send(JSON.stringify({ type: 'get_feeling_scores' }));
+          ws.send(JSON.stringify({ type: 'get_emotion_state' }));
         }
         ws.send(JSON.stringify({ type: 'get_token_usage' }));
         // 侧边栏不可见时弹出桌面通知（覆盖未创建/隐藏/最小化三种情况）

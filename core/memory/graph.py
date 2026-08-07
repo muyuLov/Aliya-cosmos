@@ -45,16 +45,21 @@ import difflib
 import re
 import threading
 import time
-from typing import List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple, TypeAlias
 
 from core.logger import get_logger
 
 from core.memory.config import get_grag_config
 from core.memory.exceptions import (
     GraphConnectionError,
-    GraphQueryError,
-    GraphWriteError,
 )
+
+if TYPE_CHECKING:
+    from py2neo import Graph as _GraphClass
+
+    _GRAPH_TYPE: TypeAlias = _GraphClass
+else:
+    _GRAPH_TYPE: Any = None
 
 logger = get_logger(__name__)
 
@@ -103,14 +108,12 @@ def _shift_timeline_date(day_date: str, timeline: str) -> str:
         return day_date
 
 
-# 尝试导入 py2neo
+# 尝试导入 py2neo（运行时回退；类型注解使用 TYPE_CHECKING 块中的 _GRAPH_TYPE）
 try:
-    from py2neo import Graph, Node, Relationship, Transaction
+    from py2neo import Graph
     from py2neo.errors import ServiceUnavailable
 
     PY2NEO_AVAILABLE = True
-    _GRAPH_TYPE = Graph
-    _TRANSACTION_TYPE = Transaction
 except ImportError:
     # py2neo 未安装时的回退类型，必须为独立异常类而非 Exception 基类，
     # 否则 except ServiceUnavailable 会错误匹配所有非 ConnectionError 异常
@@ -118,12 +121,7 @@ except ImportError:
         pass
     ServiceUnavailable = _ServiceUnavailableStub
     Graph = None          # type: ignore[assignment,misc]
-    Node = None           # type: ignore[assignment,misc]
-    Relationship = None   # type: ignore[assignment,misc]
-    Transaction = None    # type: ignore[assignment,misc]
     PY2NEO_AVAILABLE = False
-    _GRAPH_TYPE = object  # type: ignore[assignment,misc]
-    _TRANSACTION_TYPE = object  # type: ignore[assignment,misc]
 
 
 class GraphStore:
@@ -133,7 +131,7 @@ class GraphStore:
     """
 
     def __init__(self, reconnect_cooldown: float = 60.0) -> None:
-        self._graph: Optional[object] = None
+        self._graph: Optional[_GRAPH_TYPE] = None
         self._connection_failed: bool = False
         self._last_failure_time: float = 0.0
         self._reconnect_cooldown: float = reconnect_cooldown
@@ -191,7 +189,10 @@ class GraphStore:
                 if not cfg.neo4j.password:
                     raise GraphConnectionError("Neo4j 密码未配置")
 
-                self._graph = Graph(
+                graph_cls = Graph
+                if graph_cls is None:
+                    raise GraphConnectionError("py2neo 未安装，图谱功能已禁用")
+                self._graph = graph_cls(
                     cfg.neo4j.uri,
                     auth=(cfg.neo4j.user, cfg.neo4j.password),
                     name=cfg.neo4j.database,
@@ -369,7 +370,7 @@ class GraphStore:
     # ── Day 节点操作（时间链）──────────────────────────────────────────────
 
     @staticmethod
-    def _ensure_day_node(g: object, day_date: str, timeline: str, now: float) -> None:
+    def _ensure_day_node(g: _GRAPH_TYPE, day_date: str, timeline: str, now: float) -> None:
         """确保 Day 节点存在（幂等创建）
 
         name 属性设为 date 值，Neo4j Browser 优先以 name 作为节点 label 显示，
@@ -397,7 +398,7 @@ class GraphStore:
 
     def _link_entities_to_day(
         self,
-        g: object,
+        g: _GRAPH_TYPE,
         quintuples: List[QuintupleType],
         day_date: str,
         timeline: str,
@@ -453,7 +454,7 @@ class GraphStore:
             logger.warning("实体关联 Day 节点失败: %s", exc)
 
     @staticmethod
-    def _find_neighbors(g: object, day_date: str, timeline: str) -> tuple[str | None, str | None]:
+    def _find_neighbors(g: _GRAPH_TYPE, day_date: str, timeline: str) -> tuple[str | None, str | None]:
         """单次查询同一时间链上当前 day_date 的紧邻前/后一天
 
         Args:
@@ -483,11 +484,14 @@ class GraphStore:
         ).data()
         if records:
             r = records[0]
-            return r.get("prev_date"), r.get("next_date")
+            prev_date = r.get("prev_date")
+            next_date = r.get("next_date")
+            return (str(prev_date) if prev_date is not None else None,
+                    str(next_date) if next_date is not None else None)
         return None, None
 
     def _link_next_day(
-        self, g: object, day_date: str, timeline: str, now: float
+        self, g: _GRAPH_TYPE, day_date: str, timeline: str, now: float
     ) -> None:
         """串联时间链：将当前天与其紧邻前/后一天用 NEXT_DAY 关系连接
 
@@ -606,7 +610,7 @@ class GraphStore:
             ).data()
             for r in ft_records:
                 if r.get("name"):
-                    all_names.add(r["name"])
+                    all_names.add(str(r["name"]))
         except Exception as e:
             logger.error("全文索引合并查询失败: %s", e)
 
@@ -638,9 +642,9 @@ class GraphStore:
         # 按 (head, relation, tail) 聚合跨天同名事实，保留最近日期实例
         best: dict = {}
         for record in records:
-            head = record["head"]
-            tail = record["tail"]
-            relation = record["relation"]
+            head = str(record["head"] or "")
+            tail = str(record["tail"] or "")
+            relation = str(record["relation"] or "")
             if not head or not tail or not relation:
                 continue
 
@@ -735,11 +739,11 @@ class GraphStore:
             ).data()
             return [
                 (
-                    rec["head"],
-                    rec["head_type"] or "",
-                    rec["relation"],
-                    rec["tail"],
-                    rec["tail_type"] or "",
+                    str(rec["head"] or ""),
+                    str(rec["head_type"] or ""),
+                    str(rec["relation"] or ""),
+                    str(rec["tail"] or ""),
+                    str(rec["tail_type"] or ""),
                 )
                 for rec in records
             ]
@@ -863,11 +867,11 @@ class GraphStore:
             records = graph.run(query, limit=limit or 1000, offset=offset).data()  # type: ignore[attr-defined]
             return [
                 (
-                    rec["head"],
-                    rec["head_type"] or "",
-                    rec["relation"],
-                    rec["tail"],
-                    rec["tail_type"] or "",
+                    str(rec["head"] or ""),
+                    str(rec["head_type"] or ""),
+                    str(rec["relation"] or ""),
+                    str(rec["tail"] or ""),
+                    str(rec["tail_type"] or ""),
                 )
                 for rec in records
             ]
@@ -1136,7 +1140,7 @@ def reset_graph_store() -> None:
 
 # ── 模块级公开 API（单例代理） ─────────────────────────────────────────────
 
-def _ensure_indexes(g: object) -> None:
+def _ensure_indexes(g: _GRAPH_TYPE) -> None:
     """确保 Neo4j 索引和约束存在（首次连接时建立）"""
     if g is None:
         raise GraphConnectionError("图谱连接不可用，无法创建索引")
@@ -1211,6 +1215,18 @@ async def delete_day_async(timeline: str, day_date: str) -> bool:
 
 def get_graph_stats() -> dict:
     return get_graph_store().get_graph_stats()
+
+
+def query_quintuples_by_day(
+    timeline: str = "",
+    start_date: str = "",
+    end_date: str = "",
+    limit: int = 100,
+    offset: int = 0,
+) -> List[QuintupleType]:
+    return get_graph_store().query_quintuples_by_day(
+        timeline, start_date, end_date, limit, offset
+    )
 
 
 async def store_quintuples_async(

@@ -56,7 +56,6 @@ class TestDataclassDefaults:
         assert cfg.user == "neo4j"
         assert cfg.password is None
         assert cfg.database == "neo4j"
-        assert cfg.max_connections == 10
 
     def test_extractor_config_defaults(self):
         cfg = ExtractorConfig()
@@ -97,7 +96,6 @@ class TestLoadGragConfig:
                 "user": "admin",
                 "password": "secret",
                 "database": "mydb",
-                "max_connections": 20,
             },
             "cosmos.service.grag.extractor": {
                 "max_retries": 3,

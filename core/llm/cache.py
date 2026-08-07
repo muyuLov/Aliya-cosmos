@@ -27,7 +27,7 @@ class ContextCache:
 
     def __init__(
         self,
-        ttl: int = 86400,
+        ttl: int | float = 86400,
         max_size: int = 500,
         backend: CacheBackend | None = None,
     ) -> None:

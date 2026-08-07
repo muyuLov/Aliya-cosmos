@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from typing import Any, AsyncGenerator
+from typing import Any, AsyncGenerator, Literal
 
 import edge_tts
 
@@ -69,7 +69,10 @@ class EdgeTTSProvider(TTSProvider):
         self._default_pitch: str = config.get("pitch", "+0Hz")
 
         # 边界事件粒度（默认句子级别，可改为单词级别）
-        self._boundary: str = config.get("boundary", "SentenceBoundary")
+        boundary = config.get("boundary", "SentenceBoundary")
+        if boundary not in ("WordBoundary", "SentenceBoundary"):
+            boundary = "SentenceBoundary"
+        self._boundary: Literal["WordBoundary", "SentenceBoundary"] = boundary
 
         # 代理和超时配置
         self._proxy: str | None = config.get("proxy")  # None 表示直连
@@ -167,7 +170,10 @@ class EdgeTTSProvider(TTSProvider):
                         )
                         break
                     if chunk.get("type") == "audio":
-                        yield chunk["data"]
+                        data = chunk.get("data")
+                        if data is None:
+                            continue
+                        yield data
             except asyncio.CancelledError:
                 _logger.debug(
                     "EdgeTTS 消费被取消 | session_id=%s", session_id

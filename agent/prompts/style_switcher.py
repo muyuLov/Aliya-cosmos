@@ -39,6 +39,56 @@ _SCENE_TO_STYLE: dict[SceneName, str] = {
     "praise": "lively",
 }
 
+# ── 规则快速路径 ──────────────────────────────────────────────────────────────
+# 短消息（≤ _RULE_MAX_LEN 字符）内的高频场景关键词直接判定，跳过 LLM 调用，
+# 减少每轮对话非必要的风格分析请求；长消息或未命中才走 LLM。
+_RULE_MAX_LEN = 12
+_RULE_SCENES: tuple[tuple[str, SceneName], ...] = (
+    ("你好", "greeting"),
+    ("您好", "greeting"),
+    ("嗨", "greeting"),
+    ("hello", "greeting"),
+    ("hi", "greeting"),
+    ("早上好", "greeting"),
+    ("早安", "greeting"),
+    ("中午好", "greeting"),
+    ("下午好", "greeting"),
+    ("晚上好", "greeting"),
+    ("晚安", "greeting"),
+    ("再见", "farewell"),
+    ("拜拜", "farewell"),
+    ("bye", "farewell"),
+    ("明天见", "farewell"),
+    ("太棒了", "praise"),
+    ("真棒", "praise"),
+    ("厉害", "praise"),
+    ("你真好", "praise"),
+    ("谢谢你", "praise"),
+    ("想你", "affectionate"),
+    ("抱抱", "affectionate"),
+    ("爱你", "affectionate"),
+    ("亲亲", "affectionate"),
+    ("难过", "comfort_needed"),
+    ("伤心", "comfort_needed"),
+    ("不开心", "comfort_needed"),
+    ("好累", "comfort_needed"),
+    ("哈哈", "playful"),
+    ("嘻嘻", "playful"),
+    ("嘿嘿", "playful"),
+)
+
+
+def _rule_scene(text: str) -> SceneName | None:
+    """规则快速路径：短消息命中关键词返回场景，未命中返回 None。"""
+    t = (text or "").strip()
+    if not t or len(t) > _RULE_MAX_LEN:
+        return None
+    low = t.lower()
+    for keyword, scene in _RULE_SCENES:
+        if keyword.lower() in low:
+            return scene
+    return None
+
 # ── LLM 分析 prompt ───────────────────────────────────────────────────────────
 
 _LLM_PROMPT = (
@@ -78,8 +128,10 @@ class StyleSwitcher:
         Returns:
             default / lively / healing / sweet 之一。
         """
-        scene: SceneName = "daily_chat"
-        if provider is not None:
+        # 规则快速路径：短消息命中关键词直接判定，避免非必要的 LLM 调用
+        scene: SceneName | None = _rule_scene(user_text)
+        if scene is None and provider is not None:
+            scene = "daily_chat"
             try:
                 from core.llm.models import ChatRequest
                 from core.llm.providers.base import LLMProvider
@@ -94,6 +146,8 @@ class StyleSwitcher:
                     logger.debug("[StyleSwitcher] LLM 返回无效场景: %s", raw)
             except Exception as e:
                 logger.warning("[StyleSwitcher] LLM 分析异常，使用默认风格 | error=%s", e)
+        if scene is None:
+            scene = "daily_chat"
 
         self._last_scene = scene
         style = _SCENE_TO_STYLE[scene]

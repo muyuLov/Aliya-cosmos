@@ -18,7 +18,7 @@ logger = get_logger(__name__)
 
 from core.llm.providers.base import LLMProvider
 from core.memory._utils import parse_json_array
-from core.memory._retry import async_retry, is_transient_error
+from core.memory._retry import async_retry
 from core.memory.config import get_grag_config
 from core.memory._providers import get_memory_provider
 from core.memory.exceptions import (
@@ -64,6 +64,8 @@ SYSTEM_PROMPT = """
    - 赞美、讽刺、调侃等主观评价
    - 闲聊中的无关信息
    - 重复或冗余的关系
+   - **无实质信息量的空泛互动**：如"请求对方重复"、"询问对方是否想念"、"让对方再说一遍"等寒暄/兜底回应，不得提取
+   - **宾语为"对方…"的不具体表达**：如"对方重复"、"对方想法"、"对方身份"等（互动对象不明确的泛化描述），不得提取
 
 3. 主体和宾语可以是实体名称，也可以是简洁的观点/认知短语（不超过 15 字）：
    - 实体型：("Aliya", "人物", "职业是", "宇航员", "职业")
@@ -209,6 +211,28 @@ def _is_valid_entity_type(t: str) -> bool:
     return t in VALID_ENTITY_TYPES
 
 
+# 无信息量的噪声宾语（LLM 常把寒暄/兜底回复提取为互动型五元组，如兜底文本被提取为"请求-对方重复"）
+_NOISE_TAILS = frozenset({
+    "对方重复", "对方再说一遍", "对方再说一次", "再说一遍", "重复一遍",
+    "对方的话", "对方是否想念她", "对方是否想念他", "对方是否想念",
+    "对方想法", "对方心情", "对方身份", "对方是谁", "对方名字",
+    "对方现在的想法", "对方是否真心", "对方真心", "对方回应",
+})
+
+
+def _is_noise_quintuple(rel: str, tail: str) -> bool:
+    """过滤无实质信息量的噪声五元组（兜底寒暄 / 空泛互动）。"""
+    if tail in _NOISE_TAILS:
+        return True
+    # 宾语为"对方…"式的不具体表达（互动对象不明确）
+    if tail.startswith("对方") and len(tail) <= 8:
+        return True
+    # "请求/要求/命令 + 重复/再说"类空泛互动（典型兜底文本被提取的结果）
+    if rel in ("请求", "要求", "命令") and ("重复" in tail or "再说" in tail):
+        return True
+    return False
+
+
 # 用户提示词模板
 USER_PROMPT_TEMPLATE = """请从以下对话文本中提取五元组。
 
@@ -253,7 +277,7 @@ class QuintupleExtractor:
         提示调用方使用 extract_async 或 extract_quintuples。
         """
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()
         except RuntimeError:
             return asyncio.run(self.extract_async(text))
         raise RuntimeError(
@@ -354,6 +378,9 @@ class QuintupleExtractor:
                 continue
             if not _is_valid_entity_type(tail_type):
                 logger.warning("跳过非法客体类型: %s(%s) -[%s]-> %s(%s)", head, head_type, rel, tail, tail_type)
+                continue
+            if _is_noise_quintuple(rel, tail):
+                logger.debug("跳过噪声五元组: %s(%s) -[%s]-> %s(%s)", head, head_type, rel, tail, tail_type)
                 continue
             result.append((head, head_type, rel, tail, tail_type))
 

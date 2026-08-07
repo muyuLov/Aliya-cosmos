@@ -176,6 +176,23 @@ class TestValidateQuintuples:
         result = extractor._validate_quintuples(data)
         assert result == [("小明", "人物", "喜欢", "苹果", "物品")]
 
+    def test_noise_fallback_interaction_skipped(self):
+        """兜底文本被提取成'请求-对方重复'类空泛互动时过滤。"""
+        extractor = QuintupleExtractor(max_retries=1, timeout=5)
+        data = [["Aliya", "人物", "请求", "对方重复", "概念"]]
+        assert extractor._validate_quintuples(data) == []
+
+    def test_noise_vague_tail_skipped(self):
+        """宾语为'对方…'式不具体表达时过滤。"""
+        extractor = QuintupleExtractor(max_retries=1, timeout=5)
+        data = [
+            ["Aliya", "人物", "询问", "对方是否想念她", "概念"],
+            ["Aliya", "人物", "进行", "屏幕聊天", "活动"],
+        ]
+        assert extractor._validate_quintuples(data) == [
+            ("Aliya", "人物", "进行", "屏幕聊天", "活动"),
+        ]
+
 
 class TestParseResponse:
     def test_valid_json(self):

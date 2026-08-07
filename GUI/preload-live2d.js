@@ -28,7 +28,7 @@ contextBridge.exposeInMainWorld('live2dAPI', {
     return () => ipcRenderer.removeListener('live2d:mouth-open', listener);
   },
   // 情绪驱动：接收 Agent 情绪变化驱动 Live2D 表情/动作
-  // 数据格式：{feeling: '开心', scores: {开心: 0.8, ...} | null}
+  // 数据格式：{feeling: 'happy', scores: {...} | null}（feeling 为英文 VAD 情绪标签）
   onEmotion: (handler) => {
     const listener = (_evt, data) => handler(data);
     ipcRenderer.on('live2d:emotion', listener);

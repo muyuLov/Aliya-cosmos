@@ -38,7 +38,7 @@ class AudioSink(Protocol):
 
 
 # 生命周期事件回调： (event: str, info: dict) -> None
-LifecycleCallback = Callable[[str, dict], None]
+LifecycleCallback = Callable[[str, dict[str, object]], None]
 
 # MP3 同步字（0xFF 后跟 0xE?/0xF?），用于格式嗅探
 _MP3_SYNC = (b"\xff\xfb", b"\xff\xfa", b"\xff\xf3", b"\xff\xf2", b"\xff\xf9", b"\xff\xf8")
@@ -243,11 +243,14 @@ class ResilientAudioPlayer:
     # 公共异步 API（与 AudioPlayer 同构）
     # ------------------------------------------------------------------ #
     async def feed(self, chunk: bytes) -> None:
-        if self._active is None:
+        active = self._active
+        if active is None:
             if not self._pick_next(reason="active_none"):
                 return
+            active = self._active
+        assert active is not None
         try:
-            await self._active.feed(chunk)
+            await active.feed(chunk)
         except Exception as e:
             # 仅对音频层错误做通道回退；其它异常（如 API 错误）向上抛出由调用方重试
             if not self._is_audio_error(e):
@@ -260,6 +263,7 @@ class ResilientAudioPlayer:
             # 递进回退：依次尝试后续候选通道重放当前块，直至成功或无更多通道
             while self._pick_next(reason=f"error:{type(e).__name__}"):
                 try:
+                    assert self._active is not None
                     await self._active.feed(chunk)
                     self._delivered += len(chunk)
                     return

@@ -10,9 +10,9 @@ from typing import Any
 from fastapi import WebSocket, WebSocketDisconnect
 from core.logger import get_logger
 
-from agent.agent import AliyaAgent, agent_config_from_yaml
+from agent.agent import AliyaAgent
+from agent.config import agent_config_from_yaml
 from agent.tools.registry import ToolRegistry
-from agent.tools.reply import ReplyTool
 from agent.tools.memory_query import MemoryQueryTool
 from agent.prompts import PromptManager, get_prompt_manager
 
@@ -33,9 +33,8 @@ def build_agent(
     prompt_manager: PromptManager | None = None,
 ) -> AliyaAgent:
     registry = ToolRegistry()
-    registry.register(ReplyTool())
     registry.register(MemoryQueryTool())
-    # 注：TTS 已由 Agent 在生成最终回复后自动播放，不再作为 LLM 工具
+    # 注：文本回复与 TTS 已由统一响应模块在生成最终回复后自动处理，不再作为 LLM 工具
 
     agent_config = agent_config_from_yaml()
 
@@ -120,6 +119,8 @@ def create_handler(
                     audio_player=audio_player,
                     confirm_callback=_ws_confirm,
                 )
+                # 后台预热情绪语料，避免首次对话时同步向量化阻塞
+                asyncio.create_task(agent.warmup())
             return agent
 
         async def _cancel_active() -> bool:
@@ -212,7 +213,7 @@ def create_handler(
                     if msg_type == "set_emotion":
                         feeling = str(data.get("feeling", ""))
                         _ensure_agent().set_emotion(feeling)
-                        await _send({"type": "emotion_changed", "feeling": feeling})
+                        await _send({"type": "emotion_changed", "emotion": feeling})
                         continue
 
                     if msg_type == "get_prompt_config":
@@ -220,9 +221,22 @@ def create_handler(
                         await _send({"type": "prompt_config", **config})
                         continue
 
-                    if msg_type == "get_feeling_scores":
-                        scores = _ensure_agent().get_feeling_scores()
-                        await _send({"type": "feeling_scores", "scores": scores, "dominant": _ensure_agent().get_emotion()})
+                    if msg_type == "get_emotion_state":
+                        agent = _ensure_agent()
+                        state = agent.get_emotion_state()
+                        await _send({
+                            "type": "emotion_state",
+                            "emotion_state": state,
+                            "dominant": state.get("dominantEmotion", agent.get_emotion()),
+                        })
+                        continue
+
+                    if msg_type == "get_cognition_state":
+                        status = _ensure_agent().get_cognition_status()
+                        await _send({
+                            "type": "cognition_state",
+                            "cognition_state": status,
+                        })
                         continue
 
                     logger.debug("忽略未知 WS 消息类型: %s", msg_type)

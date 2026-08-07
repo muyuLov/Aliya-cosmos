@@ -38,10 +38,10 @@ npm run dev
 
 ## 致谢
 
-- **Live2D 角色** — [darkjungle8](https://space.bilibili.com/41738135)（B站主页），感谢提供的精美 Live2D 模型
-- **记忆系统** — [RTGS2017 NagaAgent](https://github.com/RTGS2017/NagaAgent)，感谢提供的记忆系统参考
-- **Agent 架构** — [anthropics claude-code](https://github.com/anthropics/claude-code)，感谢提供的 Agent 实现参考
-- **项目框架参考** — [Playa-0v0 Cyrene-Agent](https://github.com/Playa-0v0/Cyrene-Agent)
+- **Live2D 角色** — [darkjungle8](https://space.bilibili.com/41738135)（B站主页）
+- **记忆系统** — [RTGS2017 NagaAgent](https://github.com/RTGS2017/NagaAgent)
+- **Agent 架构** — [anthropics claude-code](https://github.com/anthropics/claude-code)
+- **Agent项目框架 GUI界面参考** — [Playa-0v0 Cyrene-Agent](https://github.com/Playa-0v0/Cyrene-Agent)
 
 ## 许可证
 

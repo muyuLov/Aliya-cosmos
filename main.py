@@ -10,16 +10,16 @@
 import asyncio
 import json
 import sys
-from contextlib import nullcontext as _nullctx
+from contextlib import asynccontextmanager, nullcontext as _nullctx
 from typing import Any
 
 import uvicorn
 from fastapi import FastAPI
 from fastapi.routing import APIWebSocketRoute
 
-from agent.agent import AliyaAgent, agent_config_from_yaml
+from agent.agent import AliyaAgent
+from agent.config import agent_config_from_yaml
 from agent.tools.registry import ToolRegistry
-from agent.tools.reply import ReplyTool
 from agent.tools.memory_query import MemoryQueryTool
 from agent.ws import create_handler
 from core.config import get_config_instance
@@ -118,7 +118,6 @@ class MultiOutput:
 
 def _init_components(config_path: str = "data/config/main.yml"):
     registry = ToolRegistry()
-    registry.register(ReplyTool())
     registry.register(MemoryQueryTool())
 
     conversation_service = create_llm(config_path=config_path)
@@ -142,7 +141,7 @@ async def _run_ws_broadcast_server(broadcast: WSBroadcast, conversation_service:
     """后台运行 WS 广播服务器。
 
     提供一个法 WebSocket 端点 /agent/ws，接收方 WS 客户端并广播 agent 通知，
-    同时响应基本的查询类消息（get_feeling_scores / get_token_usage / ping）。
+    同时响应基本的查询类消息（get_emotion_state / get_token_usage / ping）。
     """
     from fastapi import WebSocket, WebSocketDisconnect
 
@@ -150,7 +149,25 @@ async def _run_ws_broadcast_server(broadcast: WSBroadcast, conversation_service:
     ws_host = config.get("cosmos.service.agent.ws_server.host", "127.0.0.1")
     ws_port = int(config.get("cosmos.service.agent.ws_server.port", 8765))
 
-    app = FastAPI()
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        yield
+        logger.info("WS 广播服务器正在关闭...")
+        await broadcast.send_json({"type": "server_shutdown"})
+        # 释放向量资源（全局向量库 + agent 向量情绪分类器）
+        try:
+            from core.vector import shutdown_vector_store
+            await shutdown_vector_store()
+        except Exception as e:
+            logger.warning("关闭全局向量存储失败: %s", e)
+        agent = broadcast._agent
+        if agent is not None:
+            try:
+                await agent.close_emotion_classifier()
+            except Exception as e:
+                logger.warning("关闭情绪向量分类器失败: %s", e)
+
+    app = FastAPI(lifespan=lifespan)
 
     @app.websocket("/agent/ws")
     async def ws_endpoint(websocket: WebSocket) -> None:
@@ -161,14 +178,14 @@ async def _run_ws_broadcast_server(broadcast: WSBroadcast, conversation_service:
                 msg_type = data.get("type", "")
                 if msg_type == "ping":
                     await websocket.send_json({"type": "pong"})
-                elif msg_type == "get_feeling_scores":
+                elif msg_type == "get_emotion_state":
                     agent = broadcast._agent
                     if agent:
-                        scores = agent.get_feeling_scores()
+                        state = agent.get_emotion_state()
                         await websocket.send_json({
-                            "type": "feeling_scores",
-                            "scores": scores,
-                            "dominant": agent.get_emotion(),
+                            "type": "emotion_state",
+                            "emotion_state": state,
+                            "dominant": state.get("dominantEmotion", agent.get_emotion()),
                         })
                 elif msg_type == "get_token_usage":
                     if hasattr(conversation_service, 'usage'):
@@ -183,12 +200,6 @@ async def _run_ws_broadcast_server(broadcast: WSBroadcast, conversation_service:
             pass
         finally:
             broadcast.unregister(websocket)
-
-    # 配置 shutdown 事件以优雅地处理关闭
-    @app.on_event("shutdown")
-    async def shutdown_event():
-        logger.info("WS 广播服务器正在关闭...")
-        await broadcast.send_json({"type": "server_shutdown"})
 
     logger.info("WS 广播服务器启动 | ws=%s:%d", ws_host, ws_port)
     server = uvicorn.Server(uvicorn.Config(app, host=ws_host, port=ws_port, log_level="warning"))
@@ -248,6 +259,9 @@ async def chat_loop(ws_enabled: bool = False):
         # WS 广播模式下，将 agent 引用注入广播器以便响应查询
         if broadcast:
             broadcast.set_agent(agent)
+
+        # 后台预热情绪语料，避免首次对话时同步向量化阻塞
+        asyncio.create_task(agent.warmup())
 
         mode_hint = " + WS 广播" if ws_enabled else ""
         print(f"Aliya 聊天模式{mode_hint}（输入 /exit 退出, /clear 清空历史）\n")
@@ -313,7 +327,17 @@ def start_server():
         audio_player=audio_player,
     )
 
-    app = FastAPI()
+    @asynccontextmanager
+    async def _lifespan(_app: FastAPI):
+        # 启动即预加载情绪语料（无需任何 WS 连接），避免首次对话时同步向量化
+        try:
+            from agent.emotion import prewarm_emotion_corpus
+            await prewarm_emotion_corpus()
+        except Exception as e:
+            logger.warning("情绪语料预热失败: %s", e)
+        yield
+
+    app = FastAPI(lifespan=_lifespan)
     app.router.routes.append(APIWebSocketRoute("/agent/ws", handler))
 
     try:

@@ -1,0 +1,21 @@
+{
+  "include": [
+    "agent",
+    "core",
+    "main.py",
+    "tests",
+    "GUI"
+  ],
+  "exclude": [
+    "example",
+    "**/example.py",
+    "**/__pycache__",
+    "**/.venv",
+    "**/node_modules"
+  ],
+  "typeCheckingMode": "standard",
+  "reportUnusedImport": "warning",
+  "reportUnusedParameter": "warning",
+  "reportUnusedVariable": "warning",
+  "reportDeprecated": "warning"
+}

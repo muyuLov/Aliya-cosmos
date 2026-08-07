@@ -102,7 +102,7 @@ def test_stop_cancels_active_task(factory, monkeypatch):
     ws = _make_ws([{"type": "user_message", "text": "hi"}, {"type": "stop"}])
     state = {"cancelled": False}
 
-    async def slow(text):
+    async def slow(_text):
         try:
             await asyncio.sleep(10)
         except asyncio.CancelledError:
@@ -130,7 +130,7 @@ def test_concurrent_user_message_rejected(factory, monkeypatch):
     started = asyncio.Event()
     release = asyncio.Event()
 
-    async def slow(text):
+    async def slow(_text):
         started.set()
         await release.wait()
 
