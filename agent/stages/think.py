@@ -59,7 +59,7 @@ async def run_tool_loop(
                 }
             )
 
-        tool_results = await ctx.registry.dispatch_all(result.tool_calls, ctx.make_tool_context())
+        tool_results = await ctx.registry.dispatch_all(result.tool_calls, ctx)
 
         # 认知学习（after_tool 钩子）：需求更新、情景记忆、世界模型、自我模型
         if hooks:

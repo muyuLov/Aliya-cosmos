@@ -63,6 +63,16 @@ async def test_assemble_sets_tool_prompt_and_injection():
 
 
 @pytest.mark.asyncio
+async def test_assemble_injects_tool_descriptions():
+    """工具描述（registry.format_descriptions）应传入工具阶段 system prompt"""
+    ctx = _make_ctx()
+    ctx.registry.format_descriptions = MagicMock(return_value="### memory_query 描述")
+    ctx.prompt_manager.build_tool_system_prompt = MagicMock(return_value="tool-system")
+    await assemble_tool_phase(ctx)
+    ctx.prompt_manager.build_tool_system_prompt.assert_called_once_with("### memory_query 描述")
+
+
+@pytest.mark.asyncio
 async def test_think_loop_calls_tools_and_injects_result():
     ctx = _make_ctx()
     # 第一轮 think 返回工具调用，第二轮 think_with_context 返回最终回复

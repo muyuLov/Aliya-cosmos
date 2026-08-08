@@ -8,8 +8,9 @@ _MEMORY_HEADER = "[记忆]"
 
 
 async def assemble_tool_phase(ctx: AgentContext) -> None:
-    """切换到工具阶段：tools_system.md 作为 system prompt（无角色人格）。"""
-    tool_system = ctx.prompt_manager.build_tool_system_prompt()
+    """切换到工具阶段：tools_system.md + 动态工具描述作为 system prompt（无角色人格）。"""
+    tools_desc = ctx.registry.format_descriptions()
+    tool_system = ctx.prompt_manager.build_tool_system_prompt(tools_desc)
     await ctx.conv.set_system_prompt(tool_system)
 
     # 注入认知上下文（需求状态 + 记忆召回），帮助工具决策

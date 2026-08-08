@@ -11,9 +11,13 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from core.logger import get_logger
-from agent.tools.base import BaseTool, ToolContext, ToolResult
+from agent.tools.base import BaseTool, ToolResult
+
+if TYPE_CHECKING:
+    from agent.context import AgentContext
 
 logger = get_logger(__name__)
 
@@ -141,7 +145,7 @@ class ToolRegistry:
     async def dispatch_all(
         self,
         tool_calls: list[dict],
-        context: ToolContext,
+        context: "AgentContext",
     ) -> list[tuple[str, ToolResult]]:
         """分区并行调度工具，按原始顺序返回结果。"""
         if not tool_calls:
@@ -191,7 +195,7 @@ class ToolRegistry:
     async def _execute_batch(
         self,
         batch: list[ToolCallSpec],
-        context: ToolContext,
+        context: "AgentContext",
     ) -> list[tuple[str, ToolResult]]:
         """执行一批（可并发的）工具调用。"""
         async def _run_one(spec: ToolCallSpec) -> tuple[str, ToolResult]:
@@ -205,19 +209,15 @@ class ToolRegistry:
 
             tool = self._tools[name]
 
-            # 权限校验
-            check_perm = getattr(tool, 'check_permissions', None)
-            if check_perm:
-                allowed, reason = await check_perm(params, context)
-            else:
-                allowed, reason = True, None
+            # 权限校验（BaseTool 协议保证 check_permissions 存在）
+            allowed, reason = await tool.check_permissions(params, context)
             if not allowed:
                 return name, ToolResult(
                     success=False, error=f"权限拒绝: {reason}",
                 )
 
-            if context.send_message:
-                await context.send_message({
+            if context.notify:
+                await context.notify({
                     "type": "tool_start",
                     "tool": name,
                     "is_concurrency_safe": tool.is_concurrency_safe,
@@ -231,8 +231,8 @@ class ToolRegistry:
 
             result.duration = time.monotonic() - start
 
-            if context.send_message:
-                await context.send_message({
+            if context.notify:
+                await context.notify({
                     "type": "tool_complete",
                     "tool": name,
                     "status": "success" if result.success else "fail",

@@ -4,13 +4,19 @@
 - ``is_concurrency_safe``：标记只读/写入工具，支持分区并行
 - ``check_permissions``：执行前置权限验证钩子，支持配置驱动
 - ``ToolBase``：工具基类，提供默认的配置感知权限校验
+
+工具执行时直接接收 ``AgentContext``（统一依赖容器），
+不再维护独立的 ToolContext——避免字段重复复制与每轮构造。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Awaitable, Callable, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
+
+if TYPE_CHECKING:
+    from agent.context import AgentContext
 
 
 class ToolPermission(Enum):
@@ -30,20 +36,6 @@ class ToolResult:
     duration: float = 0.0
 
 
-@dataclass
-class ToolContext:
-    tts_service: Any | None = None
-    audio_player: Any | None = None
-    memory_manager: Any | None = None
-    send_message: Callable[[dict], Awaitable[None]] | None = None
-    # 音频转发通道（仅 WebSocket 模式可用）；控制台模式为 None，避免向终端推送音频
-    audio_relay: Callable[[dict], Awaitable[None]] | None = None
-    # 权限配置（由 Agent 注入，用于配置驱动的权限校验）
-    permission_config: Any | None = None
-    # 用户确认回调：工具名 + 参数 → 用户是否允许执行（由运行时环境提供实现）
-    confirm_callback: Callable[[str, dict], Awaitable[bool]] | None = None
-
-
 class BaseTool(Protocol):
     """工具协议
 
@@ -58,10 +50,10 @@ class BaseTool(Protocol):
     is_concurrency_safe: bool = False
     permission: ToolPermission = ToolPermission.ALWAYS_ALLOW
 
-    async def execute(self, params: dict, context: ToolContext) -> ToolResult: ...
+    async def execute(self, params: dict, context: "AgentContext") -> ToolResult: ...
 
     async def check_permissions(
-        self, params: dict, context: ToolContext,
+        self, params: dict, context: "AgentContext",
     ) -> tuple[bool, str | None]:
         """执行前的权限校验。
 
@@ -89,11 +81,11 @@ class ToolBase:
     is_concurrency_safe: bool = False
     permission: ToolPermission = ToolPermission.ALWAYS_ALLOW
 
-    async def execute(self, _params: dict, _context: ToolContext) -> ToolResult:
+    async def execute(self, _params: dict, _context: "AgentContext") -> ToolResult:
         raise NotImplementedError(f"工具 `{self.name}` 未实现 execute 方法")
 
     async def check_permissions(
-        self, params: dict, context: ToolContext,
+        self, params: dict, context: "AgentContext",
     ) -> tuple[bool, str | None]:
         """配置驱动的权限校验。
 

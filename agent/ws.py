@@ -12,8 +12,7 @@ from core.logger import get_logger
 
 from agent.agent import AliyaAgent
 from agent.config import agent_config_from_yaml
-from agent.tools.registry import ToolRegistry
-from agent.tools.memory_query import MemoryQueryTool
+from agent.tools import create_default_tool_registry
 from agent.prompts import PromptManager, get_prompt_manager
 
 logger = get_logger(__name__)
@@ -32,8 +31,7 @@ def build_agent(
     confirm_callback: Any | None = None,
     prompt_manager: PromptManager | None = None,
 ) -> AliyaAgent:
-    registry = ToolRegistry()
-    registry.register(MemoryQueryTool())
+    registry = create_default_tool_registry()
     # 注：文本回复与 TTS 已由统一响应模块在生成最终回复后自动处理，不再作为 LLM 工具
 
     agent_config = agent_config_from_yaml()

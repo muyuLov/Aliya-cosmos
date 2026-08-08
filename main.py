@@ -19,8 +19,7 @@ from fastapi.routing import APIWebSocketRoute
 
 from agent.agent import AliyaAgent
 from agent.config import agent_config_from_yaml
-from agent.tools.registry import ToolRegistry
-from agent.tools.memory_query import MemoryQueryTool
+from agent.tools import create_default_tool_registry
 from agent.ws import create_handler
 from core.config import get_config_instance
 from core.llm import create_from_config as create_llm
@@ -117,8 +116,7 @@ class MultiOutput:
 
 
 def _init_components(config_path: str = "data/config/main.yml"):
-    registry = ToolRegistry()
-    registry.register(MemoryQueryTool())
+    registry = create_default_tool_registry()
 
     conversation_service = create_llm(config_path=config_path)
 

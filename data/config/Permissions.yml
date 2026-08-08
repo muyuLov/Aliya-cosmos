@@ -10,3 +10,5 @@
 #
 tools:
   memory_query: always_allow
+  get_current_time: always_allow
+  query_recent_conversation: always_allow

@@ -1,7 +1,8 @@
 """AgentContext — 会话级统一依赖容器
 
 一次构造收拢 Agent 运行所需的全部依赖，管线各阶段 / 工具 / 钩子
-订阅者均从容器取用，杜绝依赖分散与 ToolContext 重复构造。
+订阅者均从容器取用，杜绝依赖分散与重复构造。
+工具执行时直接接收本容器作为上下文，可访问对话历史、配置、大脑等全部能力。
 """
 
 from __future__ import annotations
@@ -18,7 +19,6 @@ from agent.config import AgentConfig
 from agent.emotion.engine import EmotionEngine
 from agent.prompts import PromptManager
 from agent.prompts.style_switcher import StyleSwitcher
-from agent.tools.base import ToolContext
 from agent.tools.registry import ToolRegistry
 
 
@@ -41,18 +41,6 @@ class AgentContext:
     notify: Callable[[dict[str, object]], Awaitable[None]] | None = None
     confirm_callback: Callable[[str, dict], Awaitable[bool]] | None = None
     permission_config: Any | None = None
-
-    def make_tool_context(self) -> ToolContext:
-        """派生 ToolContext（唯一构造点）。"""
-        return ToolContext(
-            tts_service=self.tts_service,
-            audio_player=self.audio_player,
-            memory_manager=self.memory_manager,
-            send_message=self.notify,
-            audio_relay=self.audio_relay,
-            permission_config=self.permission_config,
-            confirm_callback=self.confirm_callback,
-        )
 
 
 __all__ = ["AgentContext"]

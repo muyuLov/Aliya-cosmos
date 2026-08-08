@@ -145,14 +145,24 @@ class PromptManager:
         )
         return result
 
-    def build_tool_system_prompt(self) -> str:
+    def build_tool_system_prompt(self, tools_description: str = "") -> str:
         """构建工具阶段 system prompt。
 
-        返回：
-            工具调度规则文本（不含角色人格）。
+        规则文本来自 tools_system.md，随后动态追加当前注册的工具描述
+        （由 ToolRegistry.format_descriptions 生成），使 LLM 明确知晓
+        可用工具、参数 schema 与权限等级。
+
+        Args:
+            tools_description: 工具描述（Markdown）。为空时不追加。
+
+        Returns:
+            工具调度规则 + 工具描述的完整文本。
         """
         content = self._load(_TOOLS_SYSTEM_FILE)
-        logger.debug("[Prompt] 构建工具阶段 prompt | chars=%d", len(content))
+        if tools_description:
+            content = f"{content}\n\n## 可用工具\n\n{tools_description}".strip()
+        logger.debug("[Prompt] 构建工具阶段 prompt | chars=%d | has_tools=%s",
+                     len(content), bool(tools_description))
         return content or ""
 
     def build_emotion_patch(self, feeling: str = "") -> str:

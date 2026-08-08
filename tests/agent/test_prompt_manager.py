@@ -65,6 +65,18 @@ class TestPromptManager:
         assert len(prompt) > 50
         assert "工具" in prompt
 
+    def test_build_tool_system_prompt_injects_tools_description(self):
+        """工具描述动态注入工具阶段 prompt"""
+        pm = PromptManager()
+        tools_desc = "### memory_query\n只读记忆查询工具"
+        prompt = pm.build_tool_system_prompt(tools_description=tools_desc)
+        assert "## 可用工具" in prompt
+        assert "memory_query" in prompt
+        assert "只读记忆查询工具" in prompt
+        # 不带描述时不注入
+        plain = pm.build_tool_system_prompt()
+        assert "## 可用工具" not in plain
+
     def test_build_emotion_patch_empty(self):
         """空情绪返回空字符串"""
         pm = PromptManager()
