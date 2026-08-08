@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import pytest
 
-from agent.cognition.memory import (
+from core.memory.hierarchical import (
     EpisodicMemory,
     HierarchicalMemory,
     ProceduralMemory,

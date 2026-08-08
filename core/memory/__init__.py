@@ -1,15 +1,17 @@
-"""memory - GRAG 知识图谱记忆系统
+"""memory - GRAG 知识图谱记忆系统 + 层次化认知记忆
 
-借鉴 NagaAgent-main/summer_memory 架构，采用项目 core/llm/ 替换直接 API 调用。
+GRAG 记忆系统借鉴 NagaAgent-main/summer_memory 架构，采用项目 core/llm/ 替换直接 API 调用。
+层次化记忆参考 LAAP 认知架构第 10 章，提供五层工作/情景/语义/程序/向量记忆。
 
 模块结构:
-    _providers.py   - 共享 LLM Provider 懒加载工具
-    config.py       - GRAG 配置加载
-    extractor.py    - 五元组提取（使用 core/llm/）
-    graph.py        - Neo4j 图谱操作（Schema v4: Entity+Day节点+时间链，去APOC依赖）
-    rag_query.py    - RAG 知识查询（使用 core/llm/）
-    task_manager.py - 并发任务管理（懒加载工厂）
-    memory_manager.py - 记忆管理器（集成层）
+    _providers.py      - 共享 LLM Provider 懒加载工具
+    config.py          - GRAG 配置加载
+    extractor.py        - 五元组提取（使用 core/llm/）
+    graph.py           - Neo4j 图谱操作（Schema v4: Entity+Day节点+时间链，去APOC依赖）
+    hierarchical.py     - 五层层次化记忆系统（Working/Episodic/Semantic/Procedural/Vector）
+    rag_query.py       - RAG 知识查询（使用 core/llm/）
+    task_manager.py    - 并发任务管理（懒加载工厂）
+    memory_manager.py  - 记忆管理器（集成层）
 
 兼容接口：
     create_memory_service(config_path) -> (builder, engine, recall, client, extractor)
@@ -70,6 +72,18 @@ from core.memory.task_manager import (
     get_task_manager,
     start_task_manager,
     stop_task_manager,
+)
+from core.memory.hierarchical import (
+    EpisodicMemory,
+    EpisodicRecord,
+    HierarchicalMemory,
+    ProceduralMemory,
+    SemanticFact,
+    SemanticMemory,
+    SkillTemplate,
+    VectorMemory,
+    WorkingChunk,
+    WorkingMemory,
 )
 
 logger = get_logger(__name__)
@@ -210,4 +224,15 @@ __all__ = [
     "TaskQueueFullError",
     "TaskTimeoutError",
     "TaskExecutionError",
+    # 层次化记忆
+    "WorkingChunk",
+    "EpisodicRecord",
+    "SemanticFact",
+    "SkillTemplate",
+    "WorkingMemory",
+    "EpisodicMemory",
+    "SemanticMemory",
+    "ProceduralMemory",
+    "VectorMemory",
+    "HierarchicalMemory",
 ]

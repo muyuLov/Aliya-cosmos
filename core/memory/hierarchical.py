@@ -80,17 +80,22 @@ class SemanticFact:
 
         old_weight = evidence_count / (evidence_count + 1)
         new_weight = 1 / (evidence_count + 1)
-        confidence = old_weight * confidence + new_weight * confidence
+        new_confidence = old_weight * old_confidence + new_weight * new_confidence
         """
+        old_confidence = self.confidence
         old_weight = self.evidence_count / (self.evidence_count + 1)
         new_weight = 1.0 / (self.evidence_count + 1)
-        self.confidence = old_weight * self.confidence + new_weight * confidence
-        # 高置信的新证据覆盖值
-        if confidence >= self.confidence or self.evidence_count == 0:
-            self.value = new_value
+        self.confidence = old_weight * old_confidence + new_weight * confidence
         self.evidence_count += 1
+        # 高置信的新证据覆盖值（与旧置信度比较，而非更新后）
+        if confidence >= old_confidence:
+            self.value = new_value
         self.source = source
         self.updated_at = time.time()
+
+    def boost(self, delta: float) -> None:
+        """直接增加置信度（用于巩固机制），上限 1.0。"""
+        self.confidence = min(self.confidence + delta, 1.0)
 
 
 @dataclass
@@ -254,14 +259,16 @@ class VectorMemory:
     向量模块不可用时静默降级（enabled=False）。
     """
 
-    def __init__(self) -> None:
+    def __init__(self, enabled: bool = True) -> None:
         self._store: Any | None = None
-        self.enabled: bool = False
+        self.enabled: bool = enabled
+        if not self.enabled:
+            return
         try:
             from core.vector.store import get_vector_store
             self._store = get_vector_store()
-            self.enabled = True
         except Exception:
+            self.enabled = False
             logger.debug("[Memory] 向量记忆不可用（跳过）")
 
     async def add(self, text: str, metadata: dict | None = None) -> bool:
@@ -283,6 +290,9 @@ class VectorMemory:
         except Exception as e:
             logger.debug("[Memory] 向量记忆检索失败: %s", e)
             return []
+
+    def __len__(self) -> int:
+        return 0 if self._store is None else len(self._store)
 
 
 # ── 层级聚合 ─────────────────────────────────────────────────────────────────
@@ -306,9 +316,7 @@ class HierarchicalMemory:
         self.episodic = EpisodicMemory()
         self.semantic = SemanticMemory()
         self.procedural = ProceduralMemory()
-        self.vector = VectorMemory() if enable_vector else VectorMemory()
-        if not enable_vector:
-            self.vector.enabled = False
+        self.vector = VectorMemory(enabled=enable_vector)
 
     # ── 写入 ──────────────────────────────────────────────────────────────
 
@@ -334,9 +342,7 @@ class HierarchicalMemory:
 
     # ── 召回 ──────────────────────────────────────────────────────────────
 
-    def build_context(
-        self, query: str = "", limit: int = 5, _include_vector: bool = True
-    ) -> list[str]:
+    def build_context(self, query: str = "", limit: int = 5) -> list[str]:
         """组合召回：语义 + 情景 + 工作记忆，构成可注入 LLM 的上下文。"""
         parts: list[str] = []
         for fact in self.semantic.search(query, limit=limit):
@@ -372,7 +378,7 @@ class HierarchicalMemory:
         # 语义事实证据累积：低置信事实 → 高置信（重复出现的模式）
         for fact in self.semantic.iter_all():
             if fact.evidence_count >= _CONSOLIDATION_THRESHOLD and fact.confidence < 0.9:
-                fact.confidence = min(0.9, fact.confidence + 0.1)
+                fact.boost(0.1)
                 stats["facts"] += 1
 
         return stats
@@ -388,6 +394,10 @@ class HierarchicalMemory:
 
 
 __all__ = [
+    "WorkingChunk",
+    "EpisodicRecord",
+    "SemanticFact",
+    "SkillTemplate",
     "WorkingMemory",
     "EpisodicMemory",
     "SemanticMemory",

@@ -23,7 +23,7 @@
 from __future__ import annotations
 
 from agent.cognition.needs import Need, NeedDriveSystem, NeedType
-from agent.cognition.memory import HierarchicalMemory
+from core.memory.hierarchical import HierarchicalMemory
 from agent.cognition.world_model import WorldModel
 from agent.cognition.self_model import EmergentSelfModel
 from agent.cognition.autonomy import AutonomyEngine, Goal, GoalStatus, Priority

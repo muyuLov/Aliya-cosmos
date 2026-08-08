@@ -22,7 +22,7 @@ from typing import Any
 from core.logger import get_logger
 
 from agent.cognition.needs import NeedDriveSystem
-from agent.cognition.memory import HierarchicalMemory
+from core.memory.hierarchical import HierarchicalMemory
 from agent.cognition.world_model import WorldModel, EntityType, RelationType
 from agent.cognition.self_model import EmergentSelfModel
 from agent.cognition.autonomy import AutonomyEngine, ActionProposal
