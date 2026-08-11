@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from core.config import get_config_instance
+
 from agent.emotion import EmotionPersonality
 from agent.emotion.vad import VADVector
 
@@ -32,10 +34,6 @@ class AgentConfig:
     max_consecutive_timeouts: int = _MAX_CONSECUTIVE_TIMEOUTS  # 连续超时上限
     compression_threshold: int = 80000  # 对话压缩阈值（字符数）
     max_soul_retries: int = 2  # 灵魂阶段净化失败时的重试次数（调用超时不重试）
-    # 分层 Prompt 配置
-    prompt_style: str = "default"  # 表达风格: default / lively / healing / sweet
-    # 自动风格切换配置
-    auto_style_enabled: bool = True  # 风格自动切换（纯 LLM 模式）
     # 情感系统配置（EmotionPersonality，None 使用默认人格）
     emotion_personality: EmotionPersonality | None = None
     # 情绪分类方式: rule（不创建向量分类器）/ vector / auto（向量可用则语义分类，否则 neutral 兜底）
@@ -79,7 +77,6 @@ def _parse_emotion_personality(raw: dict) -> EmotionPersonality | None:
 
 def agent_config_from_yaml(config_path: str = "data/config/main.yml") -> AgentConfig:
     """从 YAML 配置文件读取 Agent 相关配置。"""
-    from core.config import get_config_instance
     cfg = get_config_instance(config_path)
     llm_section = cfg.get("cosmos.service.llm") or {}
     raw = llm_section.get("cot_enabled", True)
@@ -90,10 +87,6 @@ def agent_config_from_yaml(config_path: str = "data/config/main.yml") -> AgentCo
     agent_section = cfg.get("cosmos.service.agent") or {}
     perm_section = agent_section.get("permissions") or {}
     perm_config_path = str(perm_section.get("config_path", "data/config/Permissions.yml"))
-    # 表达风格 + 自动切换配置
-    prompt_section = cfg.get("cosmos.service.prompt") or {}
-    style = str(prompt_section.get("style", "default"))
-    auto_style = _parse_bool(prompt_section.get("auto_style", True))
     # 情感系统配置
     emotion_section = agent_section.get("emotion") if isinstance(agent_section.get("emotion"), dict) else {}
     if not isinstance(emotion_section, dict):
@@ -115,8 +108,6 @@ def agent_config_from_yaml(config_path: str = "data/config/main.yml") -> AgentCo
     return AgentConfig(
         cot_enabled=cot_enabled, reasoning_effort=reasoning_effort,
         permission_config_path=perm_config_path,
-        prompt_style=style,
-        auto_style_enabled=auto_style,
         emotion_personality=emotion_personality,
         emotion_classifier=emotion_classifier,
         emotion_max_samples=emotion_max_samples,

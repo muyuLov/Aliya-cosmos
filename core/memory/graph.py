@@ -240,6 +240,7 @@ class GraphStore:
         confidence: float = 1.0,
         day_date: str = "",
         timeline: str = "",
+        categories: Optional[List[str]] = None,
     ) -> bool:
         """存储五元组到 Neo4j（同步）
 
@@ -248,6 +249,7 @@ class GraphStore:
         使用 UNWIND 批量写入：每个关系类型一次 tx.run()，消除 N+1 网络往返。
         
         若提供 day_date 和 timeline，自动创建/获取 Day 节点并关联实体。
+        category 写入关系的 category 属性，支持按类别查询与过滤。
         """
         if not new_quintuples:
             return True
@@ -259,7 +261,7 @@ class GraphStore:
             return all(
                 self.store_quintuples(
                     new_quintuples, source_text, session_id,
-                    confidence, day_date, tl,
+                    confidence, day_date, tl, categories,
                 )
                 for tl in tls
             )
@@ -278,10 +280,11 @@ class GraphStore:
         store_day_date = _shift_timeline_date(day_date, timeline) if day_date else ""
         src = source_text or ""
         success_count = 0
+        cats = categories or []
 
         # 按关系类型分组，每组通过 UNWIND 一次性批量写入
         groups: dict[str, list] = {}
-        for head, head_type, rel, tail, tail_type in new_quintuples:
+        for idx, (head, head_type, rel, tail, tail_type) in enumerate(new_quintuples):
             if not head or not tail or not rel:
                 logger.warning("跳过无效五元组: %s", (head, head_type, rel, tail, tail_type))
                 continue
@@ -291,7 +294,8 @@ class GraphStore:
             if len(rel) > _REL_TYPE_MAX_LEN:
                 logger.warning("关系类型过长 (%d > %d)，跳过: %s", len(rel), _REL_TYPE_MAX_LEN, rel)
                 continue
-            groups.setdefault(rel, []).append((head, head_type, tail, tail_type))
+            cat = cats[idx] if idx < len(cats) else ""
+            groups.setdefault(rel, []).append((head, head_type, tail, tail_type, cat))
 
         if not groups:
             return True
@@ -331,16 +335,18 @@ class GraphStore:
                                   ELSE t.aliases + ';' + item[2]
                                 END
 
-                WITH h, t
+                WITH h, t, item
                 MERGE (h)-[r:{rel} {{day_date: $day_date, timeline: $timeline}}]->(t)
                   ON CREATE SET r.source_text = $source_text,
                                 r.session_id  = $session_id,
                                 r.confidence  = $confidence,
+                                r.category    = item[4],
                                 r.created_at  = $now,
                                 r.updated_at  = $now,
                                 r.occurrence  = 1
                   ON MATCH  SET r.updated_at  = $now,
-                                r.occurrence  = r.occurrence + 1
+                                r.occurrence  = r.occurrence + 1,
+                                r.category    = coalesce(r.category, item[4])
                 """
                 tx.run(
                     cypher,
@@ -671,6 +677,123 @@ class GraphStore:
 
         # 按最近日期降序返回
         return [v[1] for v in sorted(best.values(), key=lambda x: x[0], reverse=True)]
+
+    def query_by_category(
+        self,
+        category: str,
+        keywords: Optional[List[str]] = None,
+        limit: int = 20,
+        timeline: str = "",
+    ) -> List[QuintupleType]:
+        """按五元组类别查询图谱（同步）
+
+        根据 category 属性过滤 PREDICATE 关系，可结合关键词进一步缩小范围。
+        category 取值见 QuintupleCategory（人际/身份/地点/事件/偏好/属性/认知/归属）。
+
+        Args:
+            category: 类别标识
+            keywords: 可选关键词列表，用于过滤相关实体
+            limit:    返回数量上限
+            timeline: 时间链过滤
+
+        Returns:
+            五元组列表
+        """
+        try:
+            g = self._get_graph()
+        except GraphConnectionError:
+            logger.debug("图谱未连接，返回空结果")
+            return []
+
+        if g is None:
+            return []
+
+        valid_keywords = [kw for kw in (keywords or []) if kw]
+        names: list = []
+
+        if valid_keywords:
+            lucene_query = " OR ".join(f'"{kw}"' for kw in valid_keywords)
+            try:
+                ft_records = g.run(  # type: ignore[attr-defined]
+                    "CALL db.index.fulltext.queryNodes('entity_fulltext', $query) "
+                    "YIELD node RETURN node.name AS name LIMIT $limit",
+                    query=lucene_query,
+                    limit=limit,
+                ).data()
+                names = [str(r["name"]) for r in ft_records if r.get("name")]
+            except Exception as e:
+                logger.error("全文索引查询失败: %s", e)
+
+        try:
+            if names:
+                records = g.run(  # type: ignore[attr-defined]
+                    """
+                    MATCH (e1:Entity)-[r]->(e2:Entity)
+                    WHERE r.category = $category
+                      AND ($timeline = "" OR r.timeline = $timeline)
+                      AND (e1.name IN $names OR e2.name IN $names)
+                    RETURN e1.name AS head, e1.entity_type AS head_type,
+                           type(r) AS relation,
+                           e2.name AS tail, e2.entity_type AS tail_type,
+                           r.day_date AS day_date
+                    ORDER BY r.day_date DESC, r.updated_at DESC
+                    LIMIT $limit
+                    """,
+                    category=category,
+                    timeline=timeline,
+                    names=names,
+                    limit=limit,
+                ).data()
+            else:
+                records = g.run(  # type: ignore[attr-defined]
+                    """
+                    MATCH (e1:Entity)-[r]->(e2:Entity)
+                    WHERE r.category = $category
+                      AND ($timeline = "" OR r.timeline = $timeline)
+                    RETURN e1.name AS head, e1.entity_type AS head_type,
+                           type(r) AS relation,
+                           e2.name AS tail, e2.entity_type AS tail_type,
+                           r.day_date AS day_date
+                    ORDER BY r.day_date DESC, r.updated_at DESC
+                    LIMIT $limit
+                    """,
+                    category=category,
+                    timeline=timeline,
+                    limit=limit,
+                ).data()
+        except Exception as e:
+            logger.error("按类别查询失败: %s", e)
+            return []
+
+        # 按 (head, relation, tail) 聚合去重
+        best: dict = {}
+        for record in records:
+            head = str(record["head"] or "")
+            tail = str(record["tail"] or "")
+            relation = str(record["relation"] or "")
+            if not head or not tail or not relation:
+                continue
+            key = (head, relation, tail)
+            day_date = record.get("day_date") or ""
+            if key not in best or day_date > best[key][0]:
+                best[key] = (day_date, (
+                    head, record["head_type"] or "", relation,
+                    tail, record["tail_type"] or "",
+                ))
+
+        return [v[1] for v in sorted(best.values(), key=lambda x: x[0], reverse=True)]
+
+    async def query_by_category_async(
+        self,
+        category: str,
+        keywords: Optional[List[str]] = None,
+        limit: int = 20,
+        timeline: str = "",
+    ) -> List[QuintupleType]:
+        """按五元组类别查询图谱（异步）"""
+        return await asyncio.to_thread(
+            self.query_by_category, category, keywords, limit, timeline
+        )
 
     def query_quintuples_by_day(
         self,
@@ -1040,6 +1163,7 @@ class GraphStore:
         confidence: float = 1.0,
         day_date: str = "",
         timeline: str = "",
+        categories: Optional[List[str]] = None,
     ) -> bool:
         """存储五元组到 Neo4j（异步，不阻塞事件循环）"""
         return await asyncio.to_thread(
@@ -1050,6 +1174,7 @@ class GraphStore:
             confidence,
             day_date,
             timeline,
+            categories,
         )
 
     async def query_graph_by_keywords_async(
@@ -1236,9 +1361,10 @@ async def store_quintuples_async(
     confidence: float = 1.0,
     day_date: str = "",
     timeline: str = "",
+    categories: Optional[List[str]] = None,
 ) -> bool:
     return await get_graph_store().store_quintuples_async(
-        new_quintuples, source_text, session_id, confidence, day_date, timeline
+        new_quintuples, source_text, session_id, confidence, day_date, timeline, categories
     )
 
 
@@ -1290,6 +1416,26 @@ async def clear_all_quintuples_async() -> bool:
     return await get_graph_store().clear_all_quintuples_async()
 
 
+def query_by_category(
+    category: str,
+    keywords: Optional[List[str]] = None,
+    limit: int = 20,
+    timeline: str = "",
+) -> List[QuintupleType]:
+    """按五元组类别查询图谱（同步）；category 取值见 QuintupleCategory"""
+    return get_graph_store().query_by_category(category, keywords, limit, timeline)
+
+
+async def query_by_category_async(
+    category: str,
+    keywords: Optional[List[str]] = None,
+    limit: int = 20,
+    timeline: str = "",
+) -> List[QuintupleType]:
+    """按五元组类别查询图谱（异步）；category 取值见 QuintupleCategory"""
+    return await get_graph_store().query_by_category_async(category, keywords, limit, timeline)
+
+
 __all__ = [
     "GraphStore",
     "get_graph_store",
@@ -1297,6 +1443,7 @@ __all__ = [
     "reset_graph_store",
     "store_quintuples",
     "query_graph_by_keywords",
+    "query_by_category",
     "query_quintuples_by_day_async",
     "get_day_nodes_async",
     "get_all_quintuples",
@@ -1304,6 +1451,7 @@ __all__ = [
     "get_graph_stats",
     "store_quintuples_async",
     "query_graph_by_keywords_async",
+    "query_by_category_async",
     "get_all_quintuples_async",
     "clear_all_quintuples_async",
     "get_graph_stats_async",

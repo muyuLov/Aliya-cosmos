@@ -14,42 +14,13 @@ class TestPromptManager:
         pm2 = get_prompt_manager()
         assert pm1 is pm2
 
-    def test_list_styles(self):
-        """列出所有风格"""
-        pm = PromptManager()
-        styles = pm.list_styles()
-        assert "default" in styles
-        assert "lively" in styles
-        assert len(styles) >= 4
-
     def test_build_soul_system_prompt_default(self):
-        """默认风格灵魂 prompt"""
+        """灵魂 prompt"""
         pm = PromptManager()
-        prompt = pm.build_soul_system_prompt(style="default")
+        prompt = pm.build_soul_system_prompt()
         assert len(prompt) > 200
         assert prompt.count("---") >= 3
         assert "Aliya" in prompt or "阿莉娅" in prompt
-
-    def test_build_soul_system_prompt_lively(self):
-        """活泼风格灵魂 prompt"""
-        pm = PromptManager()
-        prompt = pm.build_soul_system_prompt(style="lively")
-        assert len(prompt) > 200
-        assert "活泼" in prompt or "元气" in prompt
-
-    def test_build_soul_system_prompt_healing(self):
-        """治愈风格灵魂 prompt"""
-        pm = PromptManager()
-        prompt = pm.build_soul_system_prompt(style="healing")
-        assert len(prompt) > 200
-        assert "治愈" in prompt or "安心" in prompt
-
-    def test_build_soul_system_prompt_sweet(self):
-        """撒娇风格灵魂 prompt"""
-        pm = PromptManager()
-        prompt = pm.build_soul_system_prompt(style="sweet")
-        assert len(prompt) > 200
-        assert "撒娇" in prompt or "亲近" in prompt or "黏人" in prompt
 
     def test_build_soul_system_prompt_tone_override(self):
         """风格覆盖：tone_override 替换 tone-rules.md"""
@@ -111,9 +82,7 @@ class TestPromptManager:
         """配置字典包含必需字段"""
         pm = PromptManager()
         cfg = pm.get_config_dict()
-        assert "styles" in cfg
         assert "soul_chars" in cfg
-        assert cfg["current_style"] == "default"
 
     def test_clear_cache(self):
         """清空缓存后重新加载"""
@@ -122,12 +91,6 @@ class TestPromptManager:
         pm.clear_cache()
         after = pm.build_soul_system_prompt()
         assert before == after  # 内容应一致
-
-    def test_invalid_style_falls_back_to_default(self):
-        """无效风格回退到 default"""
-        pm = PromptManager()
-        prompt = pm.build_soul_system_prompt(style="does_not_exist")  # type: ignore[arg-type]
-        assert len(prompt) > 200
 
     def test_missing_file_graceful(self):
         """文件缺失时静默返回空字符串"""

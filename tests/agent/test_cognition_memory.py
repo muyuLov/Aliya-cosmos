@@ -161,9 +161,90 @@ class TestHierarchicalMemory:
 
     def test_vector_disabled_graceful(self):
         mem = HierarchicalMemory(enable_vector=False)
-        assert mem.vector.enabled is False
+        assert mem._vector_enabled is False
+        assert mem._vector_ready is False
 
-    async def test_vector_add_when_disabled(self):
+    @pytest.mark.asyncio
+    async def test_vector_add_disabled_no_crash(self):
+        """向量关闭时写入操作不崩溃（自动降级）。"""
         mem = HierarchicalMemory(enable_vector=False)
-        result = await mem.vector_add("测试")
-        assert result is False
+        # learn_fact, remember_episode 内部的 _sync_to_vector 应静默跳过
+        mem.learn_fact("key", "value", confidence=0.8)
+        mem.remember_episode("episode content", importance=0.9)
+        assert len(mem._pending_sync) == 0  # 不会排入队列
+
+    @pytest.mark.asyncio
+    async def test_build_context_async_no_vector(self):
+        """关闭向量时 build_context_async 也能正常工作（仅各层召回）。"""
+        mem = HierarchicalMemory(enable_vector=False)
+        mem.attend("当前任务")
+        mem.learn_fact("事实", "值", confidence=0.9)
+        ctx = await mem.build_context_async(query="事实", limit=5)
+        assert any("事实" in part for part in ctx)
+        assert any("值" in part for part in ctx)
+
+    @pytest.mark.asyncio
+    async def test_sync_to_vector_queues_pending(self):
+        """_sync_to_vector 在向量可用时应排入待同步队列。"""
+        mem = HierarchicalMemory(enable_vector=True)
+        # 不真正初始化向量存储（测试环境无 Milvus），但验证队列逻辑
+        mem._vector_ready = True  # 模拟已就绪
+        mem._vector_store = _MockVectorStore()
+        mem._sync_to_vector("test content", {"layer": "semantic"})
+        assert len(mem._pending_sync) == 1
+        assert mem._pending_sync[0][0] == "test content"
+        assert mem._pending_sync[0][1] == {"layer": "semantic"}
+        # drain 后队列清空
+        await mem._drain_sync()
+        assert len(mem._pending_sync) == 0
+
+    @pytest.mark.asyncio
+    async def test_learn_fact_auto_sync(self):
+        """learn_fact 自动触发向量同步。"""
+        mem = HierarchicalMemory(enable_vector=True)
+        mem._vector_ready = True
+        mem._vector_store = _MockVectorStore()
+        mem.learn_fact("用户偏好", "喜欢咖啡", confidence=0.8)
+        assert len(mem._pending_sync) == 1
+        text, meta = mem._pending_sync[0]
+        assert "用户偏好" in text
+        assert "喜欢咖啡" in text
+        assert meta["layer"] == "semantic"
+
+    @pytest.mark.asyncio
+    async def test_remember_episode_auto_sync(self):
+        """remember_episode 根据重要性自动触发向量同步。"""
+        mem = HierarchicalMemory(enable_vector=True)
+        mem._vector_ready = True
+        mem._vector_store = _MockVectorStore()
+        # 高重要性 → 同步
+        mem.remember_episode("重要事件", importance=0.9)
+        assert len(mem._pending_sync) == 1
+        # 低重要性 → 不同步
+        mem.remember_episode("琐事", importance=0.1)
+        assert len(mem._pending_sync) == 1  # 不变
+
+    @pytest.mark.asyncio
+    async def test_learn_skill_auto_sync(self):
+        """learn_skill 自动触发向量同步。"""
+        mem = HierarchicalMemory(enable_vector=True)
+        mem._vector_ready = True
+        mem._vector_store = _MockVectorStore()
+        mem.learn_skill("调试流程", ["复现", "定位", "修复"], domain="dev")
+        assert len(mem._pending_sync) == 1
+        text = mem._pending_sync[0][0]
+        assert "调试流程" in text
+        assert "复现→定位→修复" in text
+
+
+class _MockVectorStore:
+    """模拟向量存储（不触发真实 Milvus/embedding 调用）。"""
+
+    def __init__(self):
+        self.items: list[tuple[str, dict]] = []
+
+    async def add(self, text: str, metadata: dict | None = None) -> None:
+        self.items.append((text, metadata or {}))
+
+    def __len__(self) -> int:
+        return len(self.items)

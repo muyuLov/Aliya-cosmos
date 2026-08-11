@@ -77,7 +77,7 @@ class TestQuintupleTaskManager:
             task_id = await mgr.add_task("测试文本")
             assert task_id.startswith("extract_")
 
-            result, error = await mgr.get_task_result(task_id, timeout=5)
+            result, error, _cat = await mgr.get_task_result(task_id, timeout=5)
             assert error is None
             assert result == [("a", "人物", "喜欢", "b", "物品")]
 
@@ -153,7 +153,7 @@ class TestQuintupleTaskManager:
         mgr = QuintupleTaskManager(max_workers=2, max_queue_size=10)
         await mgr.start()
 
-        result, error = await mgr.get_task_result("nonexistent_id")
+        result, error, _cat = await mgr.get_task_result("nonexistent_id")
         assert result is None
         assert "不存在" in (error or "")
 

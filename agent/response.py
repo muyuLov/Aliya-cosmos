@@ -22,6 +22,10 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 
 from core.logger import get_logger
 
+from core.tts import TTSRequest
+from core.tts.player.sink import AudioSink, FileAudioSink, ResilientAudioPlayer
+from core.tts.player.ws_sink import WebSocketAudioSink
+
 from agent.context import AgentContext
 
 _logger = get_logger(__name__)
@@ -145,14 +149,10 @@ async def speak_text(text: str, ctx: AgentContext) -> bool:
     if not ctx.tts_service or not text:
         return False
 
-    from core.tts import TTSRequest
-    from core.tts.player.sink import AudioSink, FileAudioSink, ResilientAudioPlayer
-    from core.tts.player.ws_sink import WebSocketAudioSink
-
     # 构建弹性播放器：主通道为本地 sounddevice，失败回退到 WebSocket / 文件
     fallbacks: list[AudioSink] = []
     if ctx.audio_relay:
-        fallbacks.append(WebSocketAudioSink(ctx.audio_relay))
+        fallbacks.append(WebSocketAudioSink(ctx.audio_relay, send_bytes=ctx.audio_relay_bytes))
     fallbacks.append(FileAudioSink(output_dir="data/cache/tts_fallback"))
 
     player = ResilientAudioPlayer(

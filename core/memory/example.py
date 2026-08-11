@@ -22,7 +22,6 @@ if __name__ == "__main__":
 from core.exception import get_default_handler
 from core.logger import setup as setup_logger
 from core.memory import (
-    create_memory_service,
     get_memory_manager,
     get_service_status,
     store_quintuples,
@@ -221,7 +220,7 @@ async def example_task_management() -> None:
 
         print("\n等待所有任务完成...")
         for task_id, label in zip(task_ids, labels):
-            result, error = await task_mgr.get_task_result(task_id, timeout=30)
+            result, error, _categories = await task_mgr.get_task_result(task_id, timeout=30)
             if result:
                 print(f"  [OK] [{label}] 提取到 {len(result)} 个五元组")
                 for h, ht, r, t, tt in result[:2]:  # 只打印前两条

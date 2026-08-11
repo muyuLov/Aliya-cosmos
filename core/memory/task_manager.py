@@ -54,6 +54,7 @@ class ExtractionTask:
     started_at: Optional[float] = None
     completed_at: Optional[float] = None
     result: Optional[List[QuintupleType]] = None
+    result_categories: Optional[List[str]] = None
     error: Optional[str] = None
     retry_count: int = 0
     # future 在 add_task 时按需创建，不在 dataclass 默认中初始化（避免跨事件循环）
@@ -312,7 +313,7 @@ class QuintupleTaskManager:
 
     async def get_task_result(
         self, task_id: str, timeout: float | None = None
-    ) -> Tuple[List[QuintupleType] | None, str | None]:
+    ) -> Tuple[Optional[List[QuintupleType]], Optional[str], Optional[List[str]]]:
         """
         获取任务结果
 
@@ -321,33 +322,33 @@ class QuintupleTaskManager:
             timeout: 超时时间（秒）
 
         Returns:
-            (结果列表, 错误信息) 元组
+            (结果列表, 错误信息, 类别列表) 元组
         """
         assert self.lock is not None
         async with self.lock:
             task = self.tasks.get(task_id)
             if not task:
-                return None, f"任务不存在: {task_id}"
+                return None, f"任务不存在: {task_id}", None
 
             if task.status == TaskStatus.COMPLETED:
-                return task.result, None
+                return task.result, None, task.result_categories
             elif task.status in [TaskStatus.FAILED, TaskStatus.CANCELLED]:
-                return None, task.error or "任务失败或被取消"
+                return None, task.error or "任务失败或被取消", None
 
         if task.future is None:
-            return None, "任务无 future 对象"
+            return None, "任务无 future 对象", None
 
         # 等待任务完成
         try:
             timeout_value = timeout if timeout is not None else self.task_timeout
             await asyncio.wait_for(asyncio.shield(task.future), timeout=timeout_value)
             if task.status == TaskStatus.COMPLETED:
-                return task.result, None
-            return None, task.error or "任务失败"
+                return task.result, None, task.result_categories
+            return None, task.error or "任务失败", None
         except asyncio.TimeoutError:
-            return None, "任务超时"
+            return None, "任务超时", None
         except asyncio.CancelledError:
-            return None, "任务被取消"
+            return None, "任务被取消", None
 
     async def _worker_loop(self, worker_id: str) -> None:
         """工作协程主循环"""
@@ -374,15 +375,17 @@ class QuintupleTaskManager:
                     task.status = TaskStatus.RUNNING
                     task.started_at = time.time()
 
-                result: List[QuintupleType] | None = None
+                result: Optional[List[QuintupleType]] = None
+                result_categories: Optional[List[str]] = None
                 error: str | None = None
 
                 try:
                     extract_fn = self._extract_func or extractor.extract_quintuples
-                    result = await asyncio.wait_for(
+                    result_raw = await asyncio.wait_for(
                         extract_fn(task.text),
                         timeout=self.task_timeout,
                     )
+                    result, result_categories = result_raw
                     final_status = TaskStatus.COMPLETED
 
                 except asyncio.TimeoutError:
@@ -409,6 +412,7 @@ class QuintupleTaskManager:
                     task.completed_at = time.time()
                     if final_status == TaskStatus.COMPLETED:
                         task.result = result
+                        task.result_categories = result_categories
                         self.completed_tasks += 1
                     else:
                         task.error = error
@@ -420,7 +424,7 @@ class QuintupleTaskManager:
                     if task.future and not task.future.done():
                         try:
                             if task.status == TaskStatus.COMPLETED:
-                                task.future.set_result(result)
+                                task.future.set_result((result, result_categories))
                             else:
                                 task.future.set_exception(Exception(error or "任务失败"))
                         except asyncio.InvalidStateError:

@@ -11,12 +11,12 @@ class LLMError(StructuredException):
 
 class ProviderNotFoundError(LLMError):
     """
-    请求的提供商未注册。
+    提供商配置解析或加载失败。
 
-    通常由 ProviderFactory.create() 在名称不存在时抛出。
+    通常由 _resolve_provider_config() 在配置不完整或外部文件加载失败时抛出。
 
     Args:
-        provider_name: 未找到的提供商名称。
+        provider_name: 未找到的提供商名称或错误原因描述。
     """
 
     def __init__(self, provider_name: str) -> None:

@@ -74,11 +74,18 @@ class VectorConfig:
         similarity_threshold:  检索相似度阈值（0-1），低于阈值的条目被过滤。
         top_k:                 检索默认返回条数上限。
         embedding:             Embedding 生成器配置。
+        storage:               存储后端："memory"（进程内存，重启即清空）/
+                               "milvus"（Milvus 向量数据库持久化，连接失败自动回退内存）。
+        milvus_uri:            Milvus 服务地址（standalone 默认 http://localhost:19530）。
+        milvus_collection:     Milvus 集合名（向量记忆持久化容器）。
     """
     enabled: bool = True
     similarity_threshold: float = 0.5
     top_k: int = 5
     embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
+    storage: str = "memory"
+    milvus_uri: str = "http://localhost:19530"
+    milvus_collection: str = "aliya_memory"
 
 
 # 全局配置实例 - 懒加载从统一配置管理器读取
@@ -135,6 +142,13 @@ def _load_vector_config(config_path: str) -> VectorConfig:
     enabled = cfg.get("cosmos.service.vector.enabled", True)
     similarity_threshold = cfg.get("cosmos.service.vector.similarity_threshold", 0.5)
     top_k = cfg.get("cosmos.service.vector.top_k", 5)
+    storage = cfg.get("cosmos.service.vector.storage", "memory")
+    milvus_uri = cfg.get(
+        "cosmos.service.vector.milvus_uri", "http://localhost:19530"
+    )
+    milvus_collection = cfg.get(
+        "cosmos.service.vector.milvus_collection", "aliya_memory"
+    )
 
     # 类型和范围校验
     _check_type(enabled, "cosmos.service.vector.enabled", bool)
@@ -146,6 +160,13 @@ def _load_vector_config(config_path: str) -> VectorConfig:
         max_val=1.0,
     )
     _check_type(top_k, "cosmos.service.vector.top_k", int, min_val=1)
+    _check_type(storage, "cosmos.service.vector.storage", str)
+    if storage not in ("memory", "milvus"):
+        raise VectorConfigError(
+            f"cosmos.service.vector.storage: 仅支持 'memory' 或 'milvus'，实际 {storage!r}"
+        )
+    _check_type(milvus_uri, "cosmos.service.vector.milvus_uri", str)
+    _check_type(milvus_collection, "cosmos.service.vector.milvus_collection", str)
 
     # 加载 embedding 配置
     embedding_cfg = cfg.get("cosmos.service.vector.embedding") or {}
@@ -188,6 +209,9 @@ def _load_vector_config(config_path: str) -> VectorConfig:
         similarity_threshold=similarity_threshold,
         top_k=top_k,
         embedding=embedding,
+        storage=storage,
+        milvus_uri=milvus_uri,
+        milvus_collection=milvus_collection,
     )
 
 

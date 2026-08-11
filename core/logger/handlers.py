@@ -76,30 +76,36 @@ class BufferedFileHandler(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:
         """接收日志记录，加入缓冲区"""
+        should_flush = False
         with self._lock:
             self._buffer.append(record)
-            # 达到缓冲区大小阈值，立即刷新
             if len(self._buffer) >= self._buffer_size:
-                self._flush_buffer()
+                should_flush = True
+        # 在锁外执行刷新，避免 I/O 阻塞其他日志写入
+        if should_flush:
+            self._flush()
 
-    def _flush_buffer(self) -> None:
-        """批量写入缓冲区中的所有日志（需持有锁）"""
-        if not self._buffer:
-            return
+    def _flush(self) -> None:
+        """
+        释放锁后批量写入缓冲区中的所有日志。
 
-        records = self._buffer[:]
-        self._buffer.clear()
-        self._last_flush_time = time.time()
+        与 _flush_buffer 不同，此方法自行获取锁来取出记录，
+        然后在锁外执行 I/O（写入文件），确保不阻塞 emit() 调用方。
+        """
+        with self._lock:
+            if not self._buffer:
+                return
+            records = self._buffer[:]
+            self._buffer.clear()
+            self._last_flush_time = time.time()
 
-        # 释放锁后再执行 I/O，避免阻塞其他日志写入
+        # 锁已释放，在锁外执行 I/O，避免阻塞其他日志写入
         for record in records:
             try:
                 self._base_handler.emit(record)
             except Exception:
-                # 写入失败时降级到标准错误输出，避免日志完全丢失
                 self._fallback_emit(record)
 
-        # 确保数据落盘
         try:
             self._base_handler.flush()
         except Exception:
@@ -109,13 +115,14 @@ class BufferedFileHandler(logging.Handler):
         """后台线程：定期检查并刷新缓冲区（使用 Event.wait 支持优雅退出）"""
         while not self._stopped:
             if self._stop_event.wait(timeout=1.0):
-                # 收到停止信号，立即退出
                 break
             with self._lock:
                 elapsed = time.time() - self._last_flush_time
-                # 超过刷新间隔且缓冲区非空，执行刷新
-                if elapsed >= self._flush_interval and self._buffer:
-                    self._flush_buffer()
+                should_flush = (
+                    elapsed >= self._flush_interval and bool(self._buffer)
+                )
+            if should_flush:
+                self._flush()
 
     def _fallback_emit(self, record: logging.LogRecord) -> None:
         """降级处理：写入失败时输出到 stderr"""
@@ -128,8 +135,7 @@ class BufferedFileHandler(logging.Handler):
 
     def flush(self) -> None:
         """强制刷新缓冲区"""
-        with self._lock:
-            self._flush_buffer()
+        self._flush()
 
     def close(self) -> None:
         """关闭处理器，刷新剩余日志并停止后台线程"""
@@ -138,8 +144,8 @@ class BufferedFileHandler(logging.Handler):
         if self._flush_thread.is_alive():
             self._flush_thread.join(timeout=2.0)
 
-        with self._lock:
-            self._flush_buffer()
+        # 刷新残留的缓冲区日志（_flush 自行管理锁）
+        self._flush()
 
         self._base_handler.close()
         super().close()

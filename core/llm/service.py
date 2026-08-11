@@ -102,7 +102,7 @@ class ConversationService:
         return self._usage
 
     @property
-    def provider(self) -> Any:
+    def provider(self) -> "LLMProvider":
         """底层 LLM 提供商实例（供风格切换等场景读取模型/能力信息）。"""
         return self._provider
 
@@ -119,10 +119,7 @@ class ConversationService:
         - supports_reasoning：API 响应中是否包含 reasoning_tokens（token 级计数）
         - supports_thinking：API 是否支持思考模式（输出完整的 reasoning_content 文本）
         """
-        from core.llm.providers.openai_compatible import OpenAICompatibleProvider
-        if isinstance(self._provider, OpenAICompatibleProvider):
-            return self._provider.supports_thinking
-        return False
+        return getattr(self._provider, "supports_thinking", False)
 
     @property
     def last_reasoning_content(self) -> str:

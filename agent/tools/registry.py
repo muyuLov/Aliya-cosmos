@@ -121,7 +121,8 @@ class ToolRegistry:
                 param_lines.append(f"    {pname} ({ptype}){req}: {pdesc}")
             header = f"### {tool.name} [{concurrency_tag}]"
             if param_lines:
-                parts.append(f"{header}\n{tool.description}\n参数：\n" + "\n".join(param_lines))
+                body = "\n".join(param_lines)
+                parts.append(f"{header}\n{tool.description}\n参数：\n{body}")
             else:
                 parts.append(f"{header}\n{tool.description}")
             parts.append(f"  权限: {perm_tag}")

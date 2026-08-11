@@ -20,7 +20,6 @@ def _make_ctx(**overrides) -> AgentContext:
         "registry": MagicMock(),
         "config": AgentConfig(),
         "prompt_manager": MagicMock(),
-        "style_switcher": MagicMock(),
         "brain": MagicMock(),
         "emotion": MagicMock(),
         "cognition": None,

@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 
 from agent.context import AgentContext
-from agent.prompts import ALL_STYLES, StyleName
 
 logger = logging.getLogger(__name__)
 
@@ -16,18 +15,15 @@ _SUMMARY_HEADER = "[历史对话摘要]"
 
 async def run_soul_phase(
     ctx: AgentContext,
-    style: str = "",
     user_input: str = "",
 ) -> str:
     """切换到灵魂阶段（恢复人格、注入记忆、设置情绪补丁），生成最终回复。
 
     Args:
         ctx: 依赖容器
-        style: 当前表达风格名（default / lively / healing / sweet）
         user_input: 本轮用户输入（用于外部记忆管理器检索相关记忆）
     """
-    style_name: StyleName = style if style in ALL_STYLES else "default"
-    soul_system = ctx.prompt_manager.build_soul_system_prompt(style=style_name)
+    soul_system = ctx.prompt_manager.build_soul_system_prompt()
     await ctx.conv.set_system_prompt(soul_system)
 
     current_emotion = ctx.emotion.current_emotion
@@ -42,6 +38,10 @@ async def run_soul_phase(
         cognition_ctx = ctx.cognition.build_context_injection(limit=4, max_sections=5)
         if cognition_ctx:
             extra_parts.append(cognition_ctx)
+        # 上下文感知记忆召回：用本轮用户输入召回层次化记忆
+        mem_ctx = await ctx.cognition.build_memory_context_async(query=user_input, limit=3)
+        if mem_ctx:
+            extra_parts.append(f"{_MEMORY_HEADER}\n{mem_ctx}")
         try:
             proposals = ctx.cognition.get_autonomy_proposals()
             high = [p for p in proposals if p.get("priority") == "high"]
@@ -65,8 +65,7 @@ async def run_soul_phase(
     await ctx.conv.set_context_injection(memory=memory_context)
 
     logger.debug(
-        "[SoulPhase] 已完成 | style=%s | emotion=%s | has_summary=%s | has_memory=%s",
-        style,
+        "[SoulPhase] 已完成 | emotion=%s | has_summary=%s | has_memory=%s",
         current_emotion or "none",
         bool(ctx.brain.compressed_context),
         bool(memory_context),

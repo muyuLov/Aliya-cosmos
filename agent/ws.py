@@ -28,6 +28,7 @@ def build_agent(
     memory_manager: Any | None = None,
     audio_player: Any | None = None,
     audio_relay: Any | None = None,
+    audio_relay_bytes: Any | None = None,
     confirm_callback: Any | None = None,
     prompt_manager: PromptManager | None = None,
 ) -> AliyaAgent:
@@ -48,6 +49,7 @@ def build_agent(
         tts_service=tts_service,
         audio_player=audio_player,
         audio_relay=audio_relay,
+        audio_relay_bytes=audio_relay_bytes,
         config=agent_config,
         confirm_callback=confirm_callback,
         prompt_manager=prompt_manager,
@@ -84,6 +86,12 @@ def create_handler(
             except Exception as e:
                 logger.warning("WS 发送失败: %s", e)
 
+        async def _send_bytes(data: bytes) -> None:
+            try:
+                await websocket.send_bytes(data)
+            except Exception as e:
+                logger.warning("WS 二进制发送失败: %s", e)
+
         async def _ws_confirm(tool_name: str, params: dict) -> bool:
             """WS 模式交互确认：发送 confirm_request 到前端，等待用户的确认响应。"""
             nonlocal pending_confirm
@@ -112,6 +120,7 @@ def create_handler(
                     conversation_service=conv,
                     send_message=_send,
                     audio_relay=_send,
+                    audio_relay_bytes=_send_bytes,
                     tts_service=tts_service,
                     memory_manager=memory_manager,
                     audio_player=audio_player,
@@ -200,12 +209,6 @@ def create_handler(
                         task = asyncio.create_task(a.handle_user_message(text))
                         task.add_done_callback(_log_task_error)
                         active_task = task
-                        continue
-
-                    if msg_type == "set_style":
-                        style = str(data.get("style", "default"))
-                        _ensure_agent().set_style(style)
-                        await _send({"type": "style_changed", "style": style})
                         continue
 
                     if msg_type == "set_emotion":

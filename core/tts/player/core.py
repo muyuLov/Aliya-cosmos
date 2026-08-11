@@ -8,6 +8,7 @@ import os
 import queue
 import subprocess as sp
 import threading
+import time
 from typing import AsyncIterator
 
 import imageio_ffmpeg
@@ -18,6 +19,7 @@ from core.logger import get_logger
 from core.tts.constants import (
     DEFAULT_FRAMES_PER_BUFFER,
     DEFAULT_PLAY_QUEUE_SIZE,
+    MP3_DECODE_THRESHOLD,
     WAV_DETECT_SIZE,
 )
 from core.tts.player.format_detector import RIFF_MAGIC, parse_wav_header
@@ -34,6 +36,14 @@ _SD_DTYPE_SAMPLE_WIDTH: dict[str, int] = {
     "int24": 3,
     "int16": 2,
     "int8": 1,
+}
+
+# dtype → RMS 归一化峰值（峰值 = 2^(bits-1) 或 1.0 for float）
+_PEAK_MAX: dict[str, float] = {
+    "float32": 1.0,
+    "int32": 2147483648.0,
+    "int16": 32768.0,
+    "int8": 128.0,
 }
 
 # 标记播放队列结束
@@ -327,6 +337,7 @@ class AudioPlayer:
         self._is_wav: bool | None = None  # None=未检测, True=WAV, False=PCM
         self._is_mp3: bool | None = None  # None=未检测, True=MP3, False=其他
         self._mp3_buffer = bytearray()    # MP3 格式检测累积缓冲
+        self._mp3_pending = bytearray()   # 后续 MP3 块累积缓冲（批量送入解码器）
 
         # 当前流实际使用的格式信息（用于字节对齐）
         self._current_sample_rate: int | None = None
@@ -384,19 +395,29 @@ class AudioPlayer:
             # ---- 模式1：已确定为 MP3，流式管道解码 ----
             if self._is_mp3 is True:
                 decoder = self._mp3_stream_decoder
-                # 第一个 chunk：启动流式解码器并打开音频流
                 if decoder is None:
+                    loop = asyncio.get_running_loop()
                     probe_data = bytes(self._mp3_buffer) + chunk
                     decoder = _Mp3StreamDecoder()
-                    sr, ch = decoder.start(probe_data)
+                    sr, ch = await loop.run_in_executor(
+                        None, decoder.start, probe_data,
+                    )
                     self._mp3_stream_decoder = decoder
                     self._mp3_buffer.clear()
                     self._open_stream(sr, ch, 2, "int16")
-                    # 写第一个 chunk 到管道
-                    pcm = decoder.decode(probe_data)
+                    pcm = await loop.run_in_executor(
+                        None, decoder.decode, probe_data,
+                    )
                 else:
-                    # 后续 chunk：写入管道并读取 PCM 输出
-                    pcm = decoder.decode(chunk)
+                    self._mp3_pending += chunk
+                    if len(self._mp3_pending) < MP3_DECODE_THRESHOLD:
+                        return
+                    loop = asyncio.get_running_loop()
+                    batch = bytes(self._mp3_pending)
+                    self._mp3_pending.clear()
+                    pcm = await loop.run_in_executor(
+                        None, decoder.decode, batch,
+                    )
 
                 if pcm:
                     await self._enqueue(pcm)
@@ -480,8 +501,9 @@ class AudioPlayer:
         """等待当前段播放完毕，然后重置格式状态以接受下一段音频。"""
         if self._play_thread is not None:
             await self._enqueue(_SENTINEL)
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, self._play_thread.join)
+            # 轮询代替 thread.join，不占线程池
+            while self._play_thread.is_alive():
+                await asyncio.sleep(0.005)
             self._check_play_error()
 
         self._play_thread = None
@@ -493,6 +515,7 @@ class AudioPlayer:
         self._is_mp3 = None
         self._header_buf.clear()
         self._mp3_buffer.clear()
+        self._mp3_pending.clear()
         self._play_error = None
         self._clear_queue()
         self._queue = queue.Queue(maxsize=self._play_queue_size)
@@ -510,10 +533,20 @@ class AudioPlayer:
         并发安全：使用 asyncio.Lock 确保多个协程调用时串行执行，避免资源泄漏。
         """
         async with self._drain_lock:
-            # 处理残留的 MP3 数据（流式解码器 flush）
+            # 处理残留的 MP3 数据（先排空累积缓冲再 flush 流式解码器）
             if self._is_mp3 is True and self._mp3_stream_decoder is not None:
-                pcm_data = await asyncio.get_running_loop().run_in_executor(
-                    None, self._mp3_stream_decoder.flush
+                loop = asyncio.get_running_loop()
+                # 送入批处理缓冲中未解码的数据
+                if self._mp3_pending:
+                    pending = bytes(self._mp3_pending)
+                    self._mp3_pending.clear()
+                    pcm_data = await loop.run_in_executor(
+                        None, self._mp3_stream_decoder.decode, pending,
+                    )
+                    if pcm_data:
+                        await self._enqueue(pcm_data)
+                pcm_data = await loop.run_in_executor(
+                    None, self._mp3_stream_decoder.flush,
                 )
                 if pcm_data:
                     await self._enqueue(pcm_data)
@@ -569,8 +602,8 @@ class AudioPlayer:
 
             if self._play_thread is not None:
                 await self._enqueue(_SENTINEL)
-                loop = asyncio.get_running_loop()
-                await loop.run_in_executor(None, self._play_thread.join)
+                while self._play_thread.is_alive():
+                    await asyncio.sleep(0.005)
                 self._check_play_error()
 
             # 重置播放状态
@@ -583,6 +616,7 @@ class AudioPlayer:
             self._is_mp3 = None
             self._header_buf.clear()
             self._mp3_buffer.clear()
+            self._mp3_pending.clear()
             self._play_error = None
             self._clear_queue()
             self._queue = queue.Queue(maxsize=self._play_queue_size)
@@ -602,8 +636,9 @@ class AudioPlayer:
         except queue.Full:
             pass
         if self._play_thread and self._play_thread.is_alive():
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, self._play_thread.join, 2.0)
+            deadline = time.monotonic() + 2.0
+            while self._play_thread.is_alive() and time.monotonic() < deadline:
+                await asyncio.sleep(0.005)
         self._close_stream()
         if self._mp3_stream_decoder is not None:
             self._mp3_stream_decoder.close()
@@ -625,8 +660,13 @@ class AudioPlayer:
         try:
             self._queue.put_nowait(item)
         except queue.Full:
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, self._queue.put, item)
+            # 不占线程池：事件循环轮询代替阻塞 put，响应更灵敏
+            while True:
+                try:
+                    self._queue.put_nowait(item)
+                    return
+                except queue.Full:
+                    await asyncio.sleep(0.005)
 
     def _open_stream(
         self, sample_rate: int, channels: int, sample_width: int, dtype: str
@@ -712,20 +752,22 @@ class AudioPlayer:
 
         align_buf = bytearray()
 
+        # 队列超时：默认 300s，None 时轮询 1s
+        _qtimeout = self._queue_timeout
+        get_timeout = _qtimeout if _qtimeout is not None else 1.0
+
         try:
             while True:
-                timeout = self._queue_timeout if self._queue_timeout is not None else 1.0
-
                 try:
-                    item = self._queue.get(timeout=timeout)
+                    item = self._queue.get(timeout=get_timeout)
                 except queue.Empty:
-                    if self._queue_timeout is None:
+                    if _qtimeout is None:
                         continue
                     _logger.warning(
                         "播放队列等待超时，退出播放线程 | timeout=%.1fs",
-                        self._queue_timeout,
+                        _qtimeout,
                     )
-                    self._play_error = TimeoutError(f"播放队列等待超时 {self._queue_timeout} 秒")
+                    self._play_error = TimeoutError(f"播放队列等待超时 {_qtimeout} 秒")
                     break
 
                 if item is _SENTINEL:
@@ -744,12 +786,12 @@ class AudioPlayer:
                         align_buf.clear()
                     break
 
-                if isinstance(item, bytes):
-                    align_buf.extend(item)
+                # item 一定是 bytes（_SENTINEL 已在上方处理）
+                align_buf.extend(item)  # type: ignore[arg-type]
 
-                    writable = (len(align_buf) // frame_size) * frame_size
-                    if writable == 0:
-                        continue
+                writable = (len(align_buf) // frame_size) * frame_size
+                if writable == 0:
+                    continue
 
                     to_write = bytes(align_buf[:writable])
                     del align_buf[:writable]
@@ -794,16 +836,8 @@ class AudioPlayer:
             return
 
         arr = np.frombuffer(audio_data, dtype=np.dtype(dtype))
-        if dtype == "float32":
-            self._compute_volume(arr.astype(np.float64), 1.0)
-        elif dtype == "int32":
-            self._compute_volume(arr.astype(np.float64), 2147483648.0)
-        elif dtype == "int16":
-            self._compute_volume(arr.astype(np.float64), 32768.0)
-        elif dtype == "int8":
-            self._compute_volume(arr.astype(np.float64), 128.0)
-        else:
-            self._compute_volume(arr.astype(np.float64), 1.0)
+        peak_max = _PEAK_MAX.get(dtype, 1.0)
+        self._compute_volume(arr.astype(np.float64), peak_max)
         stream.write(arr)
 
     def _compute_volume(self, samples: np.ndarray, peak_max: float) -> None:
@@ -824,7 +858,9 @@ class AudioPlayer:
         sr = self._current_sample_rate or self._default_sample_rate
 
         # ── ① RMS 音量 ──
-        rms = float(np.sqrt(np.mean(np.square(samples))))
+        # np.linalg.norm 使用优化的 BLAS dot 实现，比 sqrt(mean(square()))
+        # 减少一次中间数组分配
+        rms = float(np.linalg.norm(samples)) / np.sqrt(float(n))
         raw_norm = rms / peak_max
 
         _NOISE_GATE = 0.005
@@ -838,9 +874,12 @@ class AudioPlayer:
         self._last_volume = min(1.0, mapped)
 
         # ── ② 频谱质心比（低频能量占比） ──
-        # 用 FFT 计算低频(<1kHz)能量占总能量比例
-        spectrum = np.fft.rfft(samples)
-        freqs = np.fft.rfftfreq(n, 1.0 / sr) if sr else np.arange(len(spectrum))
+        # 降采样 4x 后 FFT：口型分析只需 <1kHz 范围，全频 FFT 浪费
+        _STRIDE = 4
+        decimated = samples[::_STRIDE]
+        n_dec = len(decimated)
+        spectrum = np.fft.rfft(decimated)
+        freqs = np.fft.rfftfreq(n_dec, _STRIDE / sr) if sr else np.arange(len(spectrum))
         magnitude = np.abs(spectrum)
         total_mag = float(np.sum(magnitude))
         if total_mag > 1e-10:
@@ -851,7 +890,9 @@ class AudioPlayer:
             self._last_centroid = 0.5
 
         # ── ③ 过零率（归一化到 0~1） ──
-        zcr_raw = float(np.sum(np.abs(np.diff(np.signbit(samples).astype(np.int8))))) / n
+        # count_nonzero(diff(signbit(samples))) 直接计数符号变化次数，
+        # 比 astype + abs + sum 少两次数组分配
+        zcr_raw = float(np.count_nonzero(np.diff(np.signbit(samples)))) / n
         # 归一化：过零率理论上限为采样率/2，绝大多数语音 < 0.3
         self._last_zcr = min(1.0, zcr_raw * 5.0)
 

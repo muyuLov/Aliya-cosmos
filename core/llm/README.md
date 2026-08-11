@@ -5,7 +5,7 @@
 ## 架构概览
 
 ```
-__init__.py           ← 公共接口，工厂函数，提供商注册
+__init__.py           ← 公共接口，工厂函数
 service.py            ← ConversationService：消息历史管理、重试、流式
 models.py             ← Message / ConversationContext / ChatRequest / ChatResponse / TokenUsage
 cache.py              ← ContextCache：内存 LRU + TTL 会话缓存
@@ -14,10 +14,7 @@ config_validator.py   ← ConfigValidator：配置字段合法性校验
 exceptions.py         ← 结构化异常（LLM_001~LLM_003）
 
 providers/
-  base.py             ← LLMProvider 抽象基类 + ProviderFactory
-  ollama.py           ← OllamaProvider（本地 Ollama 服务）
-  deepseek.py         ← DeepSeekProvider（DeepSeek API）
-  lmstudio.py         ← LMStudioProvider（LM Studio 本地服务）
+  base.py             ← LLMProvider 抽象基类
   openai_compatible.py ← OpenAICompatibleProvider（通用 OpenAI 兼容接口）
 ```
 
@@ -130,30 +127,43 @@ await service.reset_usage()   # 重置累计统计
 
 ## 提供商
 
-| 提供商 | 注册名 | 说明 |
-|--------|--------|------|
-| `OllamaProvider` | `"ollama"` | 本地 Ollama 服务，无需 API Key |
-| `DeepSeekProvider` | `"deepseek"` | DeepSeek API，需 `api_key` |
-| `LMStudioProvider` | `"lmstudio"` | LM Studio 本地服务，兼容 OpenAI 格式 |
-| `OpenAICompatibleProvider` | 自定义注册 | 任意 OpenAI 兼容接口 |
+所有 OpenAI 兼容接口统一使用 `OpenAICompatibleProvider`，不再需要为每个服务实现独立的提供商类。
 
-提供商配置存放在 `data/config/LLMProviders.json`，通过 `providers.config_path` 引用，支持 `${ENV_VAR}` 语法：
+配置存放在 `data/config/LLMProviders.json`，通过 `providers.config_path` 引用，支持 `${ENV_VAR}` 环境变量语法。
+
+标准配置字段：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `url` | string | **必须**。API 基础地址（如 `https://api.deepseek.com`） |
+| `model` | string | **必须**。模型名称 |
+| `api_key` | string | API 密钥（本地服务可用空字符串或占位符） |
+| `timeout` | int | 请求超时秒数，默认 600 |
+| `max_retries` | int | 最大重试次数，默认 3 |
+| `http2` | bool | 是否启用 HTTP/2，默认 true。LM Studio 须设为 false |
+| `provider_name` | string | 可选，用于日志标识，从配置文件 key 自动设置 |
 
 ```json
 {
   "deepseek": {
-    "url": "https://api.deepseek.com/v1",
+    "url": "https://api.deepseek.com",
     "model": "deepseek-chat",
     "api_key": "${DEEPSEEK_API_KEY}",
-    "timeout": 600,
-    "max_retries": 3
+    "timeout": 600
   },
   "ollama": {
     "url": "http://localhost:11434",
     "model": "qwen2.5:14b"
+  },
+  "lmstudio": {
+    "url": "http://localhost:1234",
+    "model": "deepseek-r1-distill-qwen-7b",
+    "http2": false
   }
 }
 ```
+
+添加新提供商只需在 `LLMProviders.json` 中新增一个条目即可，无需修改代码。
 
 ---
 

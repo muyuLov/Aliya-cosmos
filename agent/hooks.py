@@ -54,7 +54,7 @@ class HookRegistry:
 
         异步处理器被 await；同步处理器直接执行（如 cognition 的同步钩子）。
         """
-        for handler in list(self._handlers.get(point, ())):
+        for handler in self._handlers.get(point, ()):
             try:
                 result = handler(*args)
                 if inspect.isawaitable(result):
@@ -64,7 +64,7 @@ class HookRegistry:
 
     def run_later(self, point: HookPoint, *args: Any) -> None:
         """以 fire-and-forget 方式调度异步处理器，不阻塞调用方。"""
-        for handler in list(self._handlers.get(point, ())):
+        for handler in self._handlers.get(point, ()):
             result = handler(*args)
             if inspect.isawaitable(result):
                 task = asyncio.create_task(result)  # type: ignore[arg-type]

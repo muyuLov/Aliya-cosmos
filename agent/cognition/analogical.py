@@ -27,6 +27,7 @@ Agent 把经历编码为结构图（节点 + 关系），抽象为关系骨架
 
 from __future__ import annotations
 
+import itertools
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -302,7 +303,7 @@ class AnalogicalEngine:
 
     def to_summary(self, limit: int = 4) -> str:
         lines: list[str] = []
-        for domain, graph in list(self._domains.items())[:limit]:
+        for domain, graph in itertools.islice(self._domains.items(), limit):
             pattern, score = self.match_pattern(domain)
             lines.append(f"- {domain}（结构 {graph.node_count()} 节点，模式「{pattern}」匹配 {score:.0%}）")
         if not lines:

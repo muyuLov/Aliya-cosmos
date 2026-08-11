@@ -45,7 +45,6 @@ def _make_ctx(**_overrides) -> AgentContext:
         registry=registry,
         config=AgentConfig(),
         prompt_manager=pm,
-        style_switcher=MagicMock(),
         brain=brain,
         emotion=emotion,
         cognition=None,

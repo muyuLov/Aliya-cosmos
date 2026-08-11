@@ -45,7 +45,7 @@ from core.memory.exceptions import (
     TaskTimeoutError,
     TaskExecutionError,
 )
-from core.memory.extractor import get_extractor
+from core.memory.extractor import get_extractor, QuintupleCategory
 from core.memory.graph import (
     GraphStore,
     clear_all_quintuples,
@@ -58,6 +58,8 @@ from core.memory.graph import (
     delete_day,
     delete_day_async,
     get_graph_store,
+    query_by_category,
+    query_by_category_async,
     query_graph_by_keywords,
     query_graph_by_keywords_async,
     query_quintuples_by_day_async,
@@ -77,11 +79,15 @@ from core.memory.hierarchical import (
     EpisodicMemory,
     EpisodicRecord,
     HierarchicalMemory,
+    MemoryHit,
+    MetaMemory,
+    MetaRecord,
     ProceduralMemory,
     SemanticFact,
     SemanticMemory,
+    SensoryItem,
+    SensoryMemory,
     SkillTemplate,
-    VectorMemory,
     WorkingChunk,
     WorkingMemory,
 )
@@ -131,6 +137,8 @@ def create_memory_service(
         "store_async": store_quintuples_async,
         "query": query_graph_by_keywords,
         "query_async": query_graph_by_keywords_async,
+        "query_by_category": query_by_category,
+        "query_by_category_async": query_by_category_async,
         "query_by_day_async": query_quintuples_by_day_async,
         "get_day_nodes_async": get_day_nodes_async,
         "delete_day": delete_day,
@@ -179,6 +187,7 @@ __all__ = [
     "reload_config",
     # 组件
     "get_extractor",
+    "QuintupleCategory",
     "get_rag_engine",
     "get_task_manager",
     # 图谱操作（同步）
@@ -190,6 +199,8 @@ __all__ = [
     "delete_day",
     # 图谱操作（异步）
     "store_quintuples_async",
+    "query_by_category",
+    "query_by_category_async",
     "query_graph_by_keywords_async",
     "query_quintuples_by_day_async",
     "get_day_nodes_async",
@@ -229,10 +240,14 @@ __all__ = [
     "EpisodicRecord",
     "SemanticFact",
     "SkillTemplate",
+    "SensoryItem",
+    "MetaRecord",
+    "MemoryHit",
+    "SensoryMemory",
     "WorkingMemory",
     "EpisodicMemory",
     "SemanticMemory",
     "ProceduralMemory",
-    "VectorMemory",
+    "MetaMemory",
     "HierarchicalMemory",
 ]

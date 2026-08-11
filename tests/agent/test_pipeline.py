@@ -54,7 +54,6 @@ def _make_ctx(**_overrides) -> AgentContext:
         registry=registry,
         config=AgentConfig(),
         prompt_manager=pm,
-        style_switcher=MagicMock(),
         brain=brain,
         emotion=emotion,
         cognition=None,
@@ -121,17 +120,6 @@ async def test_after_tool_hook_fired_when_tools_called():
     pipe = AgentPipeline(ctx, hooks=hooks)
     await pipe.handle_user_message("你好")
     assert observed == ["memory_query"]
-
-
-@pytest.mark.asyncio
-async def test_auto_style_switch_updates_single_source():
-    """自动风格切换后 current_style 单一来源被更新（I1 回归防护）。"""
-    ctx = _make_ctx()
-    ctx.config.auto_style_enabled = True
-    ctx.style_switcher.analyze = AsyncMock(return_value="warm")
-    pipe = AgentPipeline(ctx)
-    await pipe.handle_user_message("你好")
-    assert pipe.current_style == "warm"
 
 
 @pytest.mark.asyncio

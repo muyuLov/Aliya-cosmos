@@ -40,6 +40,8 @@ logger = get_logger(__name__)
 
 # 自主维护触发间隔（交互次数）
 _AUTONOMY_MAINTENANCE_INTERVAL = 10
+# 层次化记忆默认持久化路径（跨会话恢复）
+_MEMORY_FILE = "data/memory/hierarchical_memory.json"
 
 
 @dataclass
@@ -77,6 +79,11 @@ class CognitionEngine:
         self.memory: HierarchicalMemory | None = (
             HierarchicalMemory() if self.config.memory_enabled else None
         )
+        # 跨会话恢复：尝试加载持久化记忆（失败静默降级为全新记忆）
+        if self.memory:
+            restored = HierarchicalMemory.load(_MEMORY_FILE)
+            if restored is not None:
+                self.memory = restored
         self.world: WorldModel | None = (
             WorldModel() if self.config.world_model_enabled else None
         )
@@ -133,6 +140,7 @@ class CognitionEngine:
             self.needs.record_user_interaction(positive=True)
             self.needs.record_energy_consumption(max(1, len(user_text) // 4))
         if self.memory:
+            self.memory.buffer_sensory(user_text, weight=1.0, channel="user_input")
             self.memory.attend(user_text, weight=1.0)
             self.memory.remember_episode(
                 f"用户说：{user_text[:80]}", importance=0.4, context="user_input"
@@ -145,9 +153,9 @@ class CognitionEngine:
         if self.security and self.config.security_scan_user_input:
             result = self.security.scan_user_input(user_text)
             if not result.passed:
+                rules_text = ", ".join(r.name for r in result.matched_rules)
                 self._security_alerts.append(
-                    f"[{result.layer}] {result.verdict.value}: "
-                    + ", ".join(r.name for r in result.matched_rules)
+                    f"[{result.layer}] {result.verdict.value}: {rules_text}"
                 )
         # 持续学习：记录用户交互经验
         if self.learning:
@@ -309,6 +317,9 @@ class CognitionEngine:
                 self.learning.consolidate(memory=self.memory)
         if self.config.autonomy_maintenance and self._turn % self.config.maintenance_interval == 0:
             self._run_autonomy_maintenance()
+        # 周期性持久化（跨会话保存）
+        if self._turn % max(self.config.maintenance_interval, 10) == 0:
+            self.save_memory()
         # 进化循环：定期触发 RSI（观察→提案→评估→采纳）
         if self.evolution and self._turn % max(self.config.maintenance_interval * 3, 9) == 0:
             stats = self.evolution.run_evolution_cycle()
@@ -409,11 +420,36 @@ class CognitionEngine:
         return "\n\n".join(parts)
 
     def build_memory_context(self, query: str = "", limit: int = 5) -> str:
-        """召回记忆上下文（语义 + 情景 + 工作记忆）。"""
+        """召回记忆上下文（同步，仅各层规则召回，不含向量语义增强）。
+
+        如需向量增强检索，请使用 build_memory_context_async()。
+        """
         if not self.memory:
             return ""
         parts = self.memory.build_context(query=query, limit=limit)
         return "\n".join(parts) if parts else ""
+
+    async def build_memory_context_async(self, query: str = "", limit: int = 5) -> str:
+        """异步召回记忆上下文（含向量语义增强的完整召回）。
+
+        先排空向量同步队列（保证最新写入可命中），再执行各层召回 + 向量语义检索。
+        供 assemble / soul 阶段在异步上下文中调用。
+        """
+        if not self.memory:
+            return ""
+        parts = await self.memory.build_context_async(query=query, limit=limit)
+        return "\n".join(parts) if parts else ""
+
+    # ── 记忆持久化 ────────────────────────────────────────────────────────
+
+    def save_memory(self) -> bool:
+        """持久化五层记忆到磁盘（跨会话保存）。"""
+        if not self.memory:
+            return False
+        ok = self.memory.save(_MEMORY_FILE)
+        if ok:
+            logger.debug("[Cognition] 记忆已持久化 | turn=%d", self._turn)
+        return ok
 
     # ── 需求驱动情绪 ──────────────────────────────────────────────────────
 

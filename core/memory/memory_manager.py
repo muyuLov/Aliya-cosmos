@@ -261,6 +261,7 @@ class GRAGMemoryManager:
                 session_id=task.session_id,
                 day_date=task.day_date,
                 timeline=task.timeline,
+                categories=task.result_categories,
             )
             if success:
                 logger.info("成功存储 %d 个五元组到图谱", len(task.result))

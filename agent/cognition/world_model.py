@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import itertools
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -188,6 +189,7 @@ class WorldModel:
 
     def __init__(self) -> None:
         self._entities: dict[str, Entity] = {}
+        self._name_index: dict[tuple[str, EntityType], Entity] = {}
         self._relations: list[Relation] = []
         self._causal_links: list[CausalLink] = []
         self._id_counter: int = 0
@@ -237,13 +239,11 @@ class WorldModel:
         for key, value in (properties or {}).items():
             entity.properties[key] = Belief(value, confidence)
         self._entities[eid] = entity
+        self._name_index[(name, entity_type)] = entity
         return eid
 
     def _find_by_name(self, name: str, entity_type: EntityType) -> Entity | None:
-        for entity in self._entities.values():
-            if entity.name == name and entity.entity_type == entity_type:
-                return entity
-        return None
+        return self._name_index.get((name, entity_type))
 
     def get_entity(self, entity_id: str) -> Entity | None:
         return self._entities.get(entity_id)
@@ -351,9 +351,10 @@ class WorldModel:
         lines: list[str] = []
         entities = self.query_entities(min_salience=0.1)
         for entity in entities[:limit]:
+            top_props = itertools.islice(entity.properties.items(), 4)
             props = ", ".join(
                 f"{k}={v.value}({v.confidence:.2f})"
-                for k, v in list(entity.properties.items())[:4]
+                for k, v in top_props
             )
             lines.append(f"- {entity.name}[{entity.entity_type.value}] {props}".rstrip())
         for rel in self._relations[:limit]:

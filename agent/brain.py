@@ -101,9 +101,26 @@ _COMPRESSION_PROMPT = (
 # ── 输出解析 ──────────────────────────────────────────────────────────────────
 
 
-def _safe_str(data: dict, key: str, default: str) -> str:
+def _safe_str(data: dict[str, Any], key: str, default: str) -> str:
     v = data.get(key, default)
     return str(v) if v is not None else default
+
+
+def _find_json_boundary(text: str) -> int:
+    """找到以 ``{`` 开头的第一个完整 JSON 对象的结束位置。
+
+    从开头扫描，跟踪大括号深度，当深度回零时返回结束索引。
+    未找到完整对象时返回 -1。
+    """
+    depth = 0
+    for i, ch in enumerate(text):
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return i
+    return -1
 
 
 def parse_llm_response(raw: str) -> BrainResult:
@@ -132,36 +149,30 @@ def parse_llm_response(raw: str) -> BrainResult:
     # 第 1.5 层：以 { 开头但非完整 JSON → 尝试剥离头部 JSON 对象
     # LLM 有时会输出 {"tool_calls": [], "reply": ""}\n\n自然语言正文...
     if raw.startswith("{"):
-        depth = 0
-        for i, ch in enumerate(raw):
-            if ch == "{":
-                depth += 1
-            elif ch == "}":
-                depth -= 1
-                if depth == 0:
-                    json_part = raw[:i + 1]
-                    rest = raw[i + 1:].strip()
-                    try:
-                        data = json.loads(json_part)
-                        if isinstance(data, dict):
-                            # JSON 中的 reply 非空 → 优先用 JSON 的 reply
-                            reply_from_json = _safe_str(data, "reply", "")
-                            if reply_from_json:
-                                return BrainResult(
-                                    reply=reply_from_json,
-                                    tool_calls=data.get("tool_calls", []),
-                                    thought=_safe_str(data, "thought", ""),
-                                )
-                            # JSON 中 reply 为空但尾部有自然语言正文 → 用尾部正文
-                            if rest:
-                                return BrainResult(
-                                    reply=rest,
-                                    tool_calls=data.get("tool_calls", []),
-                                    thought=_safe_str(data, "thought", ""),
-                                )
-                    except json.JSONDecodeError:
-                        pass
-                    break
+        end = _find_json_boundary(raw)
+        if end > 0:
+            json_part = raw[:end + 1]
+            rest = raw[end + 1:].strip()
+            try:
+                data = json.loads(json_part)
+                if isinstance(data, dict):
+                    # JSON 中的 reply 非空 → 优先用 JSON 的 reply
+                    reply_from_json = _safe_str(data, "reply", "")
+                    if reply_from_json:
+                        return BrainResult(
+                            reply=reply_from_json,
+                            tool_calls=data.get("tool_calls", []),
+                            thought=_safe_str(data, "thought", ""),
+                        )
+                    # JSON 中 reply 为空但尾部有自然语言正文 → 用尾部正文
+                    if rest:
+                        return BrainResult(
+                            reply=rest,
+                            tool_calls=data.get("tool_calls", []),
+                            thought=_safe_str(data, "thought", ""),
+                        )
+            except json.JSONDecodeError:
+                pass
 
     # 第 2 层：Markdown 代码块提取
     match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw, re.DOTALL)
@@ -209,15 +220,10 @@ def _strip_json_prefix(text: str) -> str:
     text = text.strip()
     if not text.startswith("{"):
         return text
-    depth = 0
-    for i, ch in enumerate(text):
-        if ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                return text[i + 1:].strip()
-    return text
+    end = _find_json_boundary(text)
+    if end < 0:
+        return text
+    return text[end + 1:].strip()
 
 
 def clean_soul_reply(text: str) -> str:

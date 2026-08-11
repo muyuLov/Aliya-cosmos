@@ -266,12 +266,4 @@ class TestAgentConstruction:
         agent = AliyaAgent(conversation_service=conv, tool_registry=reg, config=cfg)
         assert agent._config.max_turns == 5
 
-    def test_style_single_source_through_pipeline(self, mocker):
-        """set_style / get_style / get_prompt_config 统一委托 pipeline（单一来源，防双源分叉）。"""
-        conv = mocker.AsyncMock()
-        reg = mocker.MagicMock()
-        agent = AliyaAgent(conversation_service=conv, tool_registry=reg)
-        agent.set_style("warm")
-        assert agent.get_style() == "warm"
-        assert agent._pipeline.current_style == "warm"
-        assert agent.get_prompt_config()["style"] == "warm"
+

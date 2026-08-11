@@ -1,202 +1,126 @@
-"""LLM 配置验证器：检查配置的完整性和合法性"""
+"""LLM 配置校验器：校验 OpenAI 兼容接口的通用配置字段"""
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
 from typing import Any
-
-from core.config.env_resolver import resolve_env_vars as _resolve_env_vars
 
 from core.logger import get_logger
 
 logger = get_logger(__name__)
 
+# 通用必需字段：所有 OpenAI 兼容服务都需要
+_REQUIRED_FIELDS = frozenset({"url", "model"})
+
+# 可选字段及其默认值（与 LLMProvider.__init__ 保持一致）
+_OPTIONAL_FIELDS: dict[str, Any] = {
+    "api_key": "",
+    "timeout": 600,
+    "max_retries": 3,
+    "provider_name": "openai_compatible",
+}
+
 
 class ConfigValidator:
-    """LLM 配置验证器"""
+    """
+    OpenAI 兼容接口配置校验器。
 
-    # 提供商必需字段
-    REQUIRED_FIELDS = {
-        "ollama": ["url", "model"],
-        "deepseek": ["url", "model"],
-        "lmstudio": ["url", "model"],
-    }
+    Examples:
+        >>> ConfigValidator.validate({"url": "http://localhost:11434", "model": "qwen2.5:14b"})
+        (True, [])
+        >>> ConfigValidator.validate({"url": "http://localhost:11434"})
+        (False, ["缺少必需字段: model"])
+    """
 
-    # 可选字段及其默认值
-    OPTIONAL_FIELDS = {
-        "timeout": 600,
-        "max_retries": 3,
-    }
-
-    @classmethod
-    def validate_provider_config(
-        cls,
-        provider_name: str,
-        config: dict[str, Any],
-        *,
-        strict: bool = False,
-    ) -> tuple[bool, list[str]]:
+    @staticmethod
+    def validate(config: dict[str, Any]) -> tuple[bool, list[str]]:
         """
-        验证提供商配置的完整性。
+        校验提供商配置的完整性和合法性。
 
         Args:
-            provider_name: 提供商名称。
             config: 提供商配置字典。
-            strict: 严格模式，缺少必需字段时返回 False。
 
         Returns:
-            (是否有效, 警告/错误信息列表) 元组。
+            ``(is_valid, errors)`` 元组。
         """
-        messages = []
-        is_valid = True
+        errors: list[str] = []
 
-        # 检查必需字段
-        required = cls.REQUIRED_FIELDS.get(provider_name, [])
-        for field in required:
-            if field not in config or not config[field]:
-                messages.append(f"缺少必需字段: {field}")
-                is_valid = False
+        # 校验必需字段
+        missing = [f for f in _REQUIRED_FIELDS if f not in config]
+        if missing:
+            errors.append(f"缺少必需字段: {', '.join(missing)}")
 
-        # 检查可选字段的合法性
-        if "timeout" in config:
-            timeout = config["timeout"]
-            if not isinstance(timeout, (int, float)) or timeout <= 0:
-                messages.append(f"timeout 必须为正数，当前值: {timeout}")
-                if strict:
-                    is_valid = False
+        # 校验字段值类型
+        if "url" in config and not isinstance(config["url"], str):
+            errors.append(f"字段 'url' 应为字符串类型，当前为 {type(config['url']).__name__}")
 
-        if "max_retries" in config:
-            max_retries = config["max_retries"]
-            if not isinstance(max_retries, int) or max_retries < 0:
-                messages.append(f"max_retries 必须为非负整数，当前值: {max_retries}")
-                if strict:
-                    is_valid = False
+        if "model" in config and not isinstance(config["model"], str):
+            errors.append(f"字段 'model' 应为字符串类型，当前为 {type(config['model']).__name__}")
 
-        # 特定提供商的额外检查
-        if provider_name == "deepseek":
-            api_key = config.get("api_key") or config.get("key", "")
-            if not api_key:
-                messages.append("缺少必需字段: api_key 或 key（二者提供其一即可）")
-                is_valid = False
-            elif not api_key.startswith("sk-"):
-                messages.append("DeepSeek API 密钥格式可能不正确（通常以 sk- 开头）")
+        # url 必须为 HTTP(S) 地址
+        if isinstance(config.get("url"), str):
+            url_cfg = config["url"]
+            if not (url_cfg.startswith("http://") or url_cfg.startswith("https://")):
+                errors.append(f"字段 'url' 必须以 http:// 或 https:// 开头: {url_cfg}")
 
-        return is_valid, messages
+        return (len(errors) == 0, errors)
 
-    @classmethod
-    def validate_llm_section(
-        cls,
-        llm_section: dict[str, Any],
-        *,
-        strict: bool = False,
-    ) -> tuple[bool, list[str]]:
+    @staticmethod
+    def validate_with_defaults(config: dict[str, Any]) -> dict[str, Any]:
         """
-        验证 LLM 配置节点的完整性。
+        校验并自动补全可选字段的默认值。
 
         Args:
-            llm_section: LLM 配置节点字典。
-            strict: 严格模式。
+            config: 提供商配置字典。
 
         Returns:
-            (是否有效, 警告/错误信息列表) 元组。
+            补全默认值后的配置字典副本（不修改原字典）。
         """
-        messages = []
-        is_valid = True
+        result = dict(config)
+        for field, default in _OPTIONAL_FIELDS.items():
+            if field not in result:
+                result[field] = default
+        return result
 
-        # 检查实际生效的 history_max_chars（工厂读取此键）
-        for key in ("history_max_chars", "max_context_tokens"):
-            if key in llm_section:
-                val = llm_section[key]
-                if not isinstance(val, int) or val <= 0:
-                    messages.append(f"{key} 必须为正整数，当前值: {val}")
-                    if strict:
-                        is_valid = False
-                elif val < 20000:
-                    messages.append(f"{key} 过小（{val}），建议至少 20000")
-                elif val > 1000000:
-                    messages.append(f"{key} 过大（{val}），可能导致性能问题")
+    @classmethod
+    def validate_and_log(cls, llm_section: dict[str, Any], strict: bool = True) -> bool:
+        """
+        校验根配置节点并记录日志。
 
-        # 检查是否使用了废弃的配置
-        if "max_context_length" in llm_section:
-            messages.append(
-                "检测到废弃的配置项 max_context_length，已无实际效果，请移除"
-            )
+        校验流程：先解析 providers 外部配置，再对解析后的提供商配置进行字段校验。
 
-        # 检查提供商配置
-        provider_count = 0
-        providers_section = llm_section.get("providers", {})
+        Args:
+            llm_section: cosmos.service.llm 配置节点。
+            strict: True 时遇到校验失败会抛出异常，False 时仅记录警告。
 
-        if not isinstance(providers_section, dict):
-            messages.append("providers 必须是字典类型")
-            is_valid = False
+        Returns:
+            校验是否通过。
+        """
+        from core.llm import _resolve_provider_config
+
+        try:
+            provider_config = _resolve_provider_config(llm_section)
+        except Exception as e:
+            logger.error("解析提供商配置失败: %s", e)
+            if strict:
+                raise
+            return False
+
+        # 补全默认值
+        provider_config = cls.validate_with_defaults(provider_config)
+
+        is_valid, errors = cls.validate(provider_config)
+        if not is_valid:
+            msg = f"提供商配置校验失败:\n" + "\n".join(f"  - {e}" for e in errors)
+            if strict:
+                from core.llm.exceptions import ProviderNotFoundError
+
+                raise ProviderNotFoundError(msg)
+            logger.warning(msg)
         else:
-            provider_name = providers_section.get("name")
-            if provider_name:
-                provider_count += 1
-                if provider_name not in cls.REQUIRED_FIELDS:
-                    messages.append(
-                        f"未知的提供商名称: {provider_name}，"
-                        f"支持的提供商: {list(cls.REQUIRED_FIELDS.keys())}"
-                    )
-                    if strict:
-                        is_valid = False
-                if not providers_section.get("config_path"):
-                    messages.append("缺少 providers.config_path 字段，必须指定外部配置文件路径")
-                    is_valid = False
-
-        if provider_count == 0:
-            messages.append("未找到任何提供商配置，请在 providers.name 中指定提供商名称")
-            is_valid = False
-
-        return is_valid, messages
-
-    @classmethod
-    def validate_and_log(
-        cls,
-        llm_section: dict[str, Any],
-        *,
-        strict: bool = False,
-    ) -> bool:
-        """
-        验证配置并记录日志。
-
-        Args:
-            llm_section: LLM 配置节点字典。
-            strict: 严格模式。
-
-        Returns:
-            配置是否有效。
-        """
-        is_valid, messages = cls.validate_llm_section(llm_section, strict=strict)
-
-        # 额外验证 provider 外部配置文件的字段合法性
-        providers_section = llm_section.get("providers", {})
-        provider_name = providers_section.get("name")
-        config_path = providers_section.get("config_path")
-        if provider_name and config_path:
-            try:
-                all_provider_configs = json.loads(Path(config_path).read_text(encoding="utf-8"))
-                raw_config = all_provider_configs.get(provider_name, {})
-                provider_config = _resolve_env_vars(raw_config)
-                prov_valid, prov_msgs = cls.validate_provider_config(
-                    provider_name, provider_config, strict=strict
-                )
-                if not prov_valid:
-                    is_valid = False
-                messages.extend(prov_msgs)
-            except (FileNotFoundError, json.JSONDecodeError) as e:
-                messages.append(f"加载提供商配置文件失败: {e}")
-                is_valid = False
-
-        if messages:
-            for msg in messages:
-                if is_valid:
-                    logger.warning("配置警告: %s", msg)
-                else:
-                    logger.error("配置错误: %s", msg)
-
-        if is_valid and not messages:
-            logger.debug("LLM 配置验证通过")
+            logger.info(
+                "LLM 提供商配置校验通过: url=%s, model=%s",
+                provider_config.get("url"),
+                provider_config.get("model"),
+            )
 
         return is_valid

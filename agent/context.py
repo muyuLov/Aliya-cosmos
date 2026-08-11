@@ -18,7 +18,6 @@ from agent.brain import Brain
 from agent.config import AgentConfig
 from agent.emotion.engine import EmotionEngine
 from agent.prompts import PromptManager
-from agent.prompts.style_switcher import StyleSwitcher
 from agent.tools.registry import ToolRegistry
 
 
@@ -30,7 +29,6 @@ class AgentContext:
     registry: ToolRegistry
     config: AgentConfig
     prompt_manager: PromptManager
-    style_switcher: StyleSwitcher
     brain: Brain
     emotion: EmotionEngine
     cognition: Any | None = None  # CognitionEngine | None
@@ -38,6 +36,7 @@ class AgentContext:
     tts_service: TTSService | None = None
     audio_player: AudioPlayer | None = None
     audio_relay: Callable[[dict[str, object]], Awaitable[None]] | None = None
+    audio_relay_bytes: Callable[[bytes], Awaitable[None]] | None = None
     notify: Callable[[dict[str, object]], Awaitable[None]] | None = None
     confirm_callback: Callable[[str, dict], Awaitable[bool]] | None = None
     permission_config: Any | None = None

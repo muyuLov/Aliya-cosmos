@@ -7,6 +7,7 @@ from core.config.env_resolver import (
     resolve_env_vars,
 )
 from core.config.manager import ConfigManager, get_config_instance
+from core.config.provider_loader import load_provider_config
 
 __all__ = [
     "ConfigManager",
@@ -15,4 +16,5 @@ __all__ = [
     "resolve_env_vars",
     "SENSITIVE_KEYS",
     "mask_sensitive",
+    "load_provider_config",
 ]

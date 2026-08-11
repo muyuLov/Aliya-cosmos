@@ -215,7 +215,9 @@ class TTSService:
         tasks: dict[int, asyncio.Task[None]] = {}  # idx -> task
         created: set[int] = set()
 
-        async def _create_and_prefetch(seg: str, queue: asyncio.Queue[object]) -> None:
+        async def _create_and_prefetch(
+            seg_idx: int, seg: str, queue: asyncio.Queue[object]
+        ) -> None:
             """创建 session 后立即预取，异常写入队列由消费端在正确位置抛出。"""
             seg_request = request.model_copy(update={"text": seg})
             session_id: str | None = None
@@ -246,7 +248,11 @@ class TTSService:
                     await queue.put(e)
             except Exception as e:
                 _logger.error(
-                    "TTS 分段任务异常 | segment 预取失败 | error=%s", e, exc_info=True
+                    "TTS 分段任务异常 | segment=%d/%d | error=%s",
+                    seg_idx,
+                    len(segments),
+                    e,
+                    exc_info=True,
                 )
                 try:
                     queue.put_nowait(e)
@@ -274,7 +280,7 @@ class TTSService:
             if idx in created or idx >= len(segments):
                 return
             created.add(idx)
-            task = asyncio.create_task(_create_and_prefetch(segments[idx], queues[idx]))
+            task = asyncio.create_task(_create_and_prefetch(idx, segments[idx], queues[idx]))
             tasks[idx] = task
 
         window = self.prefetch_window
@@ -283,19 +289,29 @@ class TTSService:
             schedule_task(i)
 
         try:
-            # 按序消费队列，滑动窗口
+            # 按序消费队列，滑动窗口（含提前调度）
             for i, queue in enumerate(queues):
-                # 消费完第 i 段后，调度第 i+window 段的任务
                 schedule_task(i + window)
+                eager_scheduled = False
 
                 while True:
                     item = await queue.get()
                     if item is SENTINEL:
                         break
                     if isinstance(item, BaseException):
+                        _logger.debug(
+                            "TTS 分段异常 | segment=%d/%d | error=%s",
+                            i,
+                            len(segments),
+                            item,
+                        )
                         raise item
                     assert isinstance(item, bytes)
                     yield item
+                    # 当前段队列快耗尽时，提前多调度一段，避免播放断流
+                    if not eager_scheduled and queue.qsize() <= 1:
+                        schedule_task(i + window + 1)
+                        eager_scheduled = True
         finally:
             # 取消所有未完成的任务
             for task in tasks.values():

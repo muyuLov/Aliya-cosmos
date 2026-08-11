@@ -16,6 +16,7 @@ from agent.config import AgentConfig
 from agent.context import AgentContext
 from agent.emotion.engine import EmotionEngine
 from agent.pipeline import AgentPipeline, AgentState
+from agent.prompts import get_prompt_manager
 from agent.tools.registry import ToolRegistry
 
 logger = get_logger(__name__)
@@ -33,13 +34,11 @@ class AliyaAgent:
         tts_service: Any | None = None,
         audio_player: Any | None = None,
         audio_relay: Any = None,
+        audio_relay_bytes: Any = None,
         config: AgentConfig | None = None,
         confirm_callback: Any = None,
         prompt_manager: Any = None,
     ) -> None:
-        from agent.prompts import get_prompt_manager
-        from agent.prompts.style_switcher import get_style_switcher
-
         self._config = config or AgentConfig()
 
         # ── 大脑 / 情感引擎 / 认知引擎（与重构前一致的组装逻辑） ──
@@ -68,7 +67,6 @@ class AliyaAgent:
             registry=tool_registry,
             config=self._config,
             prompt_manager=pm,
-            style_switcher=get_style_switcher(),
             brain=brain,
             emotion=emotion,
             cognition=cognition,
@@ -76,6 +74,7 @@ class AliyaAgent:
             tts_service=tts_service,
             audio_player=audio_player,
             audio_relay=audio_relay,
+            audio_relay_bytes=audio_relay_bytes,
             notify=send_message,
             confirm_callback=confirm_callback,
             permission_config=permission_config,
@@ -118,13 +117,6 @@ class AliyaAgent:
         await self._ctx.conv.clear_history()
         logger.info("对话历史已清空")
 
-    def set_style(self, style: str) -> None:
-        """设置表达风格，在下次灵魂阶段注入时应用。"""
-        self._pipeline.current_style = style
-
-    def get_style(self) -> str:
-        return self._pipeline.current_style
-
     def set_emotion(self, feeling: str) -> None:
         self._ctx.emotion.set_emotion(feeling)
 
@@ -142,9 +134,7 @@ class AliyaAgent:
 
     def get_prompt_config(self) -> dict:
         return {
-            "style": self._pipeline.current_style,
             "emotion": self._ctx.emotion.current_emotion or "none",
-            "styles": self._ctx.prompt_manager.list_styles(),
         }
 
     def get_cognition_status(self) -> dict:

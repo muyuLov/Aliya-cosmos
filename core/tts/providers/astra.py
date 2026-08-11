@@ -126,9 +126,11 @@ class AstraTTSProvider(TTSProvider):
                 last_exc = e
             except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as e:
                 _logger.warning(
-                    "创建会话异常，准备重试 | attempt=%d | reason=%s",
-                    attempt + 1,
-                    e,
+                    "创建会话异常，准备重试",
+                    extra={
+                        "attempt": attempt + 1,
+                        "reason": str(e),
+                    },
                 )
                 last_exc = e
 
@@ -168,10 +170,14 @@ class AstraTTSProvider(TTSProvider):
                 f"消费音频流失败，HTTP {e.response.status_code}: {body_preview}",
                 cause=e,
             ) from e
-        except TTSSessionError:
-            raise
         except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as e:
-            raise TTSSessionError(session_id, f"消费音频流异常: {e}", cause=e) from e
+            exc_name = type(e).__name__
+            detail = str(e) or "(无详细信息)"
+            raise TTSSessionError(
+                session_id,
+                f"消费音频流异常: {exc_name}: {detail}",
+                cause=e,
+            ) from e
 
     async def close_session(self, session_id: str) -> None:
         """
@@ -200,10 +206,14 @@ class AstraTTSProvider(TTSProvider):
                 f"释放会话失败，HTTP {e.response.status_code}",
                 cause=e,
             ) from e
-        except TTSSessionError:
-            raise
         except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as e:
-            raise TTSSessionError(session_id, f"释放会话失败: {e}", cause=e) from e
+            exc_name = type(e).__name__
+            detail = str(e) or "(无详细信息)"
+            raise TTSSessionError(
+                session_id,
+                f"释放会话失败: {exc_name}: {detail}",
+                cause=e,
+            ) from e
 
     async def aclose(self) -> None:
         """关闭 AsyncClient，释放连接池资源。"""

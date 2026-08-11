@@ -11,12 +11,13 @@
         "api_key": "lm-studio",
         "model": "deepseek-r1-0528-qwen3-8b@q4_k_m",
         "max_retries": 3,
-        "timeout": 60
+        "timeout": 60,
+        "http2": false
     },
     "ollama": {
         "url": "http://localhost:11434",
         "api_key": "",
-        "model": "qwen2.5-7b-instruct",
+        "model": "qwen2.5-7b",
         "max_retries": 3,
         "timeout": 60
     }

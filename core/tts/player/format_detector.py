@@ -1,9 +1,20 @@
 """WAV/PCM 格式检测模块"""
 
+import io
 import struct
+import wave
 from dataclasses import dataclass
 
 RIFF_MAGIC = b"RIFF"
+
+# sample_width → sounddevice dtype 字符串映射
+# 注意：sounddevice 不支持 "int24"，统一用 int32 替代，在 _write_audio 中做格式转换
+_WIDTH_TO_DTYPE: dict[int, str] = {
+    1: "int8",
+    2: "int16",
+    3: "int32",  # int24 用 int32 替代（sounddevice 不原生支持 int24）
+    4: "int32",
+}
 
 
 class WavHeaderParseError(Exception):
@@ -68,8 +79,6 @@ def parse_wav_header(data: bytes) -> FormatInfo:
     Raises:
         WavHeaderParseError: 解析失败（非标准 WAV、缺少必要字段等）时抛出。
     """
-    import wave
-    import io
 
     if len(data) < 12 or data[:4] != RIFF_MAGIC or data[8:12] != b"WAVE":
         raise WavHeaderParseError("不是有效的 WAV 文件（缺少 RIFF/WAVE 标识）")
@@ -87,14 +96,6 @@ def parse_wav_header(data: bytes) -> FormatInfo:
     except ValueError as e:
         raise WavHeaderParseError(f"找不到 PCM 数据偏移: {e}") from e
 
-    # sample_width → sounddevice dtype 字符串
-    # 注意：sounddevice 不支持 "int24"，统一用 int32 替代，在 _write_audio 中做格式转换
-    _WIDTH_TO_DTYPE: dict[int, str] = {
-        1: "int8",
-        2: "int16",
-        3: "int32",  # int24 用 int32 替代（sounddevice 不原生支持 int24）
-        4: "int32",
-    }
     pa_format = _WIDTH_TO_DTYPE.get(sample_width, "int16")
 
     return FormatInfo(

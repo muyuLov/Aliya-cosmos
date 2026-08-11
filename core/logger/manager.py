@@ -210,13 +210,22 @@ class LogManager:
 
     def _clear_handlers(self) -> None:
         """停止所有 listener，从根 Logger 移除并关闭所有 Handler。"""
-        # 先停止 listener，确保队列中的日志全部落盘后再关闭底层 handler，
-        # 顺序不能颠倒，否则底层 handler 关闭后队列中的记录将永久丢失
+        # 1. 从 listener 中提取 BufferedFileHandler，后续需要单独 flush 缓冲区
+        buffered_handlers: list[logging.Handler] = []
+        for listener in self._listeners:
+            buffered_handlers.extend(listener.handlers)
+
+        # 2. 先停止 listener，确保队列中的日志全部落盘后再关闭底层 handler
         for listener in self._listeners:
             listener.stop()
         self._listeners.clear()
 
+        # 3. 关闭根 Logger 上注册的常规 handler（console / queue_handler）
         for handler in self._handlers:
             self._root_logger.removeHandler(handler)
             handler.close()
         self._handlers.clear()
+
+        # 4. 最后关闭 BufferedFileHandler，flush 剩余缓冲区到磁盘
+        for handler in buffered_handlers:
+            handler.close()

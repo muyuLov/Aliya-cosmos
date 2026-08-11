@@ -7,17 +7,17 @@ from agent.context import AgentContext
 _MEMORY_HEADER = "[记忆]"
 
 
-async def assemble_tool_phase(ctx: AgentContext) -> None:
+async def assemble_tool_phase(ctx: AgentContext, user_input: str = "") -> None:
     """切换到工具阶段：tools_system.md + 动态工具描述作为 system prompt（无角色人格）。"""
     tools_desc = ctx.registry.format_descriptions()
     tool_system = ctx.prompt_manager.build_tool_system_prompt(tools_desc)
     await ctx.conv.set_system_prompt(tool_system)
 
-    # 注入认知上下文（需求状态 + 记忆召回），帮助工具决策
+    # 注入认知上下文（需求状态 + 上下文感知记忆召回），帮助工具决策
     cognition_context = ""
     if ctx.cognition:
         parts = [ctx.cognition.build_context_injection(limit=4, max_sections=3)]
-        mem = ctx.cognition.build_memory_context(limit=3)
+        mem = await ctx.cognition.build_memory_context_async(query=user_input, limit=3)
         if mem:
             parts.append(f"{_MEMORY_HEADER}\n{mem}")
         cognition_context = "\n\n".join(p for p in parts if p)

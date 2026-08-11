@@ -2,12 +2,11 @@
 
 负责从 `data/prompts/` 目录加载分层 prompt 文件，按两种模式组装：
 
-模式 A — 灵魂阶段：soul + identity + system + tone-rules + styles/*
+模式 A — 灵魂阶段：soul + identity + system + tone-rules
 模式 B — 工具阶段：tools_system + 注入内容
 
 支持：
 - 文本缓存（避免重复 I/O）
-- 风格切换（default / lively / healing / sweet）
 - 情绪补丁生成
 """
 
@@ -15,21 +14,14 @@ from __future__ import annotations
 
 from pathlib import Path
 from dataclasses import dataclass, field
-from typing import Literal
 
 from core.logger import get_logger
 
 logger = get_logger(__name__)
 
-# ── 类型定义 ──────────────────────────────────────────────────────────────────
-
-StyleName = Literal["default", "lively", "healing", "sweet"]
-ALL_STYLES: tuple[StyleName, ...] = ("default", "lively", "healing", "sweet")
-
 # ── 路径常量 ──────────────────────────────────────────────────────────────────
 
 _PROMPT_DIR = Path(__file__).parent.parent.parent / "data" / "prompts"
-_STYLES_DIR = _PROMPT_DIR / "styles"
 
 # 各层文件名
 _SOUL_FILE = "soul.md"
@@ -85,7 +77,7 @@ class PromptManager:
     Usage::
 
         pm = PromptManager()
-        soul_prompt = pm.build_soul_system_prompt(style="default")
+        soul_prompt = pm.build_soul_system_prompt()
         tool_prompt = pm.build_tool_system_prompt()
         patch = pm.build_emotion_patch("开心")
     """
@@ -97,15 +89,13 @@ class PromptManager:
 
     def build_soul_system_prompt(
         self,
-        style: StyleName = "default",
         tone_override: str = "",
     ) -> str:
         """构建灵魂阶段完整 system prompt。
 
-        顺序：soul → identity → system → tone-rules → style
+        顺序：soul → identity → system → tone-rules
 
         Args:
-            style: 表达风格名称。
             tone_override: 覆盖语气规则（可选），为空时使用 tone-rules.md。
 
         Returns:
@@ -133,15 +123,10 @@ class PromptManager:
         if tone:
             parts.append(tone)
 
-        # 5. 表达风格
-        style_content = self._load_style(style)
-        if style_content:
-            parts.append(style_content)
-
         result = "\n\n---\n\n".join(parts)
         logger.debug(
-            "[Prompt] 构建灵魂阶段 prompt | style=%s | layers=%d | chars=%d",
-            style, len(parts), len(result),
+            "[Prompt] 构建灵魂阶段 prompt | layers=%d | chars=%d",
+            len(parts), len(result),
         )
         return result
 
@@ -186,23 +171,11 @@ class PromptManager:
         logger.debug("[Prompt] 构建情绪补丁 | feeling=%s | chars=%d", feeling, len(patch))
         return patch
 
-    # ── 风格管理和切换 ──────────────────────────────────────────────────
-
-    def list_styles(self) -> list[StyleName]:
-        """返回所有可用的风格名称列表。"""
-        return list(ALL_STYLES)
-
-    def load_style_raw(self, style: StyleName) -> str:
-        """读取指定风格的原始文件内容。"""
-        return self._load_style(style)
-
     # ── 配置辅助 ─────────────────────────────────────────────────────────
 
     def get_config_dict(self) -> dict[str, object]:
         """返回当前状态的配置字典，便于序列化或通知前端。"""
         return {
-            "styles": list(ALL_STYLES),
-            "current_style": "default",  # 由外部 Agent 管理的状态
             "cache_size": len(self._cache),
             "soul_chars": len(self._load(_SOUL_FILE)),
             "tools_system_chars": len(self._load(_TOOLS_SYSTEM_FILE)),
@@ -227,24 +200,6 @@ class PromptManager:
             logger.warning("[Prompt] 文件加载失败: %s | error=%s", path, e)
             return ""
 
-    def _load_style(self, style: StyleName) -> str:
-        """加载风格文件，带缓存。"""
-        cache_key = f"style:{style}"
-        if cache_key in self._cache:
-            return self._cache[cache_key]
-
-        path = _STYLES_DIR / f"{style}.md"
-        try:
-            text = path.read_text(encoding="utf-8").strip()
-            self._cache[cache_key] = text
-            return text
-        except FileNotFoundError:
-            logger.warning("[Prompt] 风格文件未找到（回退到 default）: %s", path)
-            return self._load_style("default")
-        except Exception as e:
-            logger.warning("[Prompt] 风格文件加载失败（回退到 default）: %s | error=%s", path, e)
-            return self._load_style("default")
-
     def clear_cache(self) -> None:
         """清除所有缓存的内容，使下一次读取重新从磁盘加载。"""
         self._cache.clear()
@@ -267,6 +222,4 @@ def get_prompt_manager() -> PromptManager:
 __all__ = [
     "PromptManager",
     "get_prompt_manager",
-    "StyleName",
-    "ALL_STYLES",
 ]

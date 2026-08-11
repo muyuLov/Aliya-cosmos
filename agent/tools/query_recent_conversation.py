@@ -12,6 +12,9 @@ if TYPE_CHECKING:
 # 注入消息的元数据前缀标记（与 stages/think.py 的 TOOL_RESULT_MARKER 对应）
 _INJECTED_PREFIX = "tool_result"
 
+# 角色名 → 显示标签映射
+_ROLE_LABELS: dict[str, str] = {"user": "用户", "assistant": "Aliya", "system": "系统"}
+
 
 class QueryRecentConversationTool(ToolBase):
     """返回最近的对话历史（只读）。
@@ -60,7 +63,7 @@ class QueryRecentConversationTool(ToolBase):
 
         lines: list[str] = []
         for msg in visible[-limit:]:
-            role = "用户" if msg.role == "user" else "Aliya" if msg.role == "assistant" else "系统"
+            role = _ROLE_LABELS.get(msg.role, "系统")
             content = msg.content.replace("\n", " ").strip()
             lines.append(f"{role}: {content}")
         return ToolResult(success=True, data={"result": "\n".join(lines)})

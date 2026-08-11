@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING
 
 from agent.tools.base import ToolBase, ToolPermission, ToolResult
 
+_WEEKDAY_NAMES = "一二三四五六日"
+
 if TYPE_CHECKING:
     from agent.context import AgentContext
 
@@ -37,7 +39,7 @@ class GetCurrentTimeTool(ToolBase):
             "datetime": now.strftime("%Y-%m-%d %H:%M:%S"),
             "date": now.strftime("%Y-%m-%d"),
             "time": now.strftime("%H:%M:%S"),
-            "weekday": "星期" + "一二三四五六日"[now.weekday()],
+            "weekday": "星期" + _WEEKDAY_NAMES[now.weekday()],
         }
         text = f"当前时间：{data['datetime']}（{data['weekday']}）"
         return ToolResult(success=True, data={"text": text, **data})

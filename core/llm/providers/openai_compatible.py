@@ -1,10 +1,10 @@
-"""OpenAI 兼容接口提供商基类：封装 async_chat_completion 与 stream_chat_completion 公共逻辑"""
+"""OpenAI 兼容接口提供商：统一的 AsyncOpenAI 客户端，通过标准配置驱动所有兼容 API"""
 
 from __future__ import annotations
 
-from abc import abstractmethod
 from typing import Any, AsyncGenerator
 
+import httpx
 from openai import AsyncOpenAI
 
 from core.llm.exceptions import LLMRequestError
@@ -17,36 +17,53 @@ _logger = get_logger(__name__)
 
 class OpenAICompatibleProvider(LLMProvider):
     """
-    OpenAI 兼容接口提供商基类。
+    OpenAI 兼容接口提供商，适用于所有标准 OpenAI API 格式的服务。
 
-    封装所有基于 AsyncOpenAI 的提供商（DeepSeek、LM Studio 等）共用的
-    async_chat_completion 与 stream_chat_completion 实现，子类只需提供
-    _build_client() 和 provider_name。
+    配置字段：
+        url:        API 基础地址（如 ``https://api.deepseek.com`` 或 ``http://localhost:11434``）
+        api_key:    API 密钥（本地服务可为占位符）
+        model:      模型名称
+        timeout:    请求超时秒数（可选，默认继承自 LLMProvider）
+        max_retries: 最大重试次数（可选，默认继承自 LLMProvider）
+        http2:      是否启用 HTTP/2（可选，默认 True，LM Studio 需设为 False）
 
     支持 DeepSeek 思考模式（thinking mode）：当 ``request.thinking`` 不为 None 时，
     自动提取 API 响应的 ``reasoning_content`` 字段并回填到 ``ChatResponse`` 中。
-
-    Args:
-        config: 提供商配置字典，至少包含 model 字段。
     """
+
+    # 与 _build_kwargs 显式参数冲突的 extra 字段，调用时自动过滤
+    _RESERVED_EXTRA_KEYS: frozenset[str] = frozenset({
+        "model", "messages", "temperature", "max_tokens",
+        "stream", "stream_options", "thinking", "reasoning_effort",
+    })
 
     def __init__(self, config: dict[str, Any]) -> None:
         super().__init__(config)
-        self._async_client: AsyncOpenAI = self._build_client(config)
+        base_url = str(config.get("url", "")).rstrip("/")
+        if not base_url.endswith("/v1"):
+            base_url = f"{base_url}/v1"
+        api_key = str(config.get("api_key") or config.get("key") or "not-needed")
+        http_client: httpx.AsyncClient | None = None
+        if config.get("http2") is False:
+            http_client = httpx.AsyncClient(http2=False)
+
+        self._async_client: AsyncOpenAI = AsyncOpenAI(
+            api_key=api_key,
+            base_url=base_url,
+            timeout=float(config.get("timeout", self.timeout)),
+            max_retries=config.get("max_retries", self.max_retries),
+            http_client=http_client,
+        )
+
+    @property
+    def provider_name(self) -> str:
+        """提供商名称，用于日志和错误信息标识。"""
+        return str(self.config.get("provider_name", "openai_compatible"))
 
     @property
     def supports_thinking(self) -> bool:
-        """当前模型是否支持思考模式（thinking mode）。
-
-        默认检测逻辑：提供商名或模型名含 "deepseek" 则认为支持。
-        子类可覆盖此属性实现更精确的检测。
-        """
-        name = (self.provider_name + " " + self.model).lower()
-        return "deepseek" in name
-
-    @abstractmethod
-    def _build_client(self, config: dict[str, Any]) -> AsyncOpenAI:
-        """构造并返回 AsyncOpenAI 客户端，由子类实现以注入不同的 base_url / http_client。"""
+        """当前模型是否支持思考模式。基于模型名称检测。"""
+        return "deepseek" in self.model.lower()
 
     def _log_request(self, request: ChatRequest, *, stream: bool = False) -> None:
         """记录请求日志。"""
@@ -76,14 +93,12 @@ class OpenAICompatibleProvider(LLMProvider):
             usage.reasoning_tokens,
         )
 
-    @staticmethod
-    def _filter_extra(extra: dict[str, Any]) -> dict[str, Any]:
+    @classmethod
+    def _filter_extra(cls, extra: dict[str, Any]) -> dict[str, Any]:
         """过滤掉与显式参数冲突的 extra 字段。"""
-        RESERVED = {
-            "model", "messages", "temperature", "max_tokens",
-            "stream", "stream_options", "thinking", "reasoning_effort",
-        }
-        return {k: v for k, v in extra.items() if k not in RESERVED}
+        if not extra:
+            return {}
+        return {k: v for k, v in extra.items() if k not in cls._RESERVED_EXTRA_KEYS}
 
     def _build_kwargs(self, request: ChatRequest) -> dict[str, Any]:
         """构建 API 调用的公共关键字参数。"""

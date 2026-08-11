@@ -59,6 +59,9 @@ Aliya:哈哈哈哈\n 不排除这种可能\n 不过更可能是 Kane 自己提�
 
     try:
         service, player = create_from_config()
+        if player is None:
+            print("⚠️ 音频播放器不可用（无音频硬件）")
+            return
         async with service, player:
             print(f"📝 原始文本: {text}")
             await player.play_stream(service.synthesize(TTSRequest(text=text)))
@@ -89,6 +92,9 @@ async def example_fine_grained_control() -> None:
 
     try:
         service, player = create_from_config()
+        if player is None:
+            print("⚠️ 音频播放器不可用（无音频硬件）")
+            return
         async with service, player:
             print(f"📝 文本内容: {text}")
             print("🔄 开始逐块送入音频数据...")
@@ -140,10 +146,13 @@ async def example_multiple_providers() -> None:
             voice_config=VoiceConfig(speed=1.0, languages=["zh", "en"]),
         )
         player = create_player()
-        async with astra_service, player:
-            print("   🔊 使用 AstraTTS 播放...")
-            await player.play_stream(astra_service.synthesize(TTSRequest(text=text)))
-            print("   ✅ AstraTTS 播放完成")
+        if player is None:
+            print("   ⚠️ 音频播放器不可用（无音频硬件）")
+        else:
+            async with astra_service, player:
+                print("   🔊 使用 AstraTTS 播放...")
+                await player.play_stream(astra_service.synthesize(TTSRequest(text=text)))
+                print("   ✅ AstraTTS 播放完成")
     except TTSError as e:
         print(f"   ❌ AstraTTS 不可用: {e}")
 
@@ -161,10 +170,13 @@ async def example_multiple_providers() -> None:
             },
         )
         player = create_player()
-        async with edge_service, player:
-            print("   🔊 使用 EdgeTTS 播放...")
-            await player.play_stream(edge_service.synthesize(TTSRequest(text=text)))
-            print("   ✅ EdgeTTS 播放完成")
+        if player is None:
+            print("   ⚠️ 音频播放器不可用（无音频硬件）")
+        else:
+            async with edge_service, player:
+                print("   🔊 使用 EdgeTTS 播放...")
+                await player.play_stream(edge_service.synthesize(TTSRequest(text=text)))
+                print("   ✅ EdgeTTS 播放完成")
     except TTSError as e:
         print(f"   ❌ EdgeTTS 不可用: {e}")
 
@@ -184,6 +196,9 @@ async def example_voice_configuration() -> None:
 
     try:
         service, player = create_from_config()
+        if player is None:
+            print("⚠️ 音频播放器不可用（无音频硬件）")
+            return
         async with service, player:
             for speed in speeds:
                 print(f"\n🎵 测试语速: {speed}x")

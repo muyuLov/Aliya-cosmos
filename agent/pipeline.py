@@ -79,7 +79,6 @@ class AgentPipeline:
         self._hooks = hooks or HookRegistry()
         self._state: AgentState = AgentState.IDLE
         self._turn_state = TurnState()
-        self._current_style: str = ctx.config.prompt_style
         self._progress_task: asyncio.Task | None = None
         self._register_default_hooks()
 
@@ -95,22 +94,12 @@ class AgentPipeline:
     def hooks(self) -> HookRegistry:
         return self._hooks
 
-    @property
-    def current_style(self) -> str:
-        """当前表达风格（手动设置与自动切换均以本值为唯一来源）。"""
-        return self._current_style
-
-    @current_style.setter
-    def current_style(self, style: str) -> None:
-        self._current_style = style
-
     # ── 默认钩子订阅者（横切能力） ──────────────────────────────────────────
 
     def _register_default_hooks(self) -> None:
         """注册默认钩子订阅者（顺序对齐原 agent.py 主流程调用顺序）。"""
         ctx = self._ctx
-        # before_turn：自动风格切换 → 认知准备
-        self._hooks.register(HookPoint.BEFORE_TURN, self._hook_auto_switch_style)
+        # before_turn：认知准备
         if ctx.cognition:
             self._hooks.register(HookPoint.BEFORE_TURN, ctx.cognition.before_turn)
         # after_tool：工具学习（顺序敏感，同步）
@@ -120,32 +109,6 @@ class AgentPipeline:
         if ctx.cognition:
             self._hooks.register(HookPoint.AFTER_TURN, ctx.cognition.after_turn)
         self._hooks.register(HookPoint.AFTER_TURN, self._hook_advance_emotion)
-
-    async def _hook_auto_switch_style(self, text: str) -> None:
-        """自动风格切换（before_turn 钩子）：LLM 分析用户输入推荐表达风格。"""
-        ctx = self._ctx
-        if not ctx.config.auto_style_enabled:
-            return
-        try:
-            recommended = await ctx.style_switcher.analyze(
-                text,
-                provider=ctx.conv.provider,
-            )
-        except Exception as e:
-            logger.warning("[AutoStyle] 自动风格切换分析失败（忽略）: %s", e)
-            return
-        if recommended != self._current_style:
-            self._current_style = recommended
-            logger.debug(
-                "[AutoStyle] 自动切换风格 | text_preview=%s... → style=%s", text[:20], recommended
-            )
-            await self._notify(
-                {
-                    "type": "style_changed",
-                    "style": recommended,
-                    "auto": True,
-                }
-            )
 
     async def _hook_learn_from_tool(self, name: str, result: Any) -> None:
         """工具学习（after_tool 钩子）：需求更新、情景记忆、世界模型、自我模型。"""
@@ -261,12 +224,12 @@ class AgentPipeline:
         self._progress_task = asyncio.create_task(self._push_progress())
 
         try:
-            # 认知准备 + 自动风格切换（before_turn）
+            # 认知准备（before_turn）
             await self._hooks.run(HookPoint.BEFORE_TURN, text)
 
             # 阶段 1：上下文组装
             await self._transition(AgentState.CONTEXT_ASSEMBLY)
-            await assemble_tool_phase(self._ctx)
+            await assemble_tool_phase(self._ctx, text)
 
             # 阶段 2：工具阶段循环
             await self._transition(AgentState.THINKING)
@@ -284,7 +247,6 @@ class AgentPipeline:
                 await self._notify({"type": "brain_progress", "message": "进入灵魂表达阶段"})
                 final_reply = await run_soul_phase(
                     self._ctx,
-                    style=self._current_style,
                     user_input=self._turn_state.last_user_input,
                 )
                 logger.debug("[Soul] 灵魂阶段回复 | reply_len=%d", len(final_reply))
