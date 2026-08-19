@@ -122,6 +122,7 @@ data/cache/
 .worktrees/
 .codebuddy/
 .codegraph/
+.mimosa/
 
 # =================================
 # 项目特定忽略
