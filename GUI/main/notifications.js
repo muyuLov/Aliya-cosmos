@@ -1,8 +1,8 @@
-// ========== 桌面通知（窗口隐藏/最小化时弹窗提醒 Aliya 回复） ==========
+// ========== 桌面通知（所有界面不可见时弹窗提醒 Aliya 回复） ==========
 const { Notification } = require('electron');
-const state = require('./state');
 const { logger } = require('./logger');
 const { getIdentity } = require('./config');
+const { showLive2DWindow } = require('./windows');
 
 function showAliyaNotification(body) {
   if (!body) return;
@@ -13,11 +13,8 @@ function showAliyaNotification(body) {
     const truncated = body.length > maxLen ? body.slice(0, maxLen) + '…' : body;
     const notification = new Notification({ title, body: truncated });
     notification.on('click', () => {
-      const win = state.sidebarWindow;
-      if (!win || win.isDestroyed()) return;
-      if (win.isMinimized()) win.restore();
-      win.show();
-      win.focus();
+      // 点击通知 → 唤起 Live2D 主窗口（不存在则重建）
+      showLive2DWindow();
     });
     notification.show();
   } catch (e) {

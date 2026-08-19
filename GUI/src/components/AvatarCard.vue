@@ -10,13 +10,14 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue';
+import { computed } from 'vue';
 import { useAppStore } from '../stores/appStore.js';
 import avatarSrc from '@/assets/avatar.png';
 
 const store = useAppStore();
 const aiName = computed(() => store.aiName);
-const online = ref(true);
+// 在线状态由主进程 WS 连接状态驱动（Agent WebSocket 已连接 = 在线）
+const online = computed(() => store.connected);
 </script>
 
 <style scoped>

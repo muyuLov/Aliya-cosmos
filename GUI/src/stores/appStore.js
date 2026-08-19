@@ -25,6 +25,8 @@ export const useAppStore = defineStore('app', () => {
   const modelName = ref('获取中…');
   const aiName = ref('Aliya');
   const pinned = ref(true);
+  /** Agent WebSocket 连接状态（驱动在线徽章） */
+  const connected = ref(false);
 
   // ---------- 订阅生命周期（单例） ----------
 
@@ -52,6 +54,7 @@ export const useAppStore = defineStore('app', () => {
           };
         }
         if (state.token !== undefined) tokenTotal.value = state.token ?? 0;
+        if (typeof state.connected === 'boolean') connected.value = state.connected;
       });
     }
     loadIdentity();
@@ -130,6 +133,7 @@ export const useAppStore = defineStore('app', () => {
     modelName,
     aiName,
     pinned,
+    connected,
     init,
     dispose,
     minimize,

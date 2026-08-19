@@ -1,0 +1,33 @@
+/* ============================================================
+   聊天窗口基础样式（配合 Naive UI + 透明窗口）
+   ============================================================ */
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+#app {
+  height: 100%;
+}
+
+/* base.css 全局 user-select: none 会阻断输入框文本选择，聊天窗口需要可编辑 */
+input, textarea, [contenteditable="true"] {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* 消息文本需要可选中复制 */
+.chat-bubble__text {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* 让 Naive UI 的弹层（message）在透明窗口上正常显示 */
+.n-message-container {
+  z-index: 9999;
+}

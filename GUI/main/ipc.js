@@ -5,12 +5,33 @@ const state = require('./state');
 const { logger } = require('./logger');
 const {
   PROVIDERS_FILE,
-  MAIN_YML,
   getCurrentProviderName,
   getModelConfig,
   getIdentity,
+  getWsEndpoint,
+  getTTSProviderName,
+  saveIdentity,
+  switchProvider,
 } = require('./config');
-const { createSidebarWindow, dockLive2D, syncLive2DPosition } = require('./windows');
+const { createSidebarWindow, createSettingsWindow, createChatWindow, dockLive2D, syncLive2DPosition } = require('./windows');
+
+function listProviders() {
+  try {
+    const providers = JSON.parse(fs.readFileSync(PROVIDERS_FILE, 'utf-8'));
+    const current = getCurrentProviderName();
+    const list = Object.entries(providers).map(([name, cfg]) => ({
+      name,
+      model: cfg.model,
+      url: cfg.url,
+      isCurrent: name === current,
+    }));
+    logger.debug('提供商列表查询', { count: list.length, current });
+    return list;
+  } catch {
+    logger.warn('提供商列表读取失败');
+    return [];
+  }
+}
 
 function registerIpcHandlers() {
   // ========== 窗口拖拽 ==========
@@ -91,16 +112,115 @@ function registerIpcHandlers() {
     return state.sidebarVisible;
   });
 
+  // 打开聊天：直接创建/聚焦聊天窗口（Live2D 工具栏与侧边栏入口统一走这里）
   ipcMain.handle('sidebar:open-chat', () => {
-    state.sidebarWindow?.webContents.send('sidebar:event', { type: 'open-chat' });
+    createChatWindow();
   });
 
   ipcMain.handle('sidebar:switch-model', () => {
     state.sidebarWindow?.webContents.send('sidebar:event', { type: 'switch-model' });
   });
 
+  // 打开设置：改为打开真实设置窗口（不再回传事件占位）
   ipcMain.handle('sidebar:open-settings', () => {
-    state.sidebarWindow?.webContents.send('sidebar:event', { type: 'open-settings' });
+    createSettingsWindow();
+  });
+
+  // ========== 设置窗口 ==========
+  ipcMain.handle('settings:open', () => {
+    createSettingsWindow();
+  });
+
+  ipcMain.handle('settings:drag-move', (_evt, dx, dy) => {
+    if (!state.settingsWindow || state.settingsWindow.isDestroyed()) return;
+    const [x, y] = state.settingsWindow.getPosition();
+    state.settingsWindow.setPosition(x + dx, y + dy);
+  });
+
+  ipcMain.handle('settings:minimize', () => {
+    state.settingsWindow?.minimize();
+  });
+
+  ipcMain.handle('settings:close', () => {
+    state.settingsWindow?.close();
+  });
+
+  // ========== 聊天窗口 ==========
+  // 消息发送经主进程持有的 agent WS 中转（后端每连接独立建 agent，渲染进程不直连）
+
+  // 当前连接状态查询：状态快照为事件驱动（仅连接变化时推送），
+  // 聊天窗口创建晚于 WS 连接时收不到初始快照，需由渲染端挂载时主动拉取
+  ipcMain.handle('chat:get-state', () => ({
+    connected: Boolean(state.agentWebSocket && state.agentWebSocket.readyState === 1),
+  }));
+
+  ipcMain.handle('chat:send-message', (_evt, text) => {
+    const ws = state.agentWebSocket;
+    logger.info('聊天发送请求', { len: String(text || '').length, wsReadyState: ws?.readyState });
+    if (!ws || ws.readyState !== 1) {
+      return { success: false, error: 'Agent 服务未连接' };
+    }
+    const trimmed = String(text || '').trim();
+    if (!trimmed) return { success: false, error: '消息为空' };
+    try {
+      ws.send(JSON.stringify({ type: 'user_message', text: trimmed }));
+      logger.info('user_message 已发往后端', { len: trimmed.length });
+      return { success: true };
+    } catch (e) {
+      logger.error('user_message 发送失败', { error: e.message });
+      return { success: false, error: '发送失败' };
+    }
+  });
+
+  ipcMain.handle('chat:stop', () => {
+    const ws = state.agentWebSocket;
+    if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'stop' }));
+  });
+
+  ipcMain.handle('chat:confirm', (_evt, allowed) => {
+    const ws = state.agentWebSocket;
+    if (ws && ws.readyState === 1) {
+      ws.send(JSON.stringify({ type: 'confirm_response', allowed: Boolean(allowed) }));
+    }
+  });
+
+  ipcMain.handle('chat:drag-move', (_evt, dx, dy) => {
+    if (!state.chatWindow || state.chatWindow.isDestroyed()) return;
+    const [x, y] = state.chatWindow.getPosition();
+    state.chatWindow.setPosition(x + dx, y + dy);
+  });
+
+  ipcMain.handle('chat:minimize', () => {
+    state.chatWindow?.minimize();
+  });
+
+  ipcMain.handle('chat:close', () => {
+    state.chatWindow?.close();
+  });
+
+  // 设置窗口一次性配置快照
+  ipcMain.handle('settings:get-config', () => {
+    const ws = getWsEndpoint();
+    return {
+      identity: getIdentity(),
+      model: getModelConfig(),
+      providers: listProviders(),
+      ws,
+      ttsProvider: getTTSProviderName(),
+      tokenUsage: { ...state.tokenUsage },
+      wsConnected: Boolean(
+        state.agentWebSocket && state.agentWebSocket.readyState === 1 // WebSocket.OPEN
+      ),
+      appVersion: process.env.npm_package_version || '',
+    };
+  });
+
+  // 保存身份信息（ai_name / user_name）
+  ipcMain.handle('settings:save-identity', (_evt, identity) => {
+    logger.info('保存身份信息', { identity });
+    const result = saveIdentity(identity);
+    logger.info('身份信息保存结果', { success: result.success, error: result.error || '' });
+    return result;
   });
 
   // ========== 业务查询/操作 ==========
@@ -108,45 +228,13 @@ function registerIpcHandlers() {
 
   ipcMain.handle('sidebar:get-identity', () => getIdentity());
 
-  ipcMain.handle('sidebar:list-providers', () => {
-    try {
-      const providers = JSON.parse(fs.readFileSync(PROVIDERS_FILE, 'utf-8'));
-      const current = getCurrentProviderName();
-      const list = Object.entries(providers).map(([name, cfg]) => ({
-        name,
-        model: cfg.model,
-        url: cfg.url,
-        isCurrent: name === current,
-      }));
-      logger.debug('提供商列表查询', { count: list.length, current });
-      return list;
-    } catch {
-      logger.warn('提供商列表读取失败');
-      return [];
-    }
-  });
+  ipcMain.handle('sidebar:list-providers', () => listProviders());
 
   ipcMain.handle('sidebar:switch-provider', (_evt, providerName) => {
-    try {
-      logger.info('切换 Provider', { to: providerName });
-      const yaml = fs.readFileSync(MAIN_YML, 'utf-8');
-      // 灵活匹配 llm → providers → name 链，不依赖固定缩进数
-      const updated = yaml.replace(
-        /^( *)(llm:[\s\S]*?providers:[\s\S]*?)(^\s+name:\s*)\S+/m,
-        (_match, indent, prefix, namePart) => `${indent}${prefix}${namePart}${providerName}`
-      );
-      if (updated === yaml) {
-        logger.warn('main.yml 中未找到可替换的 name 字段');
-        return { success: false, error: '未在配置中找到可替换的 provider name' };
-      }
-      fs.writeFileSync(MAIN_YML, updated, 'utf-8');
-      const modelCfg = getModelConfig();
-      logger.info('Provider 切换成功', { provider: providerName, model: modelCfg.model });
-      return { success: true, model: modelCfg };
-    } catch (err) {
-      logger.error('Provider 切换失败', err.message);
-      return { success: false, error: err.message };
-    }
+    logger.info('切换 Provider', { to: providerName });
+    const result = switchProvider(providerName);
+    logger.info('Provider 切换结果', { success: result.success, model: result.model?.model });
+    return result;
   });
 
   ipcMain.handle('sidebar:set-zoom', (_evt, delta) => {

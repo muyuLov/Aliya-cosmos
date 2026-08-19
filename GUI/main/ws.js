@@ -1,19 +1,15 @@
 // ========== Agent WebSocket 连接 ==========
 const WebSocket = require('ws');
-const fs = require('fs');
 const state = require('./state');
 const { logger } = require('./logger');
-const { MAIN_YML, resolveEnvValue } = require('./config');
+const { getWsEndpoint } = require('./config');
+const { isAnyWindowVisible } = require('./windows');
 const { accumulateToken, pushSidebarState } = require('./state-push');
 const { showAliyaNotification } = require('./notifications');
 
 function connectAgentWebSocket() {
   try {
-    const yaml = fs.readFileSync(MAIN_YML, 'utf-8');
-    const hostRaw = yaml.match(/^\s{8}host:\s*([^#\s]+)/m)?.[1] || '127.0.0.1';
-    const portRaw = yaml.match(/^\s{8}port:\s*([^#\s]+)/m)?.[1] || '8765';
-    const host = resolveEnvValue(hostRaw);
-    const port = resolveEnvValue(portRaw);
+    const { host, port } = getWsEndpoint();
     const url = `ws://${host}:${port}/agent/ws`;
 
     logger.info('正在连接 Agent WebSocket', { url });
@@ -28,6 +24,8 @@ function connectAgentWebSocket() {
     ws.onopen = () => {
       if (ws !== state.agentWebSocket) return; // 已被取代
       logger.info('Agent WebSocket 已连接');
+      // 推送连接状态（驱动侧边栏在线徽章与设置窗口连接指示）
+      pushSidebarState({ connected: true });
       const queryAgent = (label) => {
         try {
           logger.debug('WS 查询 Agent 状态', { label });
@@ -70,10 +68,28 @@ function connectAgentWebSocket() {
           ws.send(JSON.stringify({ type: 'get_emotion_state' }));
         }
         ws.send(JSON.stringify({ type: 'get_token_usage' }));
-        // 侧边栏不可见时弹出桌面通知（覆盖未创建/隐藏/最小化三种情况）
-        if (data.reply && (!state.sidebarWindow || state.sidebarWindow.isDestroyed() || !state.sidebarWindow.isVisible())) {
+        // 聊天窗口：推送 AI 回复（busy 状态由渲染端据此解除）
+        if (data.reply) {
+          state.chatWindow?.webContents.send('chat:reply', { reply: data.reply });
+        }
+        // 桌面通知：仅当所有界面（Live2D 主入口 / 状态面板 / 设置窗口）都不可见时才弹出
+        if (data.reply && !isAnyWindowVisible()) {
           showAliyaNotification(data.reply);
         }
+      },
+      // 工具执行确认请求 → 聊天窗口展示横幅（允许/拒绝）
+      confirm_request(data) {
+        state.chatWindow?.webContents.send('chat:confirm-request', {
+          tool: data.tool || '',
+          params: data.params || {},
+        });
+      },
+      // 后端错误 / 通知（含 stop 打断后的"已停止回复"）→ 聊天窗口
+      error(data) {
+        state.chatWindow?.webContents.send('chat:error', { message: data.message || '未知错误' });
+      },
+      notice(data) {
+        state.chatWindow?.webContents.send('chat:notice', { message: data.message || '' });
       },
       token_usage(data) {
         if (data.total !== undefined) {
@@ -109,6 +125,7 @@ function connectAgentWebSocket() {
     ws.onclose = (evt) => {
       if (ws !== state.agentWebSocket) state.agentWebSocket = null;
       logger.warn('Agent WebSocket 断开', { code: evt.code, reason: evt.reason || '(无)' });
+      pushSidebarState({ connected: false });
       clearTimeout(state.wsReconnectTimer);
       state.wsReconnectTimer = setTimeout(() => {
         logger.info('WS 尝试重连…');
@@ -118,9 +135,11 @@ function connectAgentWebSocket() {
 
     ws.onerror = () => {
       logger.warn('Agent WebSocket 连接异常');
+      pushSidebarState({ connected: false });
     };
   } catch (e) {
     logger.warn('Agent WebSocket 不可用', { error: e.message || '未知错误' });
+    pushSidebarState({ connected: false });
     clearTimeout(state.wsReconnectTimer);
     state.wsReconnectTimer = setTimeout(() => {
       try { connectAgentWebSocket(); } catch {}

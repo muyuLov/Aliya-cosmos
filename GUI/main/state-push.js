@@ -14,7 +14,7 @@ function accumulateToken(usage) {
 }
 
 // ========== 状态快照批量推送 ==========
-// 高频状态（情绪/状态/Token）合并为 50ms 批量单通道推送，
+// 高频状态（情绪/状态/Token/连接）合并为 50ms 批量单通道推送，
 // 减少渲染进程 IPC 唤醒频率，降低主/渲染进程通信开销。
 const STATE_FLUSH_INTERVAL = 50;
 
@@ -26,7 +26,7 @@ function pushSidebarState(patch) {
   }
 }
 
-/** 合并缓冲并一次性推送给状态面板 */
+/** 合并缓冲并一次性推送（状态面板 + 设置窗口同时接收） */
 function flushSidebarState() {
   state.stateFlushTimer = null;
   const snap = {};
@@ -39,9 +39,15 @@ function flushSidebarState() {
     snap.state = state.stateBuffer.status.state || '';
   }
   if (state.stateBuffer.token !== null) snap.token = state.stateBuffer.token;
-  state.stateBuffer = { emotion: null, status: null, token: null };
+  if (state.stateBuffer.connected !== null) snap.connected = state.stateBuffer.connected;
+  state.stateBuffer = { emotion: null, status: null, token: null, connected: null };
   if (Object.keys(snap).length > 0) {
+    // 状态面板
     state.sidebarWindow?.webContents.send('sidebar:state-snapshot', snap);
+    // 设置窗口（Token / 连接状态）
+    state.settingsWindow?.webContents.send('settings:state-snapshot', snap);
+    // 聊天窗口（连接状态，驱动断线提示条）
+    state.chatWindow?.webContents.send('chat:state-snapshot', snap);
     // 同步情绪到 Live2D 窗口，驱动 SDK 表情/动作系统
     if (snap.feeling) {
       state.live2dWindow?.webContents.send('live2d:emotion', {

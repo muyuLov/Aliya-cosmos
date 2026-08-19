@@ -41,7 +41,7 @@ export default defineConfig({
   ],
   root: __dirname,
   base: './',
-  // 多入口：状态面板（sidebar.html）+ Live2D 透明窗口（live2d.html）
+  // 多入口：状态面板（sidebar.html）+ Live2D 透明窗口（live2d.html）+ 设置窗口（settings.html）+ 聊天窗口（chat.html）
   build: {
     outDir: 'dist',
     emptyOutDir: true,
@@ -54,6 +54,8 @@ export default defineConfig({
       input: {
         sidebar: path.resolve(__dirname, 'sidebar.html'),
         live2d: path.resolve(__dirname, 'live2d.html'),
+        settings: path.resolve(__dirname, 'settings.html'),
+        chat: path.resolve(__dirname, 'chat.html'),
       },
       output: {
         // 依赖拆分：vue/pinia 与 pixi/live2d 各自独立 chunk，便于缓存与并行加载
@@ -64,10 +66,13 @@ export default defineConfig({
           ) {
             return 'pixi-vendor';
           }
+          // vue/pinia/@vue 与 naive-ui 合并为一个 chunk：
+          // naive-ui 运行时依赖 vue，单独拆分会产生循环 chunk 警告
           if (
             id.includes('node_modules/vue') ||
             id.includes('node_modules/pinia') ||
-            id.includes('node_modules/@vue')
+            id.includes('node_modules/@vue') ||
+            id.includes('node_modules/naive-ui')
           ) {
             return 'vue-vendor';
           }

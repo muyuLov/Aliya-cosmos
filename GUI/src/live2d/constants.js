@@ -80,6 +80,12 @@ export const LIP_SYNC_CONFIG = {
 export const IDLE_FPS = 20;
 export const ACTIVE_FPS = 60;
 
-// ========== 工具栏 ==========
-/** 鼠标停止移动后延迟隐藏 */
-export const TOOLBAR_HIDE_DELAY = 2000;
+// ========== 工具栏触发 ==========
+// 工具栏仅由「右键点击模型区域」打开并固定显示（桌面宠物标准交互），
+// 关闭方式：点击工具栏外部 / 光标移出窗口 / 点击按钮后自动收起。
+export const TOOLBAR = {
+  /** 点击工具栏按钮后自动收起的延迟 */
+  hideDelay: 800,
+  /** 右键打开后是否固定显示（true=保持显示，直到点击外部/移出窗口） */
+  contextPin: true,
+};

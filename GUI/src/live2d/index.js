@@ -11,7 +11,7 @@ import { SoullinkRuntime, getVADPreset } from '@soullink-emotion/engine';
 import { Live2DRenderer, createScriptTagCubismLoader } from '@soullink-emotion/live2d-pixi';
 import { AKULU_PROFILE } from './profile.js';
 import { resolveEmotion } from './emotion-map.js';
-import { LAYOUT, PHYSICS, LIP_SYNC_CONFIG, TOOLBAR_HIDE_DELAY } from './constants.js';
+import { LAYOUT, PHYSICS, LIP_SYNC_CONFIG, TOOLBAR } from './constants.js';
 import '../styles/live2d.css';
 
 // pixi-live2d-display/cubism4 内部需通过 window.PIXI 访问 PixiJS 核心 API
@@ -143,18 +143,42 @@ function applyMouseGaze() {
 
 // ---------- 事件处理 ----------
 
+/**
+ * 右键点击模型区域 → 打开工具栏并固定显示（主入口，桌面宠物标准交互）。
+ * 固定模式下保持显示，直到点击工具栏外部或光标移出窗口。
+ */
+function onContextMenu(e) {
+  e.preventDefault();
+  toolbarPinned = true;
+  hidePicker();
+  showToolbar();
+}
+
+/** 点击工具栏/面板外部 → 关闭固定模式（并收起工具栏） */
+const toolbarOutsideClickHandler = (e) => {
+  if (toolbar.contains(e.target) || picker.contains(e.target)) return;
+  if (toolbarPinned) {
+    toolbarPinned = false;
+    hideToolbarImmediate();
+  }
+};
+
+/** 光标移出窗口：复位注视并退出固定模式 */
+function onPointerOutside() {
+  pointer.active = false;
+  applyMouseGaze();
+  toolbarPinned = false; // 光标移出窗口 → 退出固定模式
+  hideToolbarImmediate();
+}
+
+/** 本地 mousemove：驱动注视平滑跟随，并处理面板自动关闭 */
 function onPointerMove(e) {
   const now = performance.now();
   pointer.x = e.clientX;
   pointer.y = e.clientY;
   pointer.active = true;
   pointer.lastMove = now;
-
   applyMouseGaze();
-
-  // 鼠标在窗口内时显示操作栏，停 2s 后自动隐藏
-  showToolbar();
-  hideToolbar(TOOLBAR_HIDE_DELAY);
 
   // 面板打开时：鼠标不在面板/工具栏内 → 延迟关闭
   if (!picker.classList.contains('picker--hidden')) {
@@ -166,21 +190,18 @@ function onPointerMove(e) {
   }
 }
 
-function onPointerLeave() {
-  pointer.active = false;
-  applyMouseGaze();
-  // 鼠标离开窗口时隐藏操作栏
-  hideToolbar(0);
-}
-
 // ========== 顶部操作栏 ==========
 
 const toolbar = document.getElementById('toolbar');
 let toolbarTimer = null;
 let isPinned = true;
+/** 右键固定模式：true 时工具栏保持显示，直到点击外部/移出窗口 */
+let toolbarPinned = false;
 
 /** toolbar mouseleave 处理器引用，用于 cleanup */
-const onToolbarMouseLeave = () => hideToolbar();
+const onToolbarMouseLeave = () => {
+  if (!toolbarPinned) scheduleHideToolbar();
+};
 
 /** 面板外部点击关闭的 handler，直接声明为 const 以避免运行时赋值问题 */
 const pickerCloseHandler = (e) => {
@@ -194,13 +215,21 @@ function showToolbar() {
   toolbar.classList.remove('toolbar--hidden');
 }
 
-function hideToolbar(delay) {
-  if (toolbarTimer) clearTimeout(toolbarTimer);
+/** 启动工具栏隐藏倒计时（已计时中不重置，避免 mousemove 高频重置导致永不隐藏） */
+function scheduleHideToolbar(delay = TOOLBAR.hideDelay) {
+  if (toolbarTimer) return;
   toolbarTimer = setTimeout(() => {
+    toolbarTimer = null;
     if (!toolbar.matches(':hover')) {
       toolbar.classList.add('toolbar--hidden');
     }
-  }, delay ?? TOOLBAR_HIDE_DELAY);
+  }, delay);
+}
+
+/** 立即隐藏工具栏（无倒计时） */
+function hideToolbarImmediate() {
+  if (toolbarTimer) { clearTimeout(toolbarTimer); toolbarTimer = null; }
+  toolbar.classList.add('toolbar--hidden');
 }
 
 // ========== 模型切换面板 ==========
@@ -250,7 +279,7 @@ async function loadProviderList() {
         loadProviderList();
       }
       hidePicker();
-      hideToolbar(800);
+      scheduleHideToolbar(800);
     });
   });
 }
@@ -291,7 +320,11 @@ function setupToolbar() {
           btn.classList.toggle('is-pinned', isPinned);
           break;
       }
-      hideToolbar(800);
+      // 操作完成：退出固定模式并自动收起（重新打开需再次右键）
+      if (toolbarPinned) {
+        toolbarPinned = false;
+      }
+      scheduleHideToolbar(800);
     });
   });
 
@@ -355,6 +388,8 @@ let lastClickTime = 0;
 let lastReactionAt = 0;
 
 function onMouseDown(e) {
+  // 仅左键触发拖动/点击；右键用于打开工具栏（onContextMenu）
+  if (e.button !== 0) return;
   // 在工具栏或面板上按下时不触发拖动
   if (toolbar.contains(e.target) || picker.contains(e.target)) return;
   pressX = e.clientX;
@@ -381,7 +416,9 @@ function onMouseMove(e) {
   }
 }
 
-function onMouseUp() {
+function onMouseUp(e) {
+  // 仅左键参与拖动/点击判定（右键用于打开工具栏）
+  if (e.button !== 0) return;
   isDragging = false;
   const now = performance.now();
   // 位移小且时间短 → 视为点击，触发互动反应
@@ -484,11 +521,17 @@ async function init() {
       runtime.setPrivateVADParameters(paramMeta);
     }
 
-    stage.addEventListener('pointermove', onPointerMove);
-    stage.addEventListener('pointerleave', onPointerLeave);
-    stage.addEventListener('mousedown', onMouseDown);
+    // 鼠标事件（窗口始终可交互，本地事件全部可达）
+    window.addEventListener('mousemove', onPointerMove);
+    // 拖动（mousedown 按住后移动）在 stage 级监听
     stage.addEventListener('mousemove', onMouseMove);
+    stage.addEventListener('mouseleave', onPointerOutside);
+    stage.addEventListener('mousedown', onMouseDown);
     stage.addEventListener('mouseup', onMouseUp);
+    // 右键点击模型 → 打开工具栏（主入口，桌面宠物标准交互）
+    stage.addEventListener('contextmenu', onContextMenu);
+    // 点击工具栏/面板外部 → 关闭固定模式
+    window.addEventListener('pointerdown', toolbarOutsideClickHandler);
 
     // ---- 操作栏 ----
     setupToolbar();
@@ -518,11 +561,13 @@ function cleanup() {
   if (pickerTimer) { clearTimeout(pickerTimer); pickerTimer = null; }
   if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; }
 
-  try { stage.removeEventListener('pointermove', onPointerMove); } catch {}
-  try { stage.removeEventListener('pointerleave', onPointerLeave); } catch {}
-  try { stage.removeEventListener('mousedown', onMouseDown); } catch {}
+  try { window.removeEventListener('mousemove', onPointerMove); } catch {}
   try { stage.removeEventListener('mousemove', onMouseMove); } catch {}
+  try { stage.removeEventListener('mouseleave', onPointerOutside); } catch {}
+  try { stage.removeEventListener('mousedown', onMouseDown); } catch {}
   try { stage.removeEventListener('mouseup', onMouseUp); } catch {}
+  try { stage.removeEventListener('contextmenu', onContextMenu); } catch {}
+  try { window.removeEventListener('pointerdown', toolbarOutsideClickHandler); } catch {}
   try { stage.removeEventListener('pointerdown', pickerCloseHandler); } catch {}
   try { toolbar.removeEventListener('mouseenter', showToolbar); } catch {}
   try { toolbar.removeEventListener('mouseleave', onToolbarMouseLeave); } catch {}
