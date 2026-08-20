@@ -67,7 +67,7 @@ cosmos:
       mcp:
         config_path: data/config/MCPServers.json  # MCP 服务器列表文件（JSON 数组，每项含 name/transport/command/url/enabled）
 
-      # ── 渠道配置（M4 多渠道接入）─────────────────────────
+      # ── 渠道配置（多渠道接入）─────────────────────────
       channels:
         feishu:
           enabled: false              # 默认关闭，显式开启
