@@ -138,6 +138,34 @@ class TestVectorStore:
         store = _make_store()
         assert store.delete("not-exist") is False
 
+    async def test_find_ids_by_text(self):
+        store = _make_store()
+        iid1 = await store.add("咖啡", metadata={"layer": "semantic"})
+        await store.add("咖啡拿铁", metadata={"layer": "episodic"})
+        ids = store.find_ids(text="咖啡")
+        assert ids == [iid1]  # 文本精确匹配，不匹配子串
+
+    async def test_find_ids_by_metadata(self):
+        store = _make_store()
+        iid = await store.add("咖啡", metadata={"layer": "semantic", "key": "偏好"})
+        await store.add("咖啡", metadata={"layer": "episodic"})
+        ids = store.find_ids(metadata={"layer": "semantic", "key": "偏好"})
+        assert ids == [iid]
+
+    async def test_find_ids_unrestricted(self):
+        store = _make_store()
+        await store.add_many([{"text": "a"}, {"text": "b"}])
+        assert len(store.find_ids()) == 2
+        assert len(store.find_ids(text="不存在")) == 0
+
+    async def test_delete_many(self):
+        store = _make_store()
+        ids = await store.add_many([{"text": "a"}, {"text": "b"}, {"text": "c"}])
+        deleted = store.delete_many(ids[:2] + ["not-exist"])
+        assert deleted == 2
+        assert store.count == 1
+        assert store.get(ids[2]) is not None
+
     async def test_clear(self):
         store = _make_store()
         await store.add_many([{"text": "a"}, {"text": "b"}])

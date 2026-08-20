@@ -61,6 +61,10 @@ _WORKING_HALF_LIFE = 5 * 60  # 5 分钟
 _LONG_TERM_HALF_LIFE = 7 * 24 * 60 * 60  # 7 天
 # 自适应更新：超过此秒数未访问且热度低 → 降权
 _ADAPT_INACTIVITY = 7 * 24 * 60 * 60  # 7 天
+# 遗忘阈值：衰减后数值低于此值视为"被遗忘"，由 apply_forgetting 清理
+_MEMORY_FORGET_THRESHOLD = 0.1
+# 元记忆热度半衰期（秒）：热度随时间衰减
+_META_HALF_LIFE = 30 * 24 * 60 * 60  # 30 天
 # 层级优先级权重（recall 排序用）
 _LAYER_PRIORITY = {
     "sensory": 0.6,
@@ -734,7 +738,8 @@ class HierarchicalMemory:
         """写入程序记忆 → 自动同步到向量索引。"""
         self.procedural.learn(name, steps, domain=domain, success_rate=success_rate)
         text = f"{name}: {'→'.join(steps)}" if steps else name
-        self._sync_to_vector(text, metadata={"layer": "procedural", "domain": domain})
+        # metadata 携带 name，供遗忘时精确删除对应向量条目
+        self._sync_to_vector(text, metadata={"layer": "procedural", "domain": domain, "name": name})
 
     # ── 统一召回 ──────────────────────────────────────────────────────────
 
@@ -916,6 +921,207 @@ class HierarchicalMemory:
     async def build_context_async(self, query: str = "", limit: int = 5) -> list[str]:
         """异步版上下文构建：含向量语义增强的完整召回。"""
         return self._hits_to_context(await self.recall_async(query=query, limit=limit))
+
+    # ── 实体记忆属性聚合（供图节点挂载）────────────────────────────────────
+
+    def collect_entity_memory_attrs(self, entity_name: str) -> dict:
+        """聚合实体相关的五层记忆属性，供挂载到图数据库 Entity 节点。
+
+        图节点以五元组承载实体关系，本身不含记忆层信息；此方法把五层
+        层次化记忆中与该实体相关条目的层信息 / 重要性 / 置信度等聚合成
+        属性字典，由 graph.store_quintuples 的 ``memory_attrs_by_entity``
+        参数写入节点，使图记忆同时反映五层记忆的状态。
+
+        Returns:
+            形如 ``{"layers": "episodic;semantic", "importance": 0.8, ...}``
+            的属性字典；实体未命中任何记忆层时返回空 dict。
+        """
+        name = (entity_name or "").strip()
+        if not name:
+            return {}
+        lower = name.lower()
+
+        layers: set[str] = set()
+        importance = 0.0        # 情景层
+        confidence = 0.0        # 语义层
+        success_rate = 0.0      # 程序层
+        attention_weight = 0.0  # 工作层
+        access_count = 0        # 各层访问计数
+        heat = 0.0              # 元记忆热度
+
+        # 工作层：内容包含实体的记忆块
+        for chunk in self.working.recall_chunks():
+            if lower in chunk.content.lower() or chunk.content.lower() in lower:
+                layers.add("working")
+                attention_weight = max(attention_weight, chunk.attention_weight)
+                access_count += chunk.access_count
+
+        # 情景层：内容包含实体的事件
+        for rec in self.episodic.recall(limit=_EPISODIC_CAPACITY):
+            if lower in rec.content.lower():
+                layers.add("episodic")
+                importance = max(importance, rec.importance)
+                access_count += rec.access_count
+
+        # 语义层：key / value 匹配的事实
+        for fact in self.semantic.search(name, limit=50):
+            layers.add("semantic")
+            confidence = max(confidence, fact.confidence)
+            access_count += fact.access_count
+
+        # 程序层：名称 / 领域匹配的技能
+        for skill in self.procedural.iter_all():
+            if lower in skill.name.lower() or lower in skill.domain.lower():
+                layers.add("procedural")
+                success_rate = max(success_rate, skill.success_rate)
+                access_count += skill.access_count
+
+        # 元记忆：热度取各命中层中的最大值
+        for layer in layers:
+            rec = self.meta.get(name, layer)
+            if rec is not None:
+                heat = max(heat, rec.heat)
+
+        if not layers:
+            return {}
+        return {
+            "layers": ";".join(sorted(layers)),
+            "importance": round(importance, 3),
+            "confidence": round(confidence, 3),
+            "success_rate": round(success_rate, 3),
+            "attention_weight": round(attention_weight, 3),
+            "access_count": access_count,
+            "heat": round(heat, 3),
+        }
+
+    # ── 遗忘机制 ──────────────────────────────────────────────────────────
+
+    def apply_forgetting(self) -> dict:
+        """统一遗忘：各层数值按 Ebbinghaus 曲线随未访问时长永久衰减。
+
+        召回（recall）阶段的 Ebbinghaus 因子只在排序时临时生效，记忆数值
+        本身不衰减；此方法执行真正的遗忘：
+          - 情景记忆：importance 按基准半衰期（1 天）衰减；
+          - 语义记忆：confidence 按长期半衰期（7 天）衰减；
+          - 程序记忆：success_rate 按长期半衰期（7 天）衰减；
+          - 元记忆：heat 按长期半衰期（30 天）衰减；
+        衰减后数值低于 ``_MEMORY_FORGET_THRESHOLD`` 的条目被移除。
+
+        Returns:
+            遗忘动作统计（各层衰减 / 清理计数 + 向量索引清理数）。
+        """
+        now = time.time()
+        stats = {
+            "episodic_decayed": 0,
+            "episodic_forgotten": 0,
+            "semantic_decayed": 0,
+            "semantic_forgotten": 0,
+            "procedural_decayed": 0,
+            "procedural_forgotten": 0,
+            "meta_decayed": 0,
+            "meta_forgotten": 0,
+            "vector_purged": 0,
+        }
+        # 被遗忘条目标识：(layer, content_or_key)，用于向量索引联动清理
+        forgotten_items: list[tuple[str, str]] = []
+
+        # 情景层：importance 衰减 + 清理被遗忘事件
+        for rec in list(self.episodic._records):
+            age = max(0.0, now - rec.last_access_at)
+            rec.importance *= _ebbinghaus_factor(age, _FORGET_HALF_LIFE)
+            stats["episodic_decayed"] += 1
+            if rec.importance < _MEMORY_FORGET_THRESHOLD:
+                self.episodic._records.remove(rec)
+                stats["episodic_forgotten"] += 1
+                forgotten_items.append(("episodic", rec.content))
+
+        # 语义层：confidence 衰减 + 清理被遗忘事实
+        for fact in list(self.semantic.iter_all()):
+            age = max(0.0, now - fact.last_access_at)
+            fact.confidence *= _ebbinghaus_factor(age, _LONG_TERM_HALF_LIFE)
+            stats["semantic_decayed"] += 1
+            if fact.confidence < _MEMORY_FORGET_THRESHOLD:
+                del self.semantic._facts[fact.key]
+                stats["semantic_forgotten"] += 1
+                forgotten_items.append(("semantic", fact.key))
+
+        # 程序层：success_rate 衰减 + 清理被遗忘技能
+        for skill in list(self.procedural.iter_all()):
+            age = max(0.0, now - skill.last_access_at)
+            skill.success_rate *= _ebbinghaus_factor(age, _LONG_TERM_HALF_LIFE)
+            stats["procedural_decayed"] += 1
+            if skill.success_rate < _MEMORY_FORGET_THRESHOLD:
+                del self.procedural._skills[skill.name]
+                stats["procedural_forgotten"] += 1
+                forgotten_items.append(("procedural", skill.name))
+
+        # 元记忆：heat 衰减 + 清理
+        for key in list(self.meta._records):
+            rec = self.meta._records[key]
+            age = max(0.0, now - rec.last_access_at)
+            rec.heat *= _ebbinghaus_factor(age, _META_HALF_LIFE)
+            stats["meta_decayed"] += 1
+            if rec.heat < _MEMORY_FORGET_THRESHOLD:
+                del self.meta._records[key]
+                stats["meta_forgotten"] += 1
+
+        # 元记忆修剪：清理已消失条目的元记录
+        self.meta.prune(self._collect_active_keys())
+        # 向量索引联动：删除被遗忘条目，避免"幽灵记忆"仍能被向量召回
+        stats["vector_purged"] = self._purge_vector_forgotten(forgotten_items)
+        return stats
+
+    def _purge_vector_forgotten(self, items: list[tuple[str, str]]) -> int:
+        """从向量索引移除被遗忘条目，返回清理数。
+
+        匹配策略（与 _sync_to_vector 的 metadata/text 一一对应）：
+          - semantic:    metadata ``layer=semantic`` + ``key=条目key``；
+          - procedural:  metadata ``layer=procedural`` + ``name=条目名``；
+          - episodic:    文本精确等于事件内容（metadata 无内容标识）。
+
+        同步遍历内存存储删除（低频维护操作，可接受）；同时清理
+        ``_pending_sync`` 中尚未入库的匹配文本，避免"写入后被遗忘却仍入库"。
+        """
+        if not items:
+            return 0
+        store = self._ensure_vector_store()
+        if store is None:
+            return 0
+
+        purged = 0
+        # 情景/程序层需从 _pending_sync 中移除未入库文本
+        pending_filtered: list[tuple[str, dict]] = []
+        for text, metadata in self._pending_sync:
+            layer = metadata.get("layer")
+            match = (
+                layer == "episodic"
+                and any(text == it[1] for it in items if it[0] == "episodic")
+            ) or (
+                layer == "procedural"
+                and any(metadata.get("name") == it[1] for it in items if it[0] == "procedural")
+            ) or (
+                layer == "semantic"
+                and any(metadata.get("key") == it[1] for it in items if it[0] == "semantic")
+            )
+            if match:
+                purged += 1  # 尚未入库，从队列移除即视为清理
+            else:
+                pending_filtered.append((text, metadata))
+        self._pending_sync = pending_filtered
+
+        for layer, content_or_key in items:
+            try:
+                if layer == "semantic":
+                    ids = store.find_ids(metadata={"layer": "semantic", "key": content_or_key})
+                elif layer == "procedural":
+                    ids = store.find_ids(metadata={"layer": "procedural", "name": content_or_key})
+                else:  # episodic
+                    ids = store.find_ids(text=content_or_key)
+                if ids:
+                    purged += store.delete_many(ids)
+            except Exception as e:
+                logger.debug("[Memory] 遗忘清理向量条目失败(%s): %s", content_or_key, e)
+        return purged
 
     # ── 巩固机制 ──────────────────────────────────────────────────────────
 

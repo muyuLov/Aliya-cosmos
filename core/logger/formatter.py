@@ -5,6 +5,20 @@ import logging
 from datetime import datetime, timezone
 from typing import ClassVar
 
+
+def _safe_ts(record: logging.LogRecord) -> str:
+    """安全生成时间戳字符串。
+
+    解释器关闭期间（Python shutting down）datetime 模块可能已被清理，
+    直接 import/调用会抛 ImportError；此处回退到原始时间戳值。
+    """
+    try:
+        return datetime.fromtimestamp(
+            record.created, tz=timezone.utc
+        ).strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return f"{record.created:.3f}"
+
 # ── ANSI 样式常量 ────────────────────────────────────────────────────────────
 _RESET = "\033[0m"
 _BOLD = "\033[1m"
@@ -65,7 +79,7 @@ class StructuredFormatter(logging.Formatter):
         Returns:
             格式化后的日志字符串。
         """
-        ts = datetime.fromtimestamp(record.created, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        ts = _safe_ts(record)
         # 固定 20 字符宽度：保证各列对齐，超长线程名截断以防破坏布局
         thread_raw = record.threadName or ""
         thread_name = f"{thread_raw[:20]:<20}"
@@ -136,7 +150,7 @@ class JSONFormatter(logging.Formatter):
         Returns:
             JSON 格式的日志字符串。
         """
-        ts = datetime.fromtimestamp(record.created, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        ts = _safe_ts(record).replace(" ", "T") + "Z"
         payload: dict = {
             "timestamp": ts,
             "thread": record.threadName,

@@ -30,6 +30,21 @@ logger = get_logger(__name__)
 QuintupleType = Tuple[str, str, str, str, str]
 
 
+def _consume_future_exception(fut: asyncio.Future) -> None:
+    """消费 future 上未被检索的异常，避免解释器关闭时的 asyncio 警告。
+
+    调用方可能从不 await get_task_result()（如仅通过 on_task_completed 回调
+    处理结果），此时失败任务的 future 异常永远无人检索，事件循环关闭时
+    asyncio 会报 "Future exception was never retrieved"。此回调读取（并消费）
+    异常，不改变 future 状态，await 方仍能正常收到异常。
+    """
+    if fut.done() and not fut.cancelled():
+        try:
+            fut.exception()
+        except asyncio.CancelledError:
+            pass
+
+
 class TaskStatus(Enum):
     """任务状态枚举"""
     PENDING = "pending"
@@ -347,6 +362,10 @@ class QuintupleTaskManager:
             return None, task.error or "任务失败", None
         except asyncio.TimeoutError:
             return None, "任务超时", None
+        except Exception as e:
+            # future 以异常结束（worker 刚失败/被取消）而非正常 set_result
+            return None, str(e) or "任务失败", None
+            return None, "任务超时", None
         except asyncio.CancelledError:
             return None, "任务被取消", None
 
@@ -430,6 +449,10 @@ class QuintupleTaskManager:
                         except asyncio.InvalidStateError:
                             # cancel_task 已在竞态中先行取消 future
                             pass
+                        # 消费未被检索的异常：调用方可能从不 await get_task_result()，
+                        # 若 future 以异常结束且无人检索，解释器关闭时会触发
+                        # "Future exception was never retrieved" 警告。
+                        task.future.add_done_callback(_consume_future_exception)
 
                 # 触发回调
                 if task.status == TaskStatus.COMPLETED and self.on_task_completed:

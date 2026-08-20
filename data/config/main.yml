@@ -34,21 +34,6 @@ cosmos:
       # ── Agent 权限配置 ──────────────────────────────────
       permissions:
         config_path: data/config/Permissions.yml  # 权限配置文件
-      # max_soul_retries: 2         # 净化失败重试次数（调用超时不重试）
-      # ── 情感系统配置（SDK EmotionPersonality，可选） ──────────────────
-      emotion:
-        classifier: auto              # 情绪分类方式: rule（不创建向量分类器）/ vector / auto（auto 在向量可用时语义分类）
-        # max_samples_per_emotion: 30  # 每类情绪最多向量化入库的样本数（0=全量；调大提升近邻覆盖、调小缩短入库耗时）
-        # 情绪人格参数（不设置则用 SDK 默认值）：
-        # reactivity: 1.0              # 情绪响应性（0.2-2.5）
-        # decayRate: 0.018             # 情绪衰减速率（0.002-0.4）
-        # emotionHoldSeconds: 18.0     # 情绪保持时长（0-90 秒）
-        # ambientDriftStrength: 0.034  # 环境漂移幅度（0-0.09，0 关闭）
-        # emotionBias: {}              # 情绪偏置（按情绪名放大/缩小推入量）
-      # ── 认知引擎配置（LAAP 认知架构：PSI 需求驱动 + 五层记忆 + 世界模型 + 自我模型） ──
-      cognition:
-        enabled: true                  # 认知引擎总开关
-        maintenance_interval: 10       # 自主维护触发间隔（交互次数）
     # ── GRAG 图记忆系统 ────────────────────────────────
     grag:
       enabled: true                    # 启用记忆系统
@@ -91,7 +76,7 @@ cosmos:
     llm:
       # 支持 ${ENV_VAR} 和 ${ENV_VAR:default} 语法引用环境变量
       providers:
-        name: deepseek                 # 当前使用的提供商名
+        name: opencode zen                 # 当前使用的提供商名
         config_path: data/config/LLMProviders.json  # 提供商配置文件
       history_max_chars: 90000         # 消息历史字符数阈值，超限时移除最旧消息
       cot_enabled: true                # 思维链（CoT）模式: true=启用, false=禁用

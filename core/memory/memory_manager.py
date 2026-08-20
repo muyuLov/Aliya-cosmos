@@ -18,6 +18,7 @@ from core.logger import get_logger
 from core.memory.config import get_grag_config
 # GRAG 异常类（预备供未来细粒度异常处理使用）
 from core.memory import extractor, graph, rag_query, task_manager as task_manager_module
+from core.memory.hierarchical import HierarchicalMemory
 
 logger = get_logger(__name__)
 
@@ -26,6 +27,10 @@ QuintupleType = Tuple[str, str, str, str, str]
 
 # recent_context 字符数上限（与 context_length 条数上线并行约束）
 _MAX_CONTEXT_CHARS = 100000
+# 遗忘检查间隔：每 N 次对话触发一次内存层遗忘衰减
+_FORGET_CHECK_INTERVAL = 20
+# 遗忘检查时间上限：距上次遗忘超过该秒数时，即使对话次数不足也触发
+_FORGET_MAX_INTERVAL = 24 * 60 * 60  # 24 小时
 
 
 class GRAGMemoryManager:
@@ -81,6 +86,15 @@ class GRAGMemoryManager:
         # 进行中（已提交但未完成）的文本哈希，用于去重
         self._inflight_hashes: set = set()
 
+        # 五层层次化记忆（感知/工作/情景/语义/程序 + 元记忆）：
+        # 随 GRAG 对话记忆一并写入；五元组落库时把实体相关的五层记忆
+        # 属性（层/重要性/置信度等）挂载到图数据库 Entity 节点。
+        self.hierarchical: HierarchicalMemory = HierarchicalMemory(enable_vector=True)
+        # 遗忘维护状态：对话计数（达到 _FORGET_CHECK_INTERVAL 触发内存遗忘）与上次维护时间戳
+        self._conversation_count: int = 0
+        self._last_forgetting_at: float = 0.0
+        self._last_forgetting_stats: Dict[str, Any] = {}
+
         if not self.enabled:
             logger.info("GRAG 记忆系统已禁用")
             return
@@ -129,11 +143,27 @@ class GRAGMemoryManager:
             conversation_text = f"{self.user_name}: {user_input}\n{self.ai_name}: {ai_response}"
             logger.info(f"添加对话记忆: \n{conversation_text[:50]}...")
 
+            # 五层层次化记忆写入：感知/工作为会话级瞬态层，情景记录本轮事件；
+            # consolidate 触发跨层巩固（重复经验固化为语义/程序记忆）。
+            self.hierarchical.buffer_sensory(user_input, weight=0.8, channel="user")
+            self.hierarchical.buffer_sensory(ai_response, weight=0.8, channel="aliya")
+            self.hierarchical.attend(user_input, weight=0.8)
+            self.hierarchical.attend(ai_response, weight=0.8)
+            self.hierarchical.remember_episode(
+                conversation_text, importance=0.5, context="conversation"
+            )
+            self.hierarchical.consolidate()
+
+            # 周期触发遗忘维护：计数（对话次数）或时间（距上次维护超时）满足即执行
+            self._conversation_count += 1
+            await self._maybe_run_forgetting()
+
             self.recent_context.append(conversation_text)
             self._context_char_count += len(conversation_text)
             self._trim_context_by_chars()
 
-            for tl in timeline.split("|") if timeline else ["aliya"]:
+            # 默认双写 aliya|user 双平行时间链（记忆同时属于千年后 Aliya 与当下用户）
+            for tl in timeline.split("|") if timeline else ["aliya", "user"]:
                 tl = tl.strip()
                 logger.debug(f"提交时间链任务: timeline={tl}")
                 if not self.auto_extract:
@@ -252,9 +282,15 @@ class GRAGMemoryManager:
             )
 
             if not task.result:
+                # 提取结果为 0 个五元组：仍确保该天的时间链节点存在，
+                # 避免"某天有对话但时间链断裂"（日期本身代表对话发生过）。
+                if task.day_date and task.timeline:
+                    await graph.touch_day_async(task.day_date, task.timeline)
                 return
 
             # 存储到图谱（使用异步接口，携带 source_text、session_id、day_date 和 timeline）
+            # 五元组涉及的实体一并挂载五层记忆属性到 Entity 节点
+            memory_attrs_by_entity = self._collect_memory_attrs_for_quintuples(task.result)
             success = await graph.store_quintuples_async(
                 task.result,
                 source_text=task.source_text,
@@ -262,6 +298,7 @@ class GRAGMemoryManager:
                 day_date=task.day_date,
                 timeline=task.timeline,
                 categories=task.result_categories,
+                memory_attrs_by_entity=memory_attrs_by_entity,
             )
             if success:
                 logger.info("成功存储 %d 个五元组到图谱", len(task.result))
@@ -272,6 +309,24 @@ class GRAGMemoryManager:
 
         except Exception as e:
             logger.error("任务完成回调处理失败: %s", e)
+
+    def _collect_memory_attrs_for_quintuples(
+        self, quintuples: List[QuintupleType]
+    ) -> Dict[str, Dict]:
+        """为五元组涉及的实体收集五层记忆属性（供图节点挂载）。
+
+        遍历五元组的 head/tail 实体名，在五层层次化记忆中聚合每层属性，
+        返回 ``{实体名: 属性dict}`` 映射；无匹配的实体不出现。
+        """
+        attrs: Dict[str, Dict] = {}
+        for head, _head_type, _rel, tail, _tail_type in quintuples:
+            for entity_name in (head, tail):
+                if not entity_name or entity_name in attrs:
+                    continue
+                mem_attrs = self.hierarchical.collect_entity_memory_attrs(entity_name)
+                if mem_attrs:
+                    attrs[entity_name] = mem_attrs
+        return attrs
 
     async def query_memory(self, question: str) -> Optional[str]:
         """
@@ -325,11 +380,113 @@ class GRAGMemoryManager:
                 [query], limit=limit,
                 similarity_threshold=cfg.similarity_threshold,
             )
-            return quintuples[:limit]
+            hits = quintuples[:limit]
+            logger.info("相关记忆检索（query=%s）: 命中 %d 条", query, len(hits))
+            for idx, item in enumerate(hits, 1):
+                h, ht, rel, t, tt = (str(item[0]), str(item[1]), str(item[2]), str(item[3]), str(item[4]))
+                logger.info("  记忆 #%d: %s(%s) —[%s]-> %s(%s)", idx, h, ht, rel, t, tt)
+            return hits
 
         except Exception as e:
             logger.error(f"获取相关记忆失败: {e}")
             return []
+
+    async def _maybe_run_forgetting(self) -> bool:
+        """按周期触发遗忘维护（对话写入时调用）。
+
+        触发条件（满足其一）：
+          - 计数驱动：对话次数达到 ``_FORGET_CHECK_INTERVAL``；
+          - 时间驱动：距上次维护超过 ``_FORGET_MAX_INTERVAL``（24 小时），
+            保证对话不频繁时记忆仍会定期衰减清理。
+
+        自动路径只做内存层遗忘 + 图节点属性衰减（不主动删除节点，
+        避免在交互主路径误删知识图谱），结果记录到 ``_last_forgetting_stats``。
+
+        Returns:
+            是否执行了本次维护。
+        """
+        now = time.time()
+        # 首次对话仅初始化时间基准：空记忆上执行遗忘衰减没有意义，
+        # 后续才按"距上次维护超时"驱动。
+        if self._last_forgetting_at == 0.0:
+            self._last_forgetting_at = now
+            return False
+        interval_elapsed = (now - self._last_forgetting_at) >= _FORGET_MAX_INTERVAL
+        count_reached = self._conversation_count % _FORGET_CHECK_INTERVAL == 0
+        if not (interval_elapsed or count_reached):
+            return False
+
+        try:
+            stats: Dict[str, Any] = {
+                "in_memory": self.hierarchical.apply_forgetting(),
+                "graph": {},
+            }
+            try:
+                stats["graph"]["decayed_nodes"] = await graph.decay_memory_nodes_async()
+            except Exception as e:
+                # 图节点衰减失败不阻塞交互主路径
+                logger.warning("自动遗忘的图节点衰减失败（忽略）: %s", e)
+            try:
+                # 自动清理孤立 Entity 节点（无任何关系：入边/出边/[:ON_DAY]），
+                # 这些是写入被中断或外部删除关系后残留的无用节点。
+                stats["graph"]["orphans_removed"] = await graph.cleanup_orphan_entities_async()
+            except Exception as e:
+                logger.warning("自动清理孤立节点失败（忽略）: %s", e)
+            self._last_forgetting_at = now
+            self._last_forgetting_stats = stats
+            logger.info("自动遗忘维护完成: %s", stats)
+            return True
+        except Exception as e:
+            logger.error("自动遗忘维护失败: %s", e)
+            return False
+
+    async def run_memory_forgetting(
+        self,
+        decay_nodes: bool = True,
+        prune_nodes: bool = True,
+        prune_threshold: float = 0.1,
+        cleanup_orphans: bool = True,
+    ) -> Dict[str, Any]:
+        """执行记忆遗忘维护：内存五层衰减 + 图节点遗忘操作。
+
+        - 内存层：``HierarchicalMemory.apply_forgetting()`` 永久衰减各层数值，
+          清理被遗忘条目（可由调用方按周期触发，或依赖 add_conversation_memory
+          内置的 _FORGET_CHECK_INTERVAL 计数触发）。
+        - 图节点：批量衰减 Entity 节点上挂载的 ``memory_*`` 属性
+          （decay_memory_nodes），清理强度低于阈值的被遗忘节点
+          （prune_memory_nodes，默认仅移除记忆属性，实体节点保留），
+          并清理孤立 Entity 节点（cleanup_orphans，DETACH DELETE 无用节点）。
+
+        Args:
+            decay_nodes: 是否执行图节点记忆属性衰减。
+            prune_nodes: 是否清理被遗忘的图节点。
+            prune_threshold: 被遗忘判定阈值（记忆强度低于该值）。
+            cleanup_orphans: 是否自动清理孤立 Entity 节点（无任何关系）。
+
+        Returns:
+            遗忘动作统计（内存层各层衰减/清理计数 + 图节点操作结果）。
+        """
+        if not self.enabled:
+            return {}
+
+        try:
+            in_memory = self.hierarchical.apply_forgetting()
+            graph_result: Dict[str, Any] = {}
+            if decay_nodes:
+                graph_result["decayed_nodes"] = await graph.decay_memory_nodes_async()
+            if prune_nodes:
+                graph_result["pruned_nodes"] = await graph.prune_memory_nodes_async(
+                    threshold=prune_threshold
+                )
+            if cleanup_orphans:
+                graph_result["orphans_removed"] = await graph.cleanup_orphan_entities_async()
+            self._last_forgetting_at = time.time()
+            self._last_forgetting_stats = {"in_memory": in_memory, "graph": graph_result}
+            logger.info("记忆遗忘维护完成: %s", self._last_forgetting_stats)
+            return self._last_forgetting_stats
+        except Exception as e:
+            logger.error(f"记忆遗忘维护失败: {e}")
+            return {"error": str(e)}
 
     def get_memory_stats(self) -> Dict[str, Any]:
         """
@@ -352,6 +509,10 @@ class GRAGMemoryManager:
                 "inflight_count": len(self.active_tasks),
                 "active_tasks": len(self.active_tasks),
                 "task_manager": task_stats,
+                "hierarchical": self.hierarchical.get_stats(),
+                "last_forgetting_at": self._last_forgetting_at,
+                "conversation_count": self._conversation_count,
+                "last_forgetting_stats": self._last_forgetting_stats,
             }
             if self._init_error:
                 ret["init_error"] = self._init_error
@@ -391,6 +552,11 @@ class GRAGMemoryManager:
             self._context_char_count = 0
             self.extraction_cache.clear()
             self._inflight_hashes.clear()
+            # 重置五层层次化记忆（各层从空会话开始）与遗忘维护状态
+            self.hierarchical = HierarchicalMemory(enable_vector=True)
+            self._conversation_count = 0
+            self._last_forgetting_at = 0.0
+            self._last_forgetting_stats = {}
 
             # 取消所有活跃任务
             mgr = self._get_task_manager()
@@ -400,6 +566,9 @@ class GRAGMemoryManager:
 
             # 清空图谱（使用异步接口）
             await graph.clear_all_quintuples_async()
+            # 二次保险：清理可能残留的孤立 Entity 节点（历史脏数据：
+            # 早期写入被中断、外部 Cypher DELETE r 未级联等场景留下无关系 Entity）
+            await graph.cleanup_orphan_entities_async()
 
             logger.info("记忆已清空")
             return True

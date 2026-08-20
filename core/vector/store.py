@@ -520,6 +520,54 @@ class VectorStore:
             self._milvus.delete(item_id)
         return True
 
+    def find_ids(
+        self,
+        text: str | None = None,
+        metadata: Dict[str, Any] | None = None,
+    ) -> List[str]:
+        """按文本与元数据精确匹配查找条目 ID（内存遍历，非索引查询）。
+
+        常用于定位待删除条目（如记忆遗忘清理）。text 为精确匹配；
+        metadata 的每个键值都需与条目元数据一致才算命中。
+
+        Args:
+            text:     精确匹配的条目文本；None 表示不限制。
+            metadata: 需全部命中的元数据键值对；None 表示不限制。
+
+        Returns:
+            命中的条目 ID 列表（顺序无保证）。
+        """
+        with self._lock:
+            return [
+                it.id
+                for it in self._items.values()
+                if (text is None or it.text == text)
+                and (
+                    metadata is None
+                    or all(it.metadata.get(k) == v for k, v in metadata.items())
+                )
+            ]
+
+    def delete_many(self, item_ids: Sequence[str]) -> int:
+        """批量删除条目（同步同步到 Milvus）。
+
+        Args:
+            item_ids: 待删除条目 ID 列表。
+
+        Returns:
+            实际删除的条目数（不存在的 ID 忽略）。
+        """
+        deleted = 0
+        with self._lock:
+            for iid in item_ids:
+                if iid in self._items:
+                    del self._items[iid]
+                    deleted += 1
+        if deleted and self._milvus is not None and self._milvus.enabled:
+            for iid in item_ids:
+                self._milvus.delete(iid)
+        return deleted
+
     def clear(self) -> None:
         """清空全部条目并重置维度（同步清空 Milvus 集合）。"""
         with self._lock:

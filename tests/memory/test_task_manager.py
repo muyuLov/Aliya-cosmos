@@ -10,6 +10,7 @@ import pytest
 from core.memory.task_manager import (
     QuintupleTaskManager,
     TaskStatus,
+    _consume_future_exception,
 )
 
 
@@ -73,7 +74,10 @@ class TestQuintupleTaskManager:
         await mgr.start()
 
         # Mock extractor to return quickly
-        with patch("core.memory.extractor.extract_quintuples", AsyncMock(return_value=[("a", "人物", "喜欢", "b", "物品")])):
+        with patch(
+            "core.memory.extractor.extract_quintuples",
+            AsyncMock(return_value=([("a", "人物", "喜欢", "b", "物品")], ["偏好"])),
+        ):
             task_id = await mgr.add_task("测试文本")
             assert task_id.startswith("extract_")
 
@@ -164,7 +168,10 @@ class TestQuintupleTaskManager:
         mgr = QuintupleTaskManager(max_workers=2, max_queue_size=10)
         await mgr.start()
 
-        with patch("core.memory.extractor.extract_quintuples", AsyncMock(return_value=[("x", "人物", "喜欢", "y", "物品")])):
+        with patch(
+            "core.memory.extractor.extract_quintuples",
+            AsyncMock(return_value=([("x", "人物", "喜欢", "y", "物品")], ["偏好"])),
+        ):
             await mgr.add_task("文本A")
             await mgr.add_task("文本B")
 
@@ -225,3 +232,58 @@ class TestQuintupleTaskManager:
             assert removed >= 2
 
         await mgr.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_failed_future_exception_consumed(self):
+        """失败任务无人 await 时，future 异常被消费回调处理，不产生未检索警告。"""
+        mgr = QuintupleTaskManager(max_workers=1, max_queue_size=10)
+        await mgr.start()
+
+        async def failing_extract(_text):
+            raise RuntimeError("提取失败")
+
+        with patch("core.memory.extractor.extract_quintuples", failing_extract):
+            task_id = await mgr.add_task("会失败的文本")
+            # 不调用 get_task_result，等待 worker 完成
+            await asyncio.sleep(0.5)
+
+            task = mgr.tasks[task_id]
+            assert task.status == TaskStatus.FAILED
+            assert task.future is not None
+            assert task.future.done()
+            # 异常已被消费回调标记，可直接读取而不触发警告
+            exc = task.future.exception()
+            assert exc is not None
+            assert "提取失败" in str(exc)
+
+        await mgr.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_get_task_result_failed_future(self):
+        """get_task_result 等待期间 worker 失败，future 抛异常时应返回错误而非崩溃。"""
+        mgr = QuintupleTaskManager(max_workers=1, max_queue_size=10)
+        await mgr.start()
+
+        async def failing_extract(_text):
+            await asyncio.sleep(0.05)
+            raise RuntimeError("提取失败")
+
+        with patch("core.memory.extractor.extract_quintuples", failing_extract):
+            task_id = await mgr.add_task("会失败的文本")
+
+            # 在 worker 尚未失败时立即调用 get_task_result，进入 await future 分支
+            result, error, _cat = await mgr.get_task_result(task_id, timeout=5)
+            assert result is None
+            assert error is not None
+
+        await mgr.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_consume_future_exception_noop_on_success(self):
+        """消费回调对成功 future 无副作用。"""
+        loop = asyncio.get_running_loop()
+        fut = loop.create_future()
+        fut.set_result(("ok", None))
+        # 不应抛异常
+        _consume_future_exception(fut)
+        assert fut.result() == ("ok", None)

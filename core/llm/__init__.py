@@ -9,6 +9,7 @@ from core.logger import get_logger as _get_logger
 from core.llm.cache import ContextCache
 from core.llm.cache_backend import CacheBackend, MemoryBackend
 from core.llm.config_validator import ConfigValidator
+from core.llm.context_manager import ConversationContextManager
 from core.llm.exceptions import (
     ContextCacheError,
     LLMError,
@@ -178,6 +179,7 @@ def create_from_config(
 __all__ = [
     # 核心服务
     "ConversationService",
+    "ConversationContextManager",
     "create_service",
     "create_from_config",
     # 提供商

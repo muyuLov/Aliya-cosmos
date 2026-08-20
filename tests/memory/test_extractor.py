@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from core.memory.extractor import (
     VALID_ENTITY_TYPES,
+    _detect_speaker,
     _is_valid_entity_type,
     QuintupleExtractor,
 )
@@ -125,87 +126,220 @@ class TestParseJsonArray:
 class TestValidateQuintuples:
     def test_valid_quintuples(self):
         extractor = QuintupleExtractor(max_retries=1, timeout=5)
-        data = [["小明", "人物", "喜欢", "苹果", "物品"]]
+        data = [["小明", "人物", "喜欢", "苹果", "物品", "偏好"]]
         result = extractor._validate_quintuples(data)
-        assert result == [("小明", "人物", "喜欢", "苹果", "物品")]
+        assert result == ([("小明", "人物", "喜欢", "苹果", "物品")], ["偏好"])
 
-    def test_invalid_entity_type_skipped(self):
+    def test_invalid_entity_type_downgraded(self):
+        """未知实体类型不再跳过，降级为「概念」。"""
         extractor = QuintupleExtractor(max_retries=1, timeout=5)
-        data = [["小明", "妖怪", "喜欢", "苹果", "物品"]]
+        data = [["小明", "妖怪", "喜欢", "苹果", "物品", "偏好"]]
         result = extractor._validate_quintuples(data)
-        assert result == []
+        assert result == ([("小明", "概念", "喜欢", "苹果", "物品")], ["偏好"])
 
-    def test_partial_invalid_skipped(self):
-        extractor = QuintupleExtractor(max_retries=1, timeout=5)
+    def test_partial_invalid_downgraded(self):
         data = [
-            ["小明", "人物", "喜欢", "苹果", "物品"],
-            ["妖怪", "妖怪", "吃", "人类", "妖怪"],
-            ["小红", "人物", "讨厌", "香蕉", "物品"],
+            ["小明", "人物", "喜欢", "苹果", "物品", "偏好"],
+            ["妖怪", "妖怪", "吃", "人类", "妖怪", "属性"],
+            ["小红", "人物", "讨厌", "香蕉", "物品", "偏好"],
         ]
+        extractor = QuintupleExtractor(max_retries=1, timeout=5)
         result = extractor._validate_quintuples(data)
-        assert result == [
-            ("小明", "人物", "喜欢", "苹果", "物品"),
-            ("小红", "人物", "讨厌", "香蕉", "物品"),
-        ]
+        # "妖怪"类型降级为「概念」，不再跳过
+        assert result == (
+            [
+                ("小明", "人物", "喜欢", "苹果", "物品"),
+                ("妖怪", "概念", "吃", "人类", "概念"),
+                ("小红", "人物", "讨厌", "香蕉", "物品"),
+            ],
+            ["偏好", "属性", "偏好"],
+        )
 
     def test_wrong_length_skipped(self):
         extractor = QuintupleExtractor(max_retries=1, timeout=5)
         data = [["a", "b", "c"]]  # 只有 3 个元素
         result = extractor._validate_quintuples(data)
-        assert result == []
+        assert result == ([], [])
 
     def test_empty_string_skipped(self):
         extractor = QuintupleExtractor(max_retries=1, timeout=5)
-        data = [["", "人物", "喜欢", "苹果", "物品"]]
+        data = [["", "人物", "喜欢", "苹果", "物品", "偏好"]]
         result = extractor._validate_quintuples(data)
-        assert result == []
+        assert result == ([], [])
 
     def test_not_a_list(self):
         extractor = QuintupleExtractor(max_retries=1, timeout=5)
         result = extractor._validate_quintuples("not a list")
-        assert result == []
+        assert result == ([], [])
 
     def test_empty_list(self):
         extractor = QuintupleExtractor(max_retries=1, timeout=5)
         result = extractor._validate_quintuples([])
-        assert result == []
+        assert result == ([], [])
 
     def test_strips_whitespace(self):
         extractor = QuintupleExtractor(max_retries=1, timeout=5)
-        data = [[" 小明 ", " 人物 ", " 喜欢 ", " 苹果 ", " 物品 "]]
+        data = [[" 小明 ", " 人物 ", " 喜欢 ", " 苹果 ", " 物品 ", " 偏好 "]]
         result = extractor._validate_quintuples(data)
-        assert result == [("小明", "人物", "喜欢", "苹果", "物品")]
+        assert result == ([("小明", "人物", "喜欢", "苹果", "物品")], ["偏好"])
 
-    def test_noise_fallback_interaction_skipped(self):
-        """兜底文本被提取成'请求-对方重复'类空泛互动时过滤。"""
+    def test_noise_fallback_interaction_kept(self):
+        """兜底寒暄/空泛互动不再过滤（放宽规则：允许提取）。"""
         extractor = QuintupleExtractor(max_retries=1, timeout=5)
-        data = [["Aliya", "人物", "请求", "对方重复", "概念"]]
-        assert extractor._validate_quintuples(data) == []
+        data = [["Aliya", "人物", "请求", "对方重复", "概念", "人际"]]
+        assert extractor._validate_quintuples(data) == (
+            [("Aliya", "人物", "请求", "对方重复", "概念")],
+            ["人际"],
+        )
 
-    def test_noise_vague_tail_skipped(self):
-        """宾语为'对方…'式不具体表达时过滤。"""
+    def test_noise_vague_tail_kept(self):
+        """宾语为'对方…'式不具体表达时不再过滤。"""
         extractor = QuintupleExtractor(max_retries=1, timeout=5)
         data = [
-            ["Aliya", "人物", "询问", "对方是否想念她", "概念"],
-            ["Aliya", "人物", "进行", "屏幕聊天", "活动"],
+            ["Aliya", "人物", "询问", "对方是否想念她", "概念", "人际"],
+            ["Aliya", "人物", "进行", "屏幕聊天", "活动", "事件"],
         ]
-        assert extractor._validate_quintuples(data) == [
-            ("Aliya", "人物", "进行", "屏幕聊天", "活动"),
+        assert extractor._validate_quintuples(data) == (
+            [
+                ("Aliya", "人物", "询问", "对方是否想念她", "概念"),
+                ("Aliya", "人物", "进行", "屏幕聊天", "活动"),
+            ],
+            ["人际", "事件"],
+        )
+
+    def test_invalid_category_skipped(self):
+        """非法类别条目被跳过。"""
+        extractor = QuintupleExtractor(max_retries=1, timeout=5)
+        data = [
+            ["小明", "人物", "喜欢", "苹果", "物品", "非法类别"],
+            ["小明", "人物", "喜欢", "苹果", "物品", "偏好"],
         ]
+        result = extractor._validate_quintuples(data)
+        assert result == ([("小明", "人物", "喜欢", "苹果", "物品")], ["偏好"])
+
+    def test_pronoun_head_replaced_fallback(self):
+        """无 speaker 信息时回退：我→user_name，你→ai_name。"""
+        extractor = QuintupleExtractor(max_retries=1, timeout=5)
+        data = [
+            ["我", "人物", "喜欢", "咖啡", "物品", "偏好"],
+            ["你", "人物", "是", "宇航员", "职业", "身份"],
+        ]
+        result = extractor._validate_quintuples(data)
+        assert result == (
+            [
+                (extractor.user_name, "人物", "喜欢", "咖啡", "物品"),
+                (extractor.ai_name, "人物", "是", "宇航员", "职业"),
+            ],
+            ["偏好", "身份"],
+        )
+
+    def test_pronoun_head_by_speaker_user(self):
+        """user 链（用户在说话）：我→user_name，你→ai_name。"""
+        extractor = QuintupleExtractor(max_retries=1, timeout=5)
+        data = [
+            ["我", "人物", "喜欢", "咖啡", "物品", "偏好"],
+            ["你", "人物", "是", "宇航员", "职业", "身份"],
+        ]
+        result = extractor._validate_quintuples(data, speaker=extractor.user_name)
+        assert result == (
+            [
+                (extractor.user_name, "人物", "喜欢", "咖啡", "物品"),
+                (extractor.ai_name, "人物", "是", "宇航员", "职业"),
+            ],
+            ["偏好", "身份"],
+        )
+
+    def test_pronoun_head_by_speaker_aliya(self):
+        """aliya 链（Aliya 在说话）：我→ai_name，你→user_name。"""
+        extractor = QuintupleExtractor(max_retries=1, timeout=5)
+        data = [
+            ["我", "人物", "是", "宇航员", "职业", "身份"],
+            ["你", "人物", "喜欢", "咖啡", "物品", "偏好"],
+        ]
+        result = extractor._validate_quintuples(data, speaker=extractor.ai_name)
+        assert result == (
+            [
+                (extractor.ai_name, "人物", "是", "宇航员", "职业"),
+                (extractor.user_name, "人物", "喜欢", "咖啡", "物品"),
+            ],
+            ["身份", "偏好"],
+        )
+
+    def test_pronoun_head_unknown_speaker_falls_back(self):
+        """speaker 为第三方角色时：我→该角色，你→回退 ai_name。"""
+        extractor = QuintupleExtractor(max_retries=1, timeout=5)
+        data = [
+            ["我", "人物", "来自", "火星", "地点", "属性"],
+            ["你", "人物", "是", "舰长", "职业", "身份"],
+        ]
+        result = extractor._validate_quintuples(data, speaker="Kane")
+        assert result == (
+            [
+                ("Kane", "人物", "来自", "火星", "地点"),
+                (extractor.ai_name, "人物", "是", "舰长", "职业"),
+            ],
+            ["属性", "身份"],
+        )
+
+    def test_duplicates_removed(self):
+        """完全重复的五元组去重，保留首次出现顺序。"""
+        extractor = QuintupleExtractor(max_retries=1, timeout=5)
+        data = [
+            ["小明", "人物", "喜欢", "苹果", "物品", "偏好"],
+            ["小明", "人物", "喜欢", "苹果", "物品", "偏好"],
+            ["小明", "人物", "喜欢", "香蕉", "物品", "偏好"],
+        ]
+        result = extractor._validate_quintuples(data)
+        assert result == (
+            [("小明", "人物", "喜欢", "苹果", "物品"), ("小明", "人物", "喜欢", "香蕉", "物品")],
+            ["偏好", "偏好"],
+        )
+
+    def test_long_field_truncated(self):
+        """超长宾语/关系被截断，防止整段原文入库。"""
+        extractor = QuintupleExtractor(max_retries=1, timeout=5)
+        long_tail = "这是一段非常非常非常非常非常非常非常非常非常非常长的宾语描述"  # 30 字
+        data = [["小明", "人物", "喜欢", long_tail, "物品", "偏好"]]
+        (quintuples, _categories) = extractor._validate_quintuples(data)
+        assert len(quintuples) == 1
+        assert len(quintuples[0][3]) <= 64
 
 
 class TestParseResponse:
     def test_valid_json(self):
         extractor = QuintupleExtractor(max_retries=1, timeout=5)
-        result = extractor._parse_response('[["小明","人物","喜欢","苹果","物品"]]')
-        assert result == [("小明", "人物", "喜欢", "苹果", "物品")]
+        result = extractor._parse_response('[["小明","人物","喜欢","苹果","物品","偏好"]]')
+        assert result == ([("小明", "人物", "喜欢", "苹果", "物品")], ["偏好"])
 
     def test_invalid_json(self):
         extractor = QuintupleExtractor(max_retries=1, timeout=5)
         result = extractor._parse_response("不是JSON")
-        assert result == []
+        assert result == ([], [])
 
     def test_empty_array(self):
         extractor = QuintupleExtractor(max_retries=1, timeout=5)
         result = extractor._parse_response("[]")
-        assert result == []
+        assert result == ([], [])
+
+
+class TestDetectSpeaker:
+    """对话说话人解析（供代词主体按角色自动调整）"""
+
+    def test_ascii_colon(self):
+        assert _detect_speaker("Aliya: 我是宇航员") == "Aliya"
+
+    def test_chinese_colon(self):
+        assert _detect_speaker("Aliya：我是宇航员") == "Aliya"
+
+    def test_multiline_first_line(self):
+        text = "cosmos: 早上好呀！\nAliya: 早上好。"
+        assert _detect_speaker(text) == "cosmos"
+
+    def test_none_on_no_prefix(self):
+        assert _detect_speaker("没有冒号的文本") is None
+
+    def test_none_on_empty(self):
+        assert _detect_speaker("") is None
+
+    def test_empty_prefix_returns_none(self):
+        assert _detect_speaker(": 没有角色名") is None

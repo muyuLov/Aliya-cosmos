@@ -39,25 +39,6 @@ docker compose --profile tts up -d
 
 ## 架构总览
 
-### 一次对话的完整流转
-
-前端通过 WebSocket 连接 `ws://<host>:8765/agent/ws`（`main.py` 启动）。一次 `user_message` 的处理链：
-
-1. `agent/ws.py` 为每个连接惰性创建并复用 `AliyaAgent`，将 `user_message` 以后台任务运行（`stop` 消息可即时打断）。
-2. `AliyaAgent`（`agent/agent.py`）是稳定门面，内部委托 `AgentPipeline`（`agent/pipeline.py`）编排阶段流转。
-3. **阶段一 assemble**（`agent/stages/assemble.py`）：切换工具阶段 system prompt（无角色人格，注入动态工具描述 + 认知上下文），触发对话压缩。
-4. **阶段二 think**（`agent/stages/think.py`）：Think → Act → Observe 循环。`Brain.think()` 调用 LLM 得到 JSON 决策，`ToolRegistry.dispatch_all()` 执行工具，结果注入历史后 `think_with_context()` 继续，直至 LLM 返回正式 reply 或达 `max_turns`。
-5. **阶段三 soul**（`agent/stages/soul.py`）：切换回人格 system prompt（`PromptManager` 分层构建），注入情绪补丁、压缩摘要、认知/记忆召回上下文，`Brain.generate_soul_reply()` 生成最终回复。
-6. **收尾**：`after_turn` 钩子（记忆保存 → 认知后续 → 情绪推进后台任务）→ `agent/response.py` 统一响应（文本发送 + 异步 TTS 播放）。
-
-横切能力（认知、记忆保存、情绪推进）均通过 `HookRegistry`（`agent/hooks.py`）以钩子订阅接入，`AgentContext`（`agent/context.py`）是承载全部依赖的不可变容器，工具执行时直接接收它。
-
-### Agent 内部（agent/）
-
-- **Brain**（`brain.py`）— LLM 交互层。工具阶段期望 LLM 输出 JSON `{"thought", "reply", "tool_calls"}`，`parse_llm_response` 含多层 fallback 解析链。管理超时降级（连续超时退出工具阶段）、`_compressed_context` 摘要、灵魂阶段净化链（`clean_soul_reply`）。原生 thinking 模式（`reasoning_content`）自动捕获为 thought。
-- **情绪引擎**（`emotion/engine.py`）— VAD 三维情绪 + `EmotionPersonality` 人格参数；分类器三模式（`rule`/`vector`/`auto`，向量模式用 `core/vector` 做语义分类）。情绪推进在 `after_turn` 钩子中以 fire-and-forget 后台任务运行，不阻塞收尾。
-- **工具系统**（`tools/`）— `ToolBase`/`ToolRegistry` 参考 Claude Code 流式工具模式：`is_concurrency_safe` 只读工具分区并行、`ToolPermission` + 配置驱动权限（`Permissions.yml`）、执行时直接接收 `AgentContext`。内置工具在 `create_default_tool_registry()`（`tools/__init__.py`）登记，**新增内置工具只需改这里**。工具描述动态注入工具阶段 prompt。
-- **认知引擎**（`cognition/`）— 参考 LAAP 认知架构的模块化引擎，三段式钩子接入管线：`before_turn`（需求 tick、交互记录）、`after_tool`（需求更新、情景记忆、世界模型、自我模型）、`after_turn`（记忆巩固、自主维护）。子模块独立、优雅降级（任一失败不影响整体）。`rust_bridge.py` 实为纯 Python 加速实现（零外部依赖，API 保持兼容）。层次化记忆由它持有并持久化到 `data/memory/hierarchical_memory.json`。
 
 ### 核心服务（core/）
 
@@ -70,8 +51,8 @@ docker compose --profile tts up -d
 
 ### 记忆系统：两套并行
 
-- **GRAG**（`core/memory/memory_manager.py` 等）— 借鉴 NagaAgent summer_memory：LLM 五元组提取（`extractor.py`）→ Neo4j 图存储（`graph.py`，Schema v4，去 APOC 依赖）→ RAG 召回（`rag_query.py`）→ 并发任务管理（`task_manager.py`）。`get_memory_manager()` 返回集成层 `GRAGMemoryManager`，在 `after_turn` 保存对话记忆、在灵魂阶段注入相关记忆。
-- **层次化**（`core/memory/hierarchical.py`）— 参考 LAAP 第 10 章：感知/工作/情景/语义/程序五层 + 元记忆，跨层巩固（重复达阈值触发），JSON 持久化。由认知引擎持有并在灵魂/工具阶段做上下文召回。
+- **GRAG**（`core/memory/memory_manager.py` 等）— 借鉴 NagaAgent summer_memory：LLM 五元组提取（`extractor.py`，6 元素含类别契约；**放宽策略**：闲聊不再一刀切拒绝、未知实体类型降级「概念」、代词主体按说话人自动调整（`_detect_speaker` 解析文本说话人，"我"→当前说话人、"你"→对话另一方）、移除噪声宾语过滤；仍保留去重/截断/类别白名单）→ Neo4j 图存储（`graph.py`，Schema v4，去 APOC 依赖）→ RAG 召回（`rag_query.py`，检索支持 `include_source` 返回 6 元素元组含来源文本，回答生成引用「来源：…」）→ 并发任务管理（`task_manager.py`）。`get_memory_manager()` 返回集成层 `GRAGMemoryManager`，在 `after_turn` 保存对话记忆、在灵魂阶段注入相关记忆。
+- **层次化**（`core/memory/hierarchical.py`）— 参考 LAAP 第 10 章：感知/工作/情景/语义/程序五层 + 元记忆，跨层巩固（重复达阈值触发），JSON 持久化。已接入 `GRAGMemoryManager`：随 `add_conversation_memory()` 同步写入五层，五元组落库时经 `collect_entity_memory_attrs()` 聚合后把五层记忆属性（层/重要性/置信度等）挂载到 Entity 节点（`memory_*` 属性）。遗忘机制双层 + 向量联动：`apply_forgetting()` 按 Ebbinghaus 曲线永久衰减内存各层数值并清理低值条目（同时按 metadata/text 精确删除向量索引中的被遗忘条目及 pending 待同步文本，杜绝幽灵记忆；`add_conversation_memory` 按计数 20 次对话 + 时间 24h 双驱动自动触发，自动路径联动图节点属性衰减）；`graph.decay_memory_nodes` / `prune_memory_nodes`（UNWIND 批量）/ `query_memory_nodes` 支持对图节点执行衰减/清理/查询，`run_memory_forgetting()` 手动编排完整流程。`core/vector/store.py` 提供 `find_ids` / `delete_many` 供遗忘清理定位与批量删除。
 
 ### 前端（GUI/）
 

@@ -67,6 +67,15 @@ from core.memory.graph import (
     set_graph_store,
     store_quintuples,
     store_quintuples_async,
+    # 节点遗忘操作
+    decay_memory_nodes,
+    decay_memory_nodes_async,
+    prune_memory_nodes,
+    prune_memory_nodes_async,
+    query_memory_nodes,
+    query_memory_nodes_async,
+    touch_day,
+    touch_day_async,
 )
 from core.memory.memory_manager import get_memory_manager
 from core.memory.rag_query import get_rag_engine
@@ -208,6 +217,15 @@ __all__ = [
     "clear_all_quintuples_async",
     "get_graph_stats_async",
     "delete_day_async",
+    # 节点遗忘操作
+    "decay_memory_nodes",
+    "decay_memory_nodes_async",
+    "prune_memory_nodes",
+    "prune_memory_nodes_async",
+    "query_memory_nodes",
+    "query_memory_nodes_async",
+    "touch_day",
+    "touch_day_async",
     # 图谱存储管理（测试隔离）
     "GraphStore",
     "get_graph_store",

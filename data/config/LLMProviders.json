@@ -6,6 +6,15 @@
         "max_retries": 3,
         "timeout": 60
     },
+    "opencode zen": {
+        "url": "https://opencode.ai/zen",
+        "api_key": "${OPENCODE_ZEN_API_KEY}",
+        "model": "deepseek-v4-flash-free",
+        "max_retries": 3,
+        "timeout": 60,
+        "http2": false
+    },
+
     "lmstudio": {
         "url": "http://localhost:1234",
         "api_key": "lm-studio",

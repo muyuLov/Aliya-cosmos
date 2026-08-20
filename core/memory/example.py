@@ -28,6 +28,8 @@ from core.memory import (
     query_graph_by_keywords,
     get_graph_stats,
     get_day_nodes_async,
+    query_quintuples_by_day_async,
+    query_memory_nodes,
     start_task_manager,
     stop_task_manager,
     GRAGError,
@@ -378,6 +380,91 @@ async def example_memory_maintenance() -> None:
     print("[OK] 示例 7 完成")
 
 
+async def example_memory_retrieval() -> None:
+    """示例 8：记忆检索展示（关键词 / 时间链 / 记忆节点三种视角）。
+
+    演示如何把 Aliya 的记忆从 Neo4j 图谱中"取回来"：
+      1. 关键词图谱查询：输入实体/话题关键词，返回匹配的五元组关系与来源文本；
+      2. 按时间链/日期查询：按 user / aliya 链与日期范围召回某段时间的记忆；
+      3. 记忆节点查询：列出挂载了五层记忆属性（层/重要性/置信度等）的实体节点。
+    """
+    print("\n=== 示例 8：记忆检索展示（关键词 / 时间链 / 记忆节点）===")
+
+    try:
+        mgr = get_memory_manager()
+        if not mgr.enabled:
+            print("[WARN] 记忆系统未启用")
+            return
+
+        # ── 1. 关键词图谱查询（含来源文本）──────────────────────────────
+        print("\n▶ 检索一：关键词图谱查询")
+        print("  输入关键词: ['Aliya', 'Kane', '深空']")
+        keywords = ["Aliya", "Kane", "深空"]
+        try:
+            # 同步接口支持 include_source 返回 6 元素元组（含来源文本）
+            results = query_graph_by_keywords(keywords, limit=6, include_source=True)
+            if results:
+                print(f"  命中 {len(results)} 条五元组关系:")
+                for i, item in enumerate(results, 1):
+                    h, ht, rel, t, tt = str(item[0]), str(item[1]), str(item[2]), str(item[3]), str(item[4])
+                    suffix = f"  ↳ 来源: {str(item[5])[:40]}…" if len(item) >= 6 and item[5] else ""
+                    print(f"    {i}. {h}({ht}) —[{rel}]→ {t}({tt}){suffix}")
+            else:
+                print("  [WARN] 未命中关键词检索")
+        except Exception as e:
+            print(f"  [FAIL] 关键词检索失败: {e}")
+
+        # ── 2. 按时间链/日期查询（含来源文本）────────────────────────────
+        print("\n▶ 检索二：按时间链/日期查询")
+        print("  范围: user 时间链 · 2025-07-01 ~ 2025-07-31")
+        try:
+            day_results = await query_quintuples_by_day_async(
+                timeline="user",
+                start_date="2025-07-01",
+                end_date="2025-07-31",
+                limit=6,
+                include_source=True,
+            )
+            if day_results:
+                print(f"  命中 {len(day_results)} 条关系（按日期召回）:")
+                for i, item in enumerate(day_results, 1):
+                    h, ht, rel, t, tt = str(item[0]), str(item[1]), str(item[2]), str(item[3]), str(item[4])
+                    suffix = f"  ↳ 来源: {str(item[5])[:40]}…" if len(item) >= 6 and item[5] else ""
+                    print(f"    {i}. {h}({ht}) —[{rel}]→ {t}({tt}){suffix}")
+            else:
+                print("  [WARN] 该时间范围内无记忆")
+        except Exception as e:
+            print(f"  [FAIL] 时间链查询失败: {e}")
+
+        # ── 3. 记忆节点查询（五层记忆属性）───────────────────────────────
+        print("\n▶ 检索三：记忆节点查询（五层记忆属性）")
+        try:
+            nodes = query_memory_nodes(limit=6)
+            if nodes:
+                print(f"  命中 {len(nodes)} 个挂载记忆属性的实体节点:")
+                for node in nodes:
+                    layers = node.get("layers") or "-"
+                    heat = node.get("heat", 0.0)
+                    importance = node.get("importance", 0.0)
+                    print(f"    - {node['name']} [层: {layers}] 热度:{heat:.2f} 重要性:{importance:.2f}")
+            else:
+                print("  [WARN] 尚无实体挂载五层记忆属性（需先在对话中写入记忆并巩固）")
+        except Exception as e:
+            print(f"  [FAIL] 记忆节点查询失败: {e}")
+
+        # ── 4. RAG 问答展示（最终回答）───────────────────────────────────
+        print("\n▶ 检索四：RAG 问答（关键词→图谱→回答）")
+        question = "Aliya 和 Kane 是什么关系？"
+        print(f"  问题: {question}")
+        answer = await mgr.query_memory(question)
+        print(f"  回答: {answer}" if answer else "  [WARN] 未检索到相关记忆")
+
+    except GRAGError as e:
+        get_default_handler().handle(e)
+
+    print("\n[OK] 示例 8 完成")
+
+
 async def example_multi_time() -> None:
     """示例 2：多日期时间链演示（千年时空对照）。
 
@@ -469,13 +556,14 @@ async def main() -> None:
 
         print("\n[OK] 记忆系统已启用，开始演示...\n")
 
-        # await example_basic_conversation()    # 示例 1：基础对话记忆
+        await example_basic_conversation()    # 示例 1：基础对话记忆
         await example_multi_time()           # 示例 2：多日期时间链对照
         await example_memory_stats()         # 示例 3：图谱统计
         # await example_graph_operations()     # 示例 4：直接写入人物关系五元组
         # await example_task_management()      # 示例 5：并发批量提取
         # await example_rag_query()            # 示例 6：跨对话 RAG 检索
         # await example_memory_maintenance()   # 示例 7：任务清理
+        await example_memory_retrieval()     # 示例 8：记忆检索展示（关键词/时间链/记忆节点）
 
     except KeyboardInterrupt:
         print("\n演示被用户中断")

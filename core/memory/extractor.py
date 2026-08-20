@@ -69,38 +69,22 @@ SYSTEM_PROMPT = """
 
 4. **绝对禁止**：以"我"、"你"、"他"、"她"、"我们"、"你们"等代词作为主体。必须使用具体姓名。
 
-## 闲聊过滤准则（优先级高于提取规则，宁缺毋滥）
+## 闲聊与寒暄处理（不再一刀切返回 []，能提取互动关系就提取）
 
-提取前必须逐条判定。只要文本命中了以下任一类别，**直接返回 []**，不得强行提取：
+闲聊文本不再统一拒绝。优先提取人物间的**互动关系**（类别用「人际」），如
+["{user_name}", "人物", "问候", "Aliya", "人物", "人际"]、
+["Aliya", "人物", "安慰", "{user_name}", "人物", "人际"]。
+仅在文本**完全没有实体或互动主体**时返回 []（如纯语气词"嗯"）。
 
-1. **问候寒暄与告别**：
-   - 打招呼："你好"、"嗨"、"早上好"、"吃了吗"
-   - 告别："再见"、"晚安"、"明天见"、"我先下了"
-   - 天气/日常寒暄："今天天气不错"、"最近忙什么呢"
-   - 无实质内容的开场白："在吗"、"有空聊聊吗"
+各类闲聊的提取建议：
+1. **问候寒暄与告别**："你好"、"早上好"、"晚安"、"今天天气不错" → 提取问候/寒暄互动
+2. **纯粹情感表达（无具体事实支撑）**："我好累"、"心情不好" → 提取情感状态类互动；
+   若附带**具体原因或偏好**，优先提取事实（如"我讨厌数学"→ 偏好）
+3. **调侃、戏谑与无意义互动**：有明确互动双方时提取调侃/反问互动；完全无语义内容时返回 []
+4. **空洞回应与附和**："嗯嗯"、"哦"、"是啊"（不带扩展信息）→ 返回 []（无互动主体）
+5. **重复性寒暄兜底**："你是谁"、"你说呢" → 提取询问互动
 
-2. **纯粹情感表达（无具体事实支撑）**：
-   - 状态倾诉："我好累"、"心情不好"、"无聊死了"
-   - 情感安慰："别难过"、"开心点"、"一切都会好的"
-   - 情感反问："你不懂我"
-   - 区别：若情感后面附带了**具体原因或偏好**，仍可提取（如"我讨厌数学"附带学科信息），纯情感不提取
-
-3. **调侃、戏谑与无意义互动**：
-   - 故意反问："你是不是笨蛋"、"猜猜我在想什么"
-   - 无聊试探："你说你聪明，那你知道…"（纯粹挖坑式提问）
-   - 身份戏谑："其实我是外星人派来的"、"我其实是秦始皇"
-   - 跑偏互动：用户开 AI 自己的玩笑而非讨论具体话题
-
-4. **空洞回应与附和**：
-   - 敷衍/催促："嗯嗯"、"哦"、"然后呢"、"继续说"、"还有吗"
-   - 纯附和："是啊"、"对的"、"没错"、"确实"（不带扩展信息）
-   - 对话流转："你在听吗"、"能听见我说话吗"（纯技术确认）
-
-5. **重复性寒暄兜底**：
-   - 无新信息的重复提问："你是谁"（已在之前对话中确认过身份信息时）
-   - AI 兜底回应被用户追问："你说呢"、"你觉得呢"、"我不知道，你说说看"
-
-**核心判定原则**：问自己——"这条五元组脱离当前对话后，对理解这个人的知识/喜好/经历还有独立价值吗？" 如果没有，返回 []。
+**核心判定原则**：问自己——"这条五元组脱离当前对话后，对理解这个人的知识/喜好/经历还有独立价值吗？" 若有（哪怕只是互动关系），就提取；完全没有实体或互动主体时才返回 []。
 
 ## 提取规则
 1. 只提取**事实性**信息，包括：
@@ -110,15 +94,12 @@ SYSTEM_PROMPT = """
    - 用户表达的具体需求、偏好、计划
    - 对话互动关系
 
-2. 严格过滤以下内容：
+2. 适度过滤以下内容（但不丢弃互动关系）：
    - 比喻、拟人、夸张等修辞手法
    - 虚拟、假设、想象的内容
-   - 纯粹的情感表达（如"我很开心"、"你真棒"）
-   - 赞美、讽刺、调侃等主观评价
-   - **闲聊**：问候寒暄、告别、天气寒暄、无聊调侃、空洞附和、重复兜底、身份戏谑——详见上文闲聊过滤准则
-   - 重复或冗余的关系
-   - **无实质信息量的空泛互动**：如"请求对方重复"、"询问对方是否想念"、"让对方再说一遍"等寒暄/兜底回应，不得提取
-   - **宾语为"对方…"的不具体表达**：如"对方重复"、"对方想法"、"对方身份"等（互动对象不明确的泛化描述），不得提取
+   - 赞美、讽刺、调侃等主观评价（保留互动关系即可）
+   - **闲聊**：问候寒暄、告别、天气寒暄、情感表达、调侃、空洞附和等——能提取出人物互动关系（人际）时保留，完全没有实体或互动主体时才丢弃（详见上文闲聊处理准则）
+   - 重复或冗余的关系（完全相同的五元组只保留一条）
 
 3. 主体和宾语可以是实体名称，也可以是简洁的观点/认知短语（不超过 15 字）：
    - 实体型：("Aliya", "人物", "职业是", "宇航员", "职业", "身份")
@@ -298,34 +279,52 @@ Aliya是一名来自泰瑞斯公司的宇航员，她已在深空执行任务超
 输出：[]
 
 输入：你真厉害，简直就是超人！
-输出：[] （主观赞美，不提取）
+输出：
+[
+  ["{user_name}", "人物", "赞美", "Aliya", "人物", "人际"]
+]
 
 输入（对话格式）：
 {user_name}: 嗨，早上好呀！
 Aliya: 早上好，今天有什么可以帮你的吗？
-输出：[] （问候寒暄，无实质信息）
+输出：
+[
+  ["{user_name}", "人物", "问候", "Aliya", "人物", "人际"],
+  ["Aliya", "人物", "回应问候", "{user_name}", "人物", "人际"]
+]
 
 输入（对话格式）：
 {user_name}: 我今天心情特别不好。
 Aliya: 怎么了吗？愿意跟我聊聊吗？
-输出：[] （纯粹情感倾诉，未提供具体原因/事实）
+输出：
+[
+  ["{user_name}", "人物", "表达", "心情不好", "状态", "状态"],
+  ["Aliya", "人物", "安慰", "{user_name}", "人物", "人际"]
+]
 
 输入（对话格式）：
 {user_name}: 你是不是个笨蛋？
 Aliya: 这个问题可不太好回答呢。
-输出：[] （无聊调侃，无实质内容）
+输出：
+[
+  ["{user_name}", "人物", "调侃", "Aliya", "人物", "人际"]
+]
 
 输入（对话格式）：
 {user_name}: 嗯嗯。
 Aliya: 你还有什么想了解的吗？
-输出：[] （空洞回应，无实质信息）
+输出：[] （纯语气词，无互动主体）
 
 输入（对话格式）：
 {user_name}: 其实我是秦始皇，刚挖出来没多久。
 Aliya: 哈哈，那您需要我帮您统一六国吗？
-输出：[] （角色扮演玩笑，无事实信息）
+输出：
+[
+  ["{user_name}", "人物", "自称", "秦始皇", "身份", "身份"],
+  ["Aliya", "人物", "打趣", "{user_name}", "人物", "人际"]
+]
 
-请仔细分析文本。遇到闲聊场景时果断返回 []，宁缺毋滥。优先提取有独立价值的对话互动关系与事实性五元组。
+请仔细分析文本。闲聊场景不再一刀切拒绝：能提取出人物互动关系（人际类别）或情感状态时保留，完全没有实体或互动主体时才返回 []。优先提取有独立价值的对话互动关系与事实性五元组。
 """
 
 # 合法实体类型集合
@@ -399,26 +398,30 @@ def _is_valid_entity_type(t: str) -> bool:
     return t in VALID_ENTITY_TYPES
 
 
-# 无信息量的噪声宾语（LLM 常把寒暄/兜底回复提取为互动型五元组，如兜底文本被提取为"请求-对方重复"）
-_NOISE_TAILS = frozenset({
-    "对方重复", "对方再说一遍", "对方再说一次", "再说一遍", "重复一遍",
-    "对方的话", "对方是否想念她", "对方是否想念他", "对方是否想念",
-    "对方想法", "对方心情", "对方身份", "对方是谁", "对方名字",
-    "对方现在的想法", "对方是否真心", "对方真心", "对方回应",
-})
+# 字段长度上限（与 SYSTEM_PROMPT "宾语须 15 字以内" 一致；保留少量余量）
+_MAX_FIELD_LEN = 64
 
 
-def _is_noise_quintuple(rel: str, tail: str) -> bool:
-    """过滤无实质信息量的噪声五元组（兜底寒暄 / 空泛互动）。"""
-    if tail in _NOISE_TAILS:
-        return True
-    # 宾语为"对方…"式的不具体表达（互动对象不明确）
-    if tail.startswith("对方") and len(tail) <= 8:
-        return True
-    # "请求/要求/命令 + 重复/再说"类空泛互动（典型兜底文本被提取的结果）
-    if rel in ("请求", "要求", "命令") and ("重复" in tail or "再说" in tail):
-        return True
-    return False
+def _truncate(value: str, max_len: int = _MAX_FIELD_LEN) -> str:
+    """按字符数截断超长字段（提示词要求提炼简洁短语，防止整段原文入库）。"""
+    return value if len(value) <= max_len else value[:max_len]
+
+
+def _detect_speaker(text: str) -> str | None:
+    """从对话格式文本解析当前说话人（首行 "角色名: 发言" 前缀）。
+
+    提取任务提交的文本统一为 "{说话人}: {发言}" 格式（memory_manager 组装），
+    解析首行冒号前前缀即可确定当前发言角色；无法解析（非对话格式）返回 None。
+    同时兼容英文冒号与中文冒号。
+    """
+    if not text:
+        return None
+    first_line = text.strip().splitlines()[0]
+    for sep in (":", "："):
+        if sep in first_line:
+            prefix = first_line.split(sep, 1)[0].strip()
+            return prefix or None
+    return None
 
 
 # 用户提示词模板
@@ -452,6 +455,11 @@ class QuintupleExtractor:
         cfg = get_grag_config()
         self.max_retries = max_retries if max_retries is not None else cfg.extractor.max_retries
         self.timeout = timeout if timeout is not None else cfg.extractor.timeout
+        # 角色名（供人称代词主体兜底替换：我→user_name，你→ai_name）
+        self.user_name: str = cfg.user_name
+        self.ai_name: str = cfg.ai_name
+        # 系统提示词模板缓存（user_name 通常不变；提取系统为纯 LLM 操作，仅在 user_name 变化时重建）
+        self._system_prompt: str | None = None
 
     @property
     def provider(self) -> LLMProvider:
@@ -473,7 +481,7 @@ class QuintupleExtractor:
             "extract() 不能在运行中的事件循环内调用，请使用 extract_async() 或 extract_quintuples()"
         )
 
-    async def extract_async(self, text: str) -> Tuple[List[QuintupleType], List[str]]:
+    async     def extract_async(self, text: str) -> Tuple[List[QuintupleType], List[str]]:
         """异步提取五元组及其类别（含指数退避重试 + 超时控制 + 永久性错误检测）。
 
         Args:
@@ -487,9 +495,12 @@ class QuintupleExtractor:
             LLMProviderError:       LLM 提供者错误
         """
         safe_text = text
+        # 解析当前说话人（"角色名: 发言" 对话格式），供代词主体按角色自动调整
+        speaker = _detect_speaker(text)
 
-        cfg = get_grag_config()
-        system_prompt = SYSTEM_PROMPT.format(user_name=cfg.user_name)
+        if self._system_prompt is None:
+            self._system_prompt = SYSTEM_PROMPT.format(user_name=get_grag_config().user_name)
+        system_prompt = self._system_prompt
 
         request = ChatRequest(
             messages=[
@@ -501,7 +512,7 @@ class QuintupleExtractor:
             ],
             model=self.provider.model,
             temperature=0.3,
-            max_tokens=100000,
+            max_tokens=4096,
         )
 
         async def _call() -> str:
@@ -529,31 +540,47 @@ class QuintupleExtractor:
                 cause=e,
             )
 
-        quintuples, categories = self._parse_response(content)
+        quintuples, categories = self._parse_response(content, speaker=speaker)
         logger.info("提取到 %d 个五元组", len(quintuples))
         if quintuples:
             for q, cat in zip(quintuples, categories):
                 logger.info("  五元组: %s(%s) -[%s]-> %s(%s) [%s]", *q, cat or "未分类")
         return quintuples, categories
 
-    def _parse_response(self, content: str) -> Tuple[List[QuintupleType], List[str]]:
-        """解析 LLM 响应，提取五元组及其类别"""
+    def _parse_response(
+        self, content: str, speaker: str | None = None
+    ) -> Tuple[List[QuintupleType], List[str]]:
+        """解析 LLM 响应，提取五元组及其类别
+
+        Args:
+            content: LLM 返回的 JSON 数组字符串
+            speaker: 当前发言角色名（用于代词主体自动调整），None 表示无法确定
+        """
         logger.debug("LLM 原始响应: %s", content[:200] if content else "(空)")
         data = parse_json_array(content, "五元组响应")
         if data is not None:
-            return self._validate_quintuples(data)
+            return self._validate_quintuples(data, speaker=speaker)
         return [], []
 
-    def _validate_quintuples(self, data) -> Tuple[List[QuintupleType], List[str]]:
+    def _validate_quintuples(
+        self, data, speaker: str | None = None
+    ) -> Tuple[List[QuintupleType], List[str]]:
         """验证并规范化五元组数据（含实体类型合理性校验）。
 
-        返回 (五元组列表, 类别列表)，两者长度相等。
+        Args:
+            data:   LLM 返回的原始五元组列表
+            speaker: 当前发言角色名（用于代词主体自动调整）；
+                     None 表示无法确定（回退：我→user_name，你→ai_name）
+
+        Returns:
+            (五元组列表, 类别列表)，两者长度相等
         """
         if not isinstance(data, list):
             return [], []
 
         quintuples: List[QuintupleType] = []
         categories: List[str] = []
+        seen: set = set()
 
         for item in data:
             if not isinstance(item, (list, tuple)):
@@ -578,19 +605,46 @@ class QuintupleExtractor:
                 logger.warning("跳过非法类别: %s (条目: %s)", category, item)
                 continue
 
-            # 对话格式下"我"不应作为主体
-            if head in ("我", "你"):
-                logger.warning("过滤人称代词主体（LLM 未替换为角色名）: %s(%s) -[%s]-> %s(%s)", head, head_type, rel, tail, tail_type)
-                continue
+            # 人称代词主体按当前说话角色自动调整（LLM 未替换时兜底）
+            if head == "我":
+                # "我" 指向当前说话人：Aliya 链中为 ai_name，user 链中为 user_name
+                resolved = speaker or self.user_name
+                logger.debug("人称代词主体替换: 我 → %s", resolved)
+                head = resolved
+                head_type = "人物"
+            elif head == "你":
+                # "你" 指向对话对象：当前说话人的另一方
+                if speaker == self.user_name:
+                    resolved = self.ai_name
+                elif speaker == self.ai_name:
+                    resolved = self.user_name
+                else:
+                    # 说话人未知或为第三方角色时回退 Aliya（默认对话对象）
+                    resolved = self.ai_name
+                logger.debug("人称代词主体替换: 你 → %s", resolved)
+                head = resolved
+                head_type = "人物"
+            # 实体类型白名单：未知类型降级为「概念」，不跳过（放宽规则）
             if not _is_valid_entity_type(head_type):
-                logger.warning("跳过非法主体类型: %s(%s) -[%s]-> %s(%s)", head, head_type, rel, tail, tail_type)
-                continue
+                logger.debug("未知主体类型降级为「概念」: %s(%s)", head, head_type)
+                head_type = "概念"
             if not _is_valid_entity_type(tail_type):
-                logger.warning("跳过非法客体类型: %s(%s) -[%s]-> %s(%s)", head, head_type, rel, tail, tail_type)
+                logger.debug("未知客体类型降级为「概念」: %s(%s)", tail, tail_type)
+                tail_type = "概念"
+
+            # 超长字段截断（提示词要求提炼简洁短语，防止整段原文作为宾语/主体入库）
+            head = _truncate(head)
+            rel = _truncate(rel)
+            tail = _truncate(tail)
+            if not head or not tail:
                 continue
-            if _is_noise_quintuple(rel, tail):
-                logger.debug("跳过噪声五元组: %s(%s) -[%s]-> %s(%s)", head, head_type, rel, tail, tail_type)
+
+            # 完全重复的五元组去重（保持首次出现顺序）
+            dedup_key = (head, head_type, rel, tail, tail_type, category)
+            if dedup_key in seen:
+                logger.debug("跳过重复五元组: %s", dedup_key)
                 continue
+            seen.add(dedup_key)
 
             quintuples.append((head, head_type, rel, tail, tail_type))
             categories.append(category)

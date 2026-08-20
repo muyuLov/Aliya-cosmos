@@ -75,16 +75,80 @@ _REL_TYPE_PATTERN = re.compile(
 # 关系类型最大长度限制（防止 LLM 生成异常长字符串）
 _REL_TYPE_MAX_LEN = 64
 
+# 五层层次化记忆属性（挂载到 Entity 节点的可选属性，前缀 memory_ 避免与现有属性冲突）
+_MEMORY_ATTR_DEFAULTS = {
+    "layers": "",            # 命中的记忆层（分号分隔）
+    "importance": 0.0,       # 情景记忆重要性
+    "confidence": 0.0,       # 语义记忆置信度
+    "success_rate": 0.0,     # 程序记忆成功率
+    "attention_weight": 0.0, # 工作记忆注意力权重
+    "access_count": 0,       # 元记忆访问次数
+    "heat": 0.0,             # 元记忆热度
+}
+
+
+def _to_float(value: Any) -> float:
+    """把图查询返回值安全转为 float（Record/scalar/None 均可）。"""
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        return float(str(value)) if value is not None else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _to_int(value: Any) -> int:
+    """把图查询返回值安全转为 int（Record/scalar/None 均可）。"""
+    if isinstance(value, (int, float)):
+        return int(value)
+    try:
+        return int(str(value)) if value is not None else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+def _build_memory_props(attrs: Optional[dict], now: float) -> dict:
+    """把五层记忆属性字典转为挂载到 Entity 节点的 map（键带 memory_ 前缀）。
+
+    仅保留非空键，配合 Cypher 的 ``SET n += $props`` 使用：无记忆信息时
+    返回空 map，不向节点写入任何 memory_* 属性。
+    """
+    if not attrs:
+        return {}
+    props: dict = {}
+    layers = attrs.get("layers") or ""
+    if layers:
+        props["memory_layers"] = layers
+    for key, node_key in (
+        ("importance", "memory_importance"),
+        ("confidence", "memory_confidence"),
+        ("success_rate", "memory_success_rate"),
+        ("attention_weight", "memory_attention_weight"),
+        ("heat", "memory_heat"),
+    ):
+        value = attrs.get(key) or 0.0
+        if value > 0.0:
+            props[node_key] = float(value)
+    access_count = attrs.get("access_count") or 0
+    if access_count > 0:
+        props["memory_access_count"] = int(access_count)
+    if props:
+        props["memory_updated_at"] = now
+    return props
+
 # 时间链年份偏移：Aliya(aliya) 时间链相对用户正常时间向后 1000 年
 # （千年时空设定的体现：COSMOS 身处当下，Aliya 在千年之后）
 _TIMELINE_OFFSET_YEARS = 1000
 
 
 def _shift_timeline_date(day_date: str, timeline: str) -> str:
-    """按时间链语义调整日期。
+    """按时间链语义调整日期（幂等）。
 
     user 时间链使用传入的正常时间；aliya 时间链在正常时间基础上
     向后偏移 _TIMELINE_OFFSET_YEARS 年。无法解析的日期原样返回。
+
+    幂等性：若传入日期已处于 aliya 偏移时间线（年份 >= 偏移阈值，
+    即调用方已预偏移），则不再重复偏移，避免二次 +1000 造成时间链重复。
 
     Args:
         day_date: 用户正常时间日期字符串，如 "2026-07-11"
@@ -98,6 +162,9 @@ def _shift_timeline_date(day_date: str, timeline: str) -> str:
     try:
         from datetime import datetime
         d = datetime.strptime(day_date, "%Y-%m-%d")
+        if d.year >= _TIMELINE_OFFSET_YEARS * 3:
+            # 已处于 aliya 偏移时间线（正常年份 << 3000），跳过幂等
+            return day_date
         try:
             shifted = d.replace(year=d.year + _TIMELINE_OFFSET_YEARS)
         except ValueError:
@@ -241,6 +308,7 @@ class GraphStore:
         day_date: str = "",
         timeline: str = "",
         categories: Optional[List[str]] = None,
+        memory_attrs_by_entity: Optional[dict] = None,
     ) -> bool:
         """存储五元组到 Neo4j（同步）
 
@@ -250,6 +318,10 @@ class GraphStore:
         
         若提供 day_date 和 timeline，自动创建/获取 Day 节点并关联实体。
         category 写入关系的 category 属性，支持按类别查询与过滤。
+
+        memory_attrs_by_entity: 实体名 → 五层层次化记忆属性 dict 的映射，
+            命中实体的五层信息（层/重要性/置信度/成功率/注意力/访问数/热度）
+            以 memory_* 属性挂载到 Entity 节点（复用现有节点体系）。
         """
         if not new_quintuples:
             return True
@@ -262,6 +334,7 @@ class GraphStore:
                 self.store_quintuples(
                     new_quintuples, source_text, session_id,
                     confidence, day_date, tl, categories,
+                    memory_attrs_by_entity,
                 )
                 for tl in tls
             )
@@ -282,6 +355,12 @@ class GraphStore:
         success_count = 0
         cats = categories or []
 
+        # 实体名 → 挂载到节点的 memory_* 属性 map
+        memory_props_by_entity = {
+            name: _build_memory_props(attrs, now)
+            for name, attrs in (memory_attrs_by_entity or {}).items()
+        }
+
         # 按关系类型分组，每组通过 UNWIND 一次性批量写入
         groups: dict[str, list] = {}
         for idx, (head, head_type, rel, tail, tail_type) in enumerate(new_quintuples):
@@ -295,9 +374,20 @@ class GraphStore:
                 logger.warning("关系类型过长 (%d > %d)，跳过: %s", len(rel), _REL_TYPE_MAX_LEN, rel)
                 continue
             cat = cats[idx] if idx < len(cats) else ""
-            groups.setdefault(rel, []).append((head, head_type, tail, tail_type, cat))
+            # item 结构: (head, head_type, tail, tail_type, cat, head_memory_props, tail_memory_props)
+            groups.setdefault(rel, []).append(
+                (
+                    head, head_type, tail, tail_type, cat,
+                    memory_props_by_entity.get(head, {}),
+                    memory_props_by_entity.get(tail, {}),
+                )
+            )
 
         if not groups:
+            # 五元组全被过滤（如非法关系类型）时，仍确保该天时间链节点存在
+            if store_day_date and timeline:
+                self._ensure_day_node(g, store_day_date, timeline, now)
+                self._link_next_day(g, store_day_date, timeline, now)
             return True
 
         tx = g.begin()
@@ -311,7 +401,8 @@ class GraphStore:
                   ON CREATE SET h.entity_type = item[1],
                                 h.aliases     = item[0],
                                 h.created_at  = $now,
-                                h.updated_at  = $now
+                                h.updated_at  = $now,
+                                h            += item[5]
                   ON MATCH  SET h.updated_at  = $now,
                                 h.aliases     = CASE
                                   WHEN h.aliases IS NULL OR h.aliases = ''
@@ -319,13 +410,15 @@ class GraphStore:
                                   WHEN h.aliases CONTAINS item[0]
                                     THEN h.aliases
                                   ELSE h.aliases + ';' + item[0]
-                                END
+                                END,
+                                h            += item[5]
 
                 MERGE (t:Entity {{name: item[2], day_date: $day_date, timeline: $timeline}})
                   ON CREATE SET t.entity_type = item[3],
                                 t.aliases     = item[2],
                                 t.created_at  = $now,
-                                t.updated_at  = $now
+                                t.updated_at  = $now,
+                                t            += item[6]
                   ON MATCH  SET t.updated_at  = $now,
                                 t.aliases     = CASE
                                   WHEN t.aliases IS NULL OR t.aliases = ''
@@ -333,7 +426,8 @@ class GraphStore:
                                   WHEN t.aliases CONTAINS item[2]
                                     THEN t.aliases
                                   ELSE t.aliases + ';' + item[2]
-                                END
+                                END,
+                                t            += item[6]
 
                 WITH h, t, item
                 MERGE (h)-[r:{rel} {{day_date: $day_date, timeline: $timeline}}]->(t)
@@ -374,6 +468,45 @@ class GraphStore:
         return success_count > 0
 
     # ── Day 节点操作（时间链）──────────────────────────────────────────────
+
+    def touch_day(self, day_date: str, timeline: str) -> bool:
+        """确保某天的时间链节点存在（无五元组时也创建 Day 节点并串联）。
+
+        对话提取结果为 0 个五元组（如闲聊被过滤、LLM 返回空数组）时，
+        五元组落库会被跳过；但日期本身代表对话发生过，时间链应保持连续。
+        此方法在无五元组场景下仍创建 Day 节点并串联 NEXT_DAY，防止时间链断链。
+
+        Args:
+            day_date: 用户正常时间日期（aliya 链内部自动偏移 +1000 年）
+            timeline: 时间链标识，支持 "aliya|user" 复合
+
+        Returns:
+            Day 节点是否已确保存在（图谱未连接返回 False）
+        """
+        if not day_date or not timeline:
+            return False
+        # 复合时间链拆分
+        if "|" in timeline:
+            tls = [t.strip() for t in timeline.split("|") if t.strip()]
+            return all(self.touch_day(day_date, tl) for tl in tls)
+        try:
+            g = self._get_graph()
+        except GraphConnectionError as e:
+            logger.warning(str(e))
+            return False
+        if g is None:
+            return False
+
+        now = time.time()
+        store_day_date = _shift_timeline_date(day_date, timeline)
+        try:
+            self._ensure_day_node(g, store_day_date, timeline, now)
+            self._link_next_day(g, store_day_date, timeline, now)
+            logger.debug("确保 Day 节点与时间链: (%s/%s)", timeline, store_day_date)
+            return True
+        except Exception as e:
+            logger.warning("确保 Day 节点失败: %s", e)
+            return False
 
     @staticmethod
     def _ensure_day_node(g: _GRAPH_TYPE, day_date: str, timeline: str, now: float) -> None:
@@ -579,6 +712,7 @@ class GraphStore:
         limit: int = 5,
         similarity_threshold: float = 0.0,
         timeline: str = "",
+        include_source: bool = False,
     ) -> List[QuintupleType]:
         """根据关键词查询图谱（同步）
 
@@ -589,6 +723,10 @@ class GraphStore:
         同一角色（如 Aliya）在不同天/链为独立实体，故按
         (head, relation, tail) 聚合跨天同名事实，仅保留最近日期的实例，
         结果按日期降序返回，避免跨天重复碎片。
+
+        include_source 为 True 时返回 6 元素元组
+        (head, head_type, rel, tail, tail_type, source_text)，
+        否则返回 5 元素元组（向后兼容）。
         """
         try:
             g = self._get_graph()
@@ -633,7 +771,8 @@ class GraphStore:
                 RETURN e1.name AS head, e1.entity_type AS head_type,
                        type(r) AS relation,
                        e2.name AS tail, e2.entity_type AS tail_type,
-                       r.day_date AS day_date
+                       r.day_date AS day_date,
+                       r.source_text AS source_text
                 ORDER BY r.day_date DESC, r.updated_at DESC
                 LIMIT $limit
                 """,
@@ -667,16 +806,21 @@ class GraphStore:
             day_date = record.get("day_date") or ""
             # 同名事实跨天会重复，仅保留日期最近（day_date 最大）的实例
             if key not in best or day_date > best[key][0]:
+                source = record.get("source_text") or ""
                 best[key] = (day_date, (
                     head,
                     record["head_type"] or "",
                     relation,
                     tail,
                     record["tail_type"] or "",
+                    source,
                 ))
 
-        # 按最近日期降序返回
-        return [v[1] for v in sorted(best.values(), key=lambda x: x[0], reverse=True)]
+        # 按最近日期降序返回；include_source=False 时去掉第 6 位来源文本（保持 5 元素契约）
+        ordered = sorted(best.values(), key=lambda x: x[0], reverse=True)
+        if include_source:
+            return [v[1] for v in ordered]
+        return [v[1][:5] for v in ordered]
 
     def query_by_category(
         self,
@@ -802,6 +946,7 @@ class GraphStore:
         end_date: str = "",
         limit: int = 100,
         offset: int = 0,
+        include_source: bool = False,
     ) -> List[QuintupleType]:
         """按时间链和日期范围查询五元组
 
@@ -811,6 +956,7 @@ class GraphStore:
             end_date:   截止日期（含），如 "2026-06-30"，为空时不限
             limit:      返回数量上限
             offset:     跳过条数
+            include_source: 为 True 时返回 6 元素元组（含来源文本 source_text）
 
         Returns:
             五元组列表
@@ -854,22 +1000,28 @@ class GraphStore:
                 MATCH (h)-[r]->(t:Entity)
                 RETURN DISTINCT h.name AS head, h.entity_type AS head_type,
                        type(r) AS relation,
-                       t.name AS tail, t.entity_type AS tail_type
-                ORDER BY r.day_date DESC, r.created_at DESC
+                       t.name AS tail, t.entity_type AS tail_type,
+                       r.source_text AS source_text,
+                       r.day_date AS day_date,
+                       r.created_at AS created_at
+                ORDER BY day_date DESC, created_at DESC
                 SKIP $offset LIMIT $limit
                 """,
                 **params,
             ).data()
-            return [
-                (
+            rows = []
+            for rec in records:
+                quint = (
                     str(rec["head"] or ""),
                     str(rec["head_type"] or ""),
                     str(rec["relation"] or ""),
                     str(rec["tail"] or ""),
                     str(rec["tail_type"] or ""),
                 )
-                for rec in records
-            ]
+                if include_source:
+                    quint = quint + (str(rec.get("source_text") or ""),)
+                rows.append(quint)
+            return rows
         except Exception as e:
             logger.error("按日期查询五元组失败: %s", e)
             return []
@@ -1002,6 +1154,53 @@ class GraphStore:
             logger.error("获取所有五元组失败: %s", e)
             return []
 
+    def cleanup_orphan_entities(self) -> int:
+        """清理孤立 Entity 节点（无任何关系：入边/出边/[:ON_DAY]）。
+
+        历史脏数据或写入被中断、外部 Cypher DELETE r 后未级联清理等场景
+        会留下孤立 Entity 节点（图中只显示名称、无任何连线）。这些节点
+        会污染检索结果且无意义，应主动清理。
+
+        Returns:
+            被清理的孤立节点数；图谱未连接时返回 0。
+        """
+        try:
+            g = self._get_graph()
+        except GraphConnectionError:
+            logger.warning("Neo4j 未连接，无法清理孤立节点")
+            return 0
+        if g is None:
+            return 0
+
+        try:
+            # 0 计数先判断是否有孤儿
+            count_rec = g.run(  # type: ignore[attr-defined]
+                """
+                MATCH (e:Entity)
+                WHERE NOT (e)--()
+                RETURN count(e) AS cnt
+                """
+            ).data()
+            orphan_count = _to_int(count_rec[0]["cnt"]) if count_rec else 0
+            if orphan_count == 0:
+                return 0
+            g.run(  # type: ignore[attr-defined]
+                "MATCH (e:Entity) WHERE NOT (e)--() DETACH DELETE e"
+            )
+            logger.info("已清理 %d 个孤立 Entity 节点", orphan_count)
+            return orphan_count
+        except Exception as e:
+            logger.error("清理孤立 Entity 节点失败: %s", e)
+            return 0
+
+    async def cleanup_orphan_entities_async(self) -> int:
+        """清理孤立 Entity 节点（异步）"""
+        return await asyncio.to_thread(self.cleanup_orphan_entities)
+
+    async def touch_day_async(self, day_date: str, timeline: str) -> bool:
+        """确保某天的时间链节点存在（异步）"""
+        return await asyncio.to_thread(self.touch_day, day_date, timeline)
+
     def clear_all_quintuples(self) -> bool:
         """清空所有五元组（同步，同时清除 Day 节点）"""
         try:
@@ -1089,6 +1288,210 @@ class GraphStore:
             logger.error("删除 Day 单元失败: %s", e)
             return False
 
+    # ── 节点遗忘操作（五层记忆属性）────────────────────────────────────────
+
+    def decay_memory_nodes(
+        self,
+        now: float | None = None,
+        short_half_life: float = 60 * 60 * 24,        # 1 天：重要性/注意力/热度
+        long_half_life: float = 7 * 24 * 60 * 60,     # 7 天：置信度/成功率
+    ) -> int:
+        """按 Ebbinghaus 曲线批量衰减 Entity 节点上挂载的五层记忆属性。
+
+        衰减因子 = 2^(-age/half_life)，age 取 ``memory_updated_at`` 距今时长
+        （缺失时回退 ``updated_at``）。衰减后重置 ``memory_updated_at``，
+        避免重复衰减同一时段（衰减基于"最后一次写入/衰减"的间隔）。
+
+        Returns:
+            已衰减的节点数；图谱未连接时返回 0。
+        """
+        try:
+            g = self._get_graph()
+        except GraphConnectionError:
+            logger.debug("图谱未连接，跳过节点记忆衰减")
+            return 0
+        if g is None:
+            return 0
+
+        timestamp = now if now is not None else time.time()
+        try:
+            # 先统计待衰减节点数（避免依赖 py2neo stats 结构）
+            count_rec = g.run(  # type: ignore[attr-defined]
+                "MATCH (e:Entity) WHERE e.memory_layers IS NOT NULL RETURN count(e) AS cnt"
+            ).data()
+            count = _to_int(count_rec[0]["cnt"]) if count_rec else 0
+            if count == 0:
+                return 0
+            # ln(2) ≈ 0.6931；2^(-age/hl) = exp(-ln(2) * age / hl)
+            g.run(  # type: ignore[attr-defined]
+                """
+                MATCH (e:Entity)
+                WHERE e.memory_layers IS NOT NULL
+                WITH e,
+                     ($now - coalesce(e.memory_updated_at, e.updated_at, $now)) AS age
+                SET e.memory_importance      = e.memory_importance * exp(-0.6931 * age / $short_hl),
+                    e.memory_attention_weight = e.memory_attention_weight * exp(-0.6931 * age / $short_hl),
+                    e.memory_heat             = e.memory_heat * exp(-0.6931 * age / $short_hl),
+                    e.memory_confidence       = e.memory_confidence * exp(-0.6931 * age / $long_hl),
+                    e.memory_success_rate     = e.memory_success_rate * exp(-0.6931 * age / $long_hl),
+                    e.memory_updated_at       = $now
+                """,
+                now=timestamp,
+                short_hl=short_half_life,
+                long_hl=long_half_life,
+            )
+            return count
+        except Exception as e:
+            logger.warning("节点记忆衰减失败: %s", e)
+            return 0
+
+    def prune_memory_nodes(
+        self, threshold: float = 0.1, delete_entity: bool = False
+    ) -> int:
+        """清理"被遗忘"的图节点（五层记忆属性衰减后强度低于阈值）。
+
+        节点强度取挂载属性中的最大值（importance/confidence/success_rate/
+        attention_weight/heat）。默认仅移除节点的 ``memory_*`` 属性（实体节点
+        作为知识图谱的一部分保留）；``delete_entity=True`` 时连实体节点一并
+        DETACH DELETE（同时删除其所有关系）。
+
+        Returns:
+            被清理的节点数；图谱未连接时返回 0。
+        """
+        try:
+            g = self._get_graph()
+        except GraphConnectionError:
+            logger.debug("图谱未连接，跳过被遗忘节点清理")
+            return 0
+        if g is None:
+            return 0
+
+        try:
+            # 先选出强度低于阈值的节点（限制 1000 防止误删大批量）
+            records = g.run(  # type: ignore[attr-defined]
+                """
+                MATCH (e:Entity)
+                WHERE e.memory_layers IS NOT NULL
+                WITH e,
+                     CASE
+                       WHEN coalesce(e.memory_heat, 0.0) >= coalesce(e.memory_importance, 0.0)
+                         AND coalesce(e.memory_heat, 0.0) >= coalesce(e.memory_confidence, 0.0)
+                         AND coalesce(e.memory_heat, 0.0) >= coalesce(e.memory_success_rate, 0.0)
+                         AND coalesce(e.memory_heat, 0.0) >= coalesce(e.memory_attention_weight, 0.0)
+                       THEN coalesce(e.memory_heat, 0.0)
+                       WHEN coalesce(e.memory_importance, 0.0) >= coalesce(e.memory_confidence, 0.0)
+                         AND coalesce(e.memory_importance, 0.0) >= coalesce(e.memory_success_rate, 0.0)
+                         AND coalesce(e.memory_importance, 0.0) >= coalesce(e.memory_attention_weight, 0.0)
+                       THEN coalesce(e.memory_importance, 0.0)
+                       WHEN coalesce(e.memory_confidence, 0.0) >= coalesce(e.memory_success_rate, 0.0)
+                         AND coalesce(e.memory_confidence, 0.0) >= coalesce(e.memory_attention_weight, 0.0)
+                       THEN coalesce(e.memory_confidence, 0.0)
+                       WHEN coalesce(e.memory_success_rate, 0.0) >= coalesce(e.memory_attention_weight, 0.0)
+                       THEN coalesce(e.memory_success_rate, 0.0)
+                       ELSE coalesce(e.memory_attention_weight, 0.0)
+                     END AS strength
+                WHERE strength < $threshold
+                RETURN e.name AS name, e.day_date AS day_date, e.timeline AS timeline
+                LIMIT 1000
+                """,
+                threshold=threshold,
+            ).data()
+            nodes = [
+                {"name": str(r["name"]), "day_date": str(r["day_date"]), "timeline": str(r["timeline"])}
+                for r in records
+            ]
+            if not nodes:
+                return 0
+
+            # UNWIND 批量处理，一次网络往返替代逐节点 N 次往返
+            if delete_entity:
+                g.run(  # type: ignore[attr-defined]
+                    """
+                    UNWIND $nodes AS n
+                    MATCH (e:Entity {name: n.name, day_date: n.day_date, timeline: n.timeline})
+                    DETACH DELETE e
+                    """,
+                    nodes=nodes,
+                )
+            else:
+                g.run(  # type: ignore[attr-defined]
+                    """
+                    UNWIND $nodes AS n
+                    MATCH (e:Entity {name: n.name, day_date: n.day_date, timeline: n.timeline})
+                    REMOVE e.memory_layers,
+                           e.memory_importance,
+                           e.memory_confidence,
+                           e.memory_success_rate,
+                           e.memory_attention_weight,
+                           e.memory_access_count,
+                           e.memory_heat,
+                           e.memory_updated_at
+                    """,
+                    nodes=nodes,
+                )
+            logger.info("已清理 %d 个被遗忘的记忆节点", len(nodes))
+            return len(nodes)
+        except Exception as e:
+            logger.warning("被遗忘节点清理失败: %s", e)
+            return 0
+
+    def query_memory_nodes(
+        self, limit: int = 20, min_strength: float = 0.0
+    ) -> List[dict]:
+        """按当前（衰减后）记忆强度查询挂载了五层记忆属性的 Entity 节点。
+
+        Returns:
+            ``[{"name", "layers", "importance", "confidence", ...}]`` 列表，
+            按节点记忆强度降序；图谱未连接时返回空列表。
+        """
+        try:
+            g = self._get_graph()
+        except GraphConnectionError:
+            logger.debug("图谱未连接，返回空记忆节点列表")
+            return []
+        if g is None:
+            return []
+
+        try:
+            records = g.run(  # type: ignore[attr-defined]
+                """
+                MATCH (e:Entity)
+                WHERE e.memory_layers IS NOT NULL
+                  AND coalesce(e.memory_heat, 0.0) >= $min_strength
+                RETURN e.name AS name, e.day_date AS day_date, e.timeline AS timeline,
+                       e.memory_layers AS layers,
+                       e.memory_importance AS importance,
+                       e.memory_confidence AS confidence,
+                       e.memory_success_rate AS success_rate,
+                       e.memory_attention_weight AS attention_weight,
+                       e.memory_access_count AS access_count,
+                       e.memory_heat AS heat
+                ORDER BY coalesce(e.memory_heat, 0.0) DESC,
+                         coalesce(e.memory_importance, 0.0) DESC
+                LIMIT $limit
+                """,
+                min_strength=min_strength,
+                limit=max(limit, 1),
+            ).data()
+            return [
+                {
+                    "name": str(r.get("name") or ""),
+                    "day_date": str(r.get("day_date") or ""),
+                    "timeline": str(r.get("timeline") or ""),
+                    "layers": str(r.get("layers") or ""),
+                    "importance": _to_float(r.get("importance")),
+                    "confidence": _to_float(r.get("confidence")),
+                    "success_rate": _to_float(r.get("success_rate")),
+                    "attention_weight": _to_float(r.get("attention_weight")),
+                    "access_count": _to_int(r.get("access_count")),
+                    "heat": _to_float(r.get("heat")),
+                }
+                for r in records
+            ]
+        except Exception as e:
+            logger.warning("记忆节点查询失败: %s", e)
+            return []
+
     def get_graph_stats(self) -> dict:
         """获取图谱统计信息（同步，含 Day 节点统计）"""
         try:
@@ -1164,6 +1567,7 @@ class GraphStore:
         day_date: str = "",
         timeline: str = "",
         categories: Optional[List[str]] = None,
+        memory_attrs_by_entity: Optional[dict] = None,
     ) -> bool:
         """存储五元组到 Neo4j（异步，不阻塞事件循环）"""
         return await asyncio.to_thread(
@@ -1175,6 +1579,7 @@ class GraphStore:
             day_date,
             timeline,
             categories,
+            memory_attrs_by_entity,
         )
 
     async def query_graph_by_keywords_async(
@@ -1183,10 +1588,12 @@ class GraphStore:
         limit: int = 5,
         similarity_threshold: float = 0.0,
         timeline: str = "",
+        include_source: bool = False,
     ) -> List[QuintupleType]:
         """根据关键词查询图谱（异步，不阻塞事件循环）"""
         return await asyncio.to_thread(
-            self.query_graph_by_keywords, keywords, limit, similarity_threshold, timeline
+            self.query_graph_by_keywords,
+            keywords, limit, similarity_threshold, timeline, include_source,
         )
 
     async def get_all_quintuples_async(
@@ -1206,10 +1613,11 @@ class GraphStore:
         end_date: str = "",
         limit: int = 100,
         offset: int = 0,
+        include_source: bool = False,
     ) -> List[QuintupleType]:
         return await asyncio.to_thread(
             self.query_quintuples_by_day,
-            timeline, start_date, end_date, limit, offset,
+            timeline, start_date, end_date, limit, offset, include_source,
         )
 
     async def get_day_nodes_async(
@@ -1231,6 +1639,29 @@ class GraphStore:
     async def delete_day_async(self, timeline: str, day_date: str) -> bool:
         """删除指定时间链、指定日期的独立记忆单元（单 Day 清理，异步）"""
         return await asyncio.to_thread(self.delete_day, timeline, day_date)
+
+    async def decay_memory_nodes_async(
+        self,
+        now: float | None = None,
+        short_half_life: float = 60 * 60 * 24,
+        long_half_life: float = 7 * 24 * 60 * 60,
+    ) -> int:
+        """批量衰减节点五层记忆属性（异步）"""
+        return await asyncio.to_thread(
+            self.decay_memory_nodes, now, short_half_life, long_half_life
+        )
+
+    async def prune_memory_nodes_async(
+        self, threshold: float = 0.1, delete_entity: bool = False
+    ) -> int:
+        """清理被遗忘的记忆节点（异步）"""
+        return await asyncio.to_thread(self.prune_memory_nodes, threshold, delete_entity)
+
+    async def query_memory_nodes_async(
+        self, limit: int = 20, min_strength: float = 0.0
+    ) -> List[dict]:
+        """查询挂载五层记忆属性的节点（异步）"""
+        return await asyncio.to_thread(self.query_memory_nodes, limit, min_strength)
 
 
 # ── 模块级单例管理 ──────────────────────────────────────────────────────────
@@ -1305,9 +1736,11 @@ def store_quintuples(
     confidence: float = 1.0,
     day_date: str = "",
     timeline: str = "",
+    memory_attrs_by_entity: Optional[dict] = None,
 ) -> bool:
     return get_graph_store().store_quintuples(
-        new_quintuples, source_text, session_id, confidence, day_date, timeline
+        new_quintuples, source_text, session_id, confidence, day_date, timeline,
+        memory_attrs_by_entity=memory_attrs_by_entity,
     )
 
 
@@ -1316,9 +1749,10 @@ def query_graph_by_keywords(
     limit: int = 5,
     similarity_threshold: float = 0.0,
     timeline: str = "",
+    include_source: bool = False,
 ) -> List[QuintupleType]:
     return get_graph_store().query_graph_by_keywords(
-        keywords, limit, similarity_threshold, timeline
+        keywords, limit, similarity_threshold, timeline, include_source
     )
 
 
@@ -1338,6 +1772,66 @@ async def delete_day_async(timeline: str, day_date: str) -> bool:
     return await get_graph_store().delete_day_async(timeline, day_date)
 
 
+def cleanup_orphan_entities() -> int:
+    """清理孤立 Entity 节点（同步）"""
+    return get_graph_store().cleanup_orphan_entities()
+
+def touch_day(day_date: str, timeline: str) -> bool:
+    """确保某天的时间链节点存在（同步）"""
+    return get_graph_store().touch_day(day_date, timeline)
+
+async def touch_day_async(day_date: str, timeline: str) -> bool:
+    """确保某天的时间链节点存在（异步）"""
+    return await get_graph_store().touch_day_async(day_date, timeline)
+
+
+async def cleanup_orphan_entities_async() -> int:
+    """清理孤立 Entity 节点（异步）"""
+    return await get_graph_store().cleanup_orphan_entities_async()
+
+
+def decay_memory_nodes(
+    now: float | None = None,
+    short_half_life: float = 60 * 60 * 24,
+    long_half_life: float = 7 * 24 * 60 * 60,
+) -> int:
+    """批量衰减 Entity 节点上挂载的五层记忆属性（同步）"""
+    return get_graph_store().decay_memory_nodes(now, short_half_life, long_half_life)
+
+
+async def decay_memory_nodes_async(
+    now: float | None = None,
+    short_half_life: float = 60 * 60 * 24,
+    long_half_life: float = 7 * 24 * 60 * 60,
+) -> int:
+    """批量衰减 Entity 节点上挂载的五层记忆属性（异步）"""
+    return await get_graph_store().decay_memory_nodes_async(now, short_half_life, long_half_life)
+
+
+def prune_memory_nodes(threshold: float = 0.1, delete_entity: bool = False) -> int:
+    """清理被遗忘的记忆节点（同步）"""
+    return get_graph_store().prune_memory_nodes(threshold, delete_entity)
+
+
+async def prune_memory_nodes_async(
+    threshold: float = 0.1, delete_entity: bool = False
+) -> int:
+    """清理被遗忘的记忆节点（异步）"""
+    return await get_graph_store().prune_memory_nodes_async(threshold, delete_entity)
+
+
+def query_memory_nodes(limit: int = 20, min_strength: float = 0.0) -> List[dict]:
+    """查询挂载五层记忆属性的节点（同步）"""
+    return get_graph_store().query_memory_nodes(limit, min_strength)
+
+
+async def query_memory_nodes_async(
+    limit: int = 20, min_strength: float = 0.0
+) -> List[dict]:
+    """查询挂载五层记忆属性的节点（异步）"""
+    return await get_graph_store().query_memory_nodes_async(limit, min_strength)
+
+
 def get_graph_stats() -> dict:
     return get_graph_store().get_graph_stats()
 
@@ -1348,9 +1842,10 @@ def query_quintuples_by_day(
     end_date: str = "",
     limit: int = 100,
     offset: int = 0,
+    include_source: bool = False,
 ) -> List[QuintupleType]:
     return get_graph_store().query_quintuples_by_day(
-        timeline, start_date, end_date, limit, offset
+        timeline, start_date, end_date, limit, offset, include_source
     )
 
 
@@ -1362,9 +1857,11 @@ async def store_quintuples_async(
     day_date: str = "",
     timeline: str = "",
     categories: Optional[List[str]] = None,
+    memory_attrs_by_entity: Optional[dict] = None,
 ) -> bool:
     return await get_graph_store().store_quintuples_async(
-        new_quintuples, source_text, session_id, confidence, day_date, timeline, categories
+        new_quintuples, source_text, session_id, confidence, day_date, timeline,
+        categories, memory_attrs_by_entity,
     )
 
 
@@ -1373,9 +1870,10 @@ async def query_graph_by_keywords_async(
     limit: int = 5,
     similarity_threshold: float = 0.0,
     timeline: str = "",
+    include_source: bool = False,
 ) -> List[QuintupleType]:
     return await get_graph_store().query_graph_by_keywords_async(
-        keywords, limit, similarity_threshold, timeline
+        keywords, limit, similarity_threshold, timeline, include_source
     )
 
 
@@ -1395,9 +1893,10 @@ async def query_quintuples_by_day_async(
     end_date: str = "",
     limit: int = 100,
     offset: int = 0,
+    include_source: bool = False,
 ) -> List[QuintupleType]:
     return await get_graph_store().query_quintuples_by_day_async(
-        timeline, start_date, end_date, limit, offset,
+        timeline, start_date, end_date, limit, offset, include_source,
     )
 
 
@@ -1448,6 +1947,7 @@ __all__ = [
     "get_day_nodes_async",
     "get_all_quintuples",
     "clear_all_quintuples",
+    "delete_day",
     "get_graph_stats",
     "store_quintuples_async",
     "query_graph_by_keywords_async",
@@ -1455,4 +1955,16 @@ __all__ = [
     "get_all_quintuples_async",
     "clear_all_quintuples_async",
     "get_graph_stats_async",
+    "delete_day_async",
+    "cleanup_orphan_entities",
+    "cleanup_orphan_entities_async",
+    "touch_day",
+    "touch_day_async",
+    # 节点遗忘操作
+    "decay_memory_nodes",
+    "decay_memory_nodes_async",
+    "prune_memory_nodes",
+    "prune_memory_nodes_async",
+    "query_memory_nodes",
+    "query_memory_nodes_async",
 ]

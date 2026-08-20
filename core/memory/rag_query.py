@@ -59,6 +59,7 @@ KEYWORD_EXTRACT_PROMPT = """基于以下上下文和用户问题，提取与知�
 
 # 回答生成提示词模板
 ANSWER_PROMPT_TEMPLATE = """基于以下从知识图谱检索到的五元组关系，回答用户问题。
+每条关系后的「来源」是对话原文，可在回答中引用或概括，但不要生搬硬套。
 
 检索到的关系：
 {quintuples}
@@ -66,7 +67,7 @@ ANSWER_PROMPT_TEMPLATE = """基于以下从知识图谱检索到的五元组关�
 用户问题：{question}
 
 请根据检索到的关系，自然地回答问题。
-如果检索结果与问题相关，请基于事实回答。
+如果检索结果与问题相关，请基于事实回答（可适当引用来源）。
 如果检索结果不相关，请说明无法从已知信息中回答。"""
 
 
@@ -132,11 +133,13 @@ async def _query_by_time_range(
 
     aliya 时间链落库日期已 +1000 年，query_quintuples_by_day 内部会自动偏移，
     因此两条链都传入正常时间范围即可。
+    返回 6 元素元组（含来源文本 source_text），供回答生成引用来源。
     """
     async def _query_tl(tl: str) -> List[QuintupleType]:
         try:
             return await asyncio.to_thread(
-                graph.query_quintuples_by_day, tl, start_date, end_date, limit
+                graph.query_quintuples_by_day, tl, start_date, end_date, limit,
+                include_source=True,
             )
         except Exception as e:
             logger.warning("按时间范围查询失败 (timeline=%s): %s", tl, e)
@@ -222,10 +225,12 @@ class RAGQueryEngine:
             logger.info(f"提取关键词: {keywords}")
 
             # 2. 查询图谱（同步调用，由 asyncio.to_thread 避免阻塞）
+            #    include_source=True 返回 6 元素元组（含来源文本），供回答引用
             query_fn = self._graph_query_func or graph.query_graph_by_keywords
             quintuples = await asyncio.to_thread(
                 query_fn, keywords,
                 similarity_threshold=cfg.similarity_threshold,
+                include_source=True,
             )
 
             # 2.5 关键词未命中时，按问题中的时间表达式兜底召回
@@ -240,6 +245,16 @@ class RAGQueryEngine:
             if not quintuples:
                 logger.info("图谱中未找到相关关系")
                 return None
+
+            # 2.7 检索结果日志展示：逐条记录命中关系与来源文本，便于追踪检索链路
+            logger.info("图谱检索命中 %d 条关系（关键词: %s）", len(quintuples), keywords)
+            for idx, item in enumerate(quintuples, 1):
+                h, ht, rel, t, tt = (str(item[0]), str(item[1]), str(item[2]), str(item[3]), str(item[4]))
+                source = str(item[5])[:80] if len(item) >= 6 and item[5] else ""
+                if source:
+                    logger.info("  检索命中 #%d: %s(%s) —[%s]-> %s(%s) ｜ 来源: %s", idx, h, ht, rel, t, tt, source)
+                else:
+                    logger.info("  检索命中 #%d: %s(%s) —[%s]-> %s(%s)", idx, h, ht, rel, t, tt)
 
             # 3. 生成回答（LLM call #2）
             return await self._generate_answer(question, quintuples)
@@ -320,13 +335,20 @@ class RAGQueryEngine:
         return []
 
     async def _generate_answer(
-        self, question: str, quintuples: List[QuintupleType]
+        self, question: str, quintuples: List[Tuple[str, ...]]
     ) -> str:
-        """异步生成回答（LLM call #2，含指数退避重试 + 永久性错误检测）"""
-        quintuple_strs = [
-            f"- {h}({h_type}) —[{r}]-> {t}({t_type})"
-            for h, h_type, r, t, t_type in quintuples
-        ]
+        """异步生成回答（LLM call #2，含指数退避重试 + 永久性错误检测）
+
+        兼容 5 元素（无来源）与 6 元素（含来源文本 source_text）五元组；
+        6 元素时在提示词中附加「来源：…」供回答引用。
+        """
+        quintuple_strs: List[str] = []
+        for q in quintuples:
+            h, h_type, r, t, t_type = (str(q[0]), str(q[1]), str(q[2]), str(q[3]), str(q[4]))
+            line = f"- {h}({h_type}) —[{r}]-> {t}({t_type})"
+            if len(q) >= 6 and q[5]:
+                line += f" （来源：{q[5]}）"
+            quintuple_strs.append(line)
 
         prompt = ANSWER_PROMPT_TEMPLATE.format(
             quintuples="\n".join(quintuple_strs),

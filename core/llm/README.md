@@ -6,7 +6,8 @@
 
 ```
 __init__.py           ← 公共接口，工厂函数
-service.py            ← ConversationService：消息历史管理、重试、流式
+service.py            ← ConversationService：对话编排（调用、重试、流式、usage 统计）
+context_manager.py    ← ConversationContextManager：消息历史、提示词、注入补丁、请求构建、缓存持久化
 models.py             ← Message / ConversationContext / ChatRequest / ChatResponse / TokenUsage
 cache.py              ← ContextCache：内存 LRU + TTL 会话缓存
 cache_backend.py      ← CacheBackend / MemoryBackend
@@ -18,7 +19,10 @@ providers/
   openai_compatible.py ← OpenAICompatibleProvider（通用 OpenAI 兼容接口）
 ```
 
-**调用链**：`ConversationService.asend()` → `_prepare_request()`（拼接 system + 历史） → `LLMProvider.async_chat_completion()` → `_commit_response()`（写回历史 + 更新缓存）。
+**职责分工**：`ConversationService` 负责对话编排（provider 调用、重试、流式、usage 统计、资源管理），
+上下文管理（历史、系统提示词、注入补丁、请求构建、持久化）全部委托给 `ConversationContextManager`。
+
+**调用链**：`ConversationService.asend()` → `ConversationContextManager.prepare_request()`（拼接 system + 历史） → `LLMProvider.async_chat_completion()` → `ConversationService._commit_response()`（写回历史 + 更新缓存 + 累计 usage）。
 
 ---
 

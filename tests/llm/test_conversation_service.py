@@ -179,6 +179,26 @@ class TestConversationService:
         assert call_count == 2
 
     @pytest.mark.asyncio
+    async def test_retry_preserves_thinking_mode(self, mock_provider, service):
+        """重试重建请求时 thinking 参数应保持一致，不因请求对象重建而丢失"""
+        mock_provider.supports_thinking = True
+        call_count = 0
+        thinking_seen: list = []
+
+        async def flaky_chat(request):
+            nonlocal call_count
+            call_count += 1
+            thinking_seen.append(request.thinking)
+            if call_count == 1:
+                raise LLMRequestError(provider="test", reason="timeout")
+            return ChatResponse(content="ok", usage=TokenUsage())
+
+        mock_provider.async_chat_completion = flaky_chat
+        reply = await service.asend("hi", max_retries=2)
+        assert reply == "ok"
+        assert thinking_seen == [{"type": "enabled"}, {"type": "enabled"}]
+
+    @pytest.mark.asyncio
     async def test_all_retries_fail_raises(self, mock_provider, service):
         mock_provider.async_chat_completion.side_effect = LLMRequestError(
             provider="test", reason="always fail"
