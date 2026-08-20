@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from typing import Any, AsyncGenerator
+from typing import TYPE_CHECKING, Any, AsyncGenerator
 
 from agent.context import ContextBuilder, inject_soul_context
 from agent.events import (
@@ -32,6 +32,9 @@ from agent.events import (
 )
 from agent.tools import Permission, PermissionChecker, ToolContext, ToolRegistry
 
+if TYPE_CHECKING:
+    from agent.emotion.engine import EmotionEngine
+
 _CONFIRM_REJECT_TEXT = "[已拒绝] 用户未授权执行该工具"
 _NOT_REGISTERED_TEXT = "[工具未注册]"
 
@@ -50,18 +53,23 @@ class AgentLoop:
         tool_timeout: float = 30.0,
         confirm_timeout: float = 30.0,
         memory: Any = None,
+        emotion_engine: EmotionEngine | None = None,
     ) -> None:
         self.service = service
         self.registry = registry
         self.checker = checker
         self.context = context
         self.memory = memory
+        self.emotion_engine = emotion_engine
         self.max_tool_rounds = max_tool_rounds
         self.tool_timeout = tool_timeout
         self.confirm_timeout = confirm_timeout
         self._abort = False
         # 工具确认挂起表：call_id -> Future[bool]
         self.pending_confirmations: dict[str, asyncio.Future[bool]] = {}
+        # 绑定 emotion_engine 到 service（如果提供了）
+        if self.emotion_engine is not None:
+            self.emotion_engine.bind_service(service)
 
     # ── 中断控制 ────────────────────────────────────────────────────────────
 
@@ -280,11 +288,20 @@ class AgentLoop:
         yield TextMessageEnd(message_id=message_id, full_text=full_reply)
         yield RunFinished(session_id=self.service.conversation_id)
 
-        # 收尾副作用：写入长期记忆（失败不抛异常）
+        # 收尾副作用：写入长期记忆 + 情绪引擎更新（失败不抛异常）
         if self.memory is not None:
             try:
                 await self.memory.add_conversation_memory(
                     text, full_reply, session_id=self.service.conversation_id
                 )
             except Exception:  # pragma: no cover - 记忆写入失败不阻塞
+                pass
+
+        # 情绪引擎：观察本轮对话 → 平滑 → 注入语气到下一轮
+        if self.emotion_engine is not None:
+            try:
+                history = await self.service.get_history()
+                messages = [{"role": m.role, "content": m.content} for m in history[-6:]]
+                await self.emotion_engine.on_turn_complete(messages)
+            except Exception:  # pragma: no cover - 情绪观察失败不阻塞
                 pass

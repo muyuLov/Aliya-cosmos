@@ -49,6 +49,23 @@ class TestContextBuilder:
         assert "情绪状态" not in text
         assert "工具结果摘要" not in text
 
+    def test_build_mcp_system_empty_by_default(self):
+        builder = ContextBuilder(PROMPTS_DIR)
+        assert builder.build_mcp_system() == ""
+
+    def test_build_mcp_system_with_servers(self):
+        builder = ContextBuilder(PROMPTS_DIR)
+        builder.available_mcp_servers = ["srv1", "srv2"]
+        text = builder.build_mcp_system()
+        assert "可用外部服务" in text
+        assert "srv1" in text and "srv2" in text
+
+    def test_build_mcp_system_does_not_break_tool_system(self):
+        builder = ContextBuilder(PROMPTS_DIR)
+        builder.available_mcp_servers = ["srv1"]
+        assert "工具调度" in builder.build_tool_system()
+        assert "可用外部服务" in builder.build_mcp_system()
+
 
 class TestInjectSoulContext:
     @pytest.mark.asyncio

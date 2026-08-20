@@ -1,5 +1,33 @@
 <template>
   <div class="chat-shell">
+    <!-- 会话侧边栏切换按钮 -->
+    <button class="session-toggle" @click="showSidebar = !showSidebar" title="会话列表">
+      ☰
+    </button>
+
+    <!-- 会话侧边栏 -->
+    <aside v-if="showSidebar" class="session-sidebar">
+      <div class="session-sidebar__header">
+        <span>会话列表</span>
+        <button class="session-sidebar__close" @click="showSidebar = false">✕</button>
+      </div>
+      <div class="session-sidebar__list">
+        <div
+          v-for="s in chatStore.sessions"
+          :key="s.id"
+          class="session-item"
+          :class="{ 'session-item--active': s.id === chatStore.activeSessionId }"
+          @click="handleSwitchSession(s.id)"
+        >
+          <div class="session-item__title">{{ s.title }}</div>
+          <div class="session-item__meta">{{ formatTime(s.updated_at) }} · {{ s.message_count }} 条</div>
+        </div>
+        <div v-if="chatStore.sessions.length === 0" class="session-sidebar__empty">
+          暂无历史会话
+        </div>
+      </div>
+    </aside>
+
     <WindowTitlebar title="与 Aliya 聊天" :connected="chatStore.connected" :api="api" />
 
     <!-- 断线提示条 -->
@@ -108,6 +136,12 @@ import {
   onRunFinished,
   onToolStart,
   onToolEnd,
+  onSessionList,
+  onSessionSwitched,
+  onSessionDeleted,
+  fetchSessionList,
+  switchSession,
+  deleteSession,
 } from './useChatStore.js';
 
 const api = window.chatAPI;
@@ -115,6 +149,7 @@ const api = window.chatAPI;
 const draft = ref('');
 const listEl = ref(null);
 const inputEl = ref(null);
+const showSidebar = ref(false);
 
 const paramsSummary = computed(() => {
   const params = chatStore.confirm?.params;
@@ -146,6 +181,22 @@ function scrollToBottom() {
   });
 }
 
+// 会话侧边栏操作
+function handleSwitchSession(id) {
+  switchSession(id);
+  showSidebar.value = false;
+}
+
+function formatTime(ts) {
+  if (!ts) return '';
+  const d = new Date(ts * 1000);
+  const now = new Date();
+  if (d.toDateString() === now.toDateString()) {
+    return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+  }
+  return d.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' });
+}
+
 watch(() => chatStore.messages.length, scrollToBottom);
 watch(() => chatStore.busy, scrollToBottom);
 // 流式回复逐 token 更新时持续滚动
@@ -166,8 +217,13 @@ onMounted(() => {
   api?.onRunFinished?.(onRunFinished);
   api?.onToolStart?.(onToolStart);
   api?.onToolEnd?.(onToolEnd);
+  // 会话管理事件
+  api?.onSessionList?.(onSessionList);
+  api?.onSessionSwitched?.(onSessionSwitched);
+  api?.onSessionDeleted?.(onSessionDeleted);
   // 主动拉取当前连接状态（事件驱动快照可能遗漏初始状态）
   fetchConnectionState();
+  fetchSessionList();
   inputEl.value?.focus();
 });
 </script>
@@ -396,5 +452,102 @@ onMounted(() => {
 
 .chat-input__field:disabled {
   opacity: 0.5;
+}
+
+/* ---------- 会话侧边栏 ---------- */
+
+.session-toggle {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 10;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: var(--rb-radius-md);
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--rb-text-muted);
+  font-size: 16px;
+  cursor: pointer;
+  transition: background 140ms ease;
+}
+
+.session-toggle:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.session-sidebar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 20;
+  width: 220px;
+  height: 100%;
+  background: var(--rb-bg-2);
+  border-right: 1px solid var(--rb-border-soft);
+  display: flex;
+  flex-direction: column;
+  box-shadow: 4px 0 16px rgba(0, 0, 0, 0.15);
+}
+
+.session-sidebar__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 14px;
+  font: var(--rb-text-small-em);
+  color: var(--rb-text-default);
+  border-bottom: 1px solid var(--rb-border-faint);
+}
+
+.session-sidebar__close {
+  border: none;
+  background: none;
+  color: var(--rb-text-muted);
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.session-sidebar__list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px;
+}
+
+.session-item {
+  padding: 8px 10px;
+  border-radius: var(--rb-radius-md);
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.session-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.session-item--active {
+  background: rgba(236, 72, 153, 0.12);
+  border: 1px solid rgba(236, 72, 153, 0.24);
+}
+
+.session-item__title {
+  font: var(--rb-text-small);
+  color: var(--rb-text-default);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-item__meta {
+  font: var(--rb-text-micro);
+  color: var(--rb-text-muted);
+  margin-top: 2px;
+}
+
+.session-sidebar__empty {
+  padding: 20px 14px;
+  text-align: center;
+  font: var(--rb-text-micro);
+  color: var(--rb-text-muted);
 }
 </style>

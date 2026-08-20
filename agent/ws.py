@@ -3,7 +3,7 @@
 职责：
 - 接收循环：客户端消息分发（user_message / stop / confirm_response / ping）
 - 发送循环：队列事件序列化为线上协议 JSON 推送给客户端
-- 连接级会话：经 SessionManager 获取/创建 AgentSession
+- 连接级会话：经 build_session_factory 获取/创建 AgentSession
 """
 
 from __future__ import annotations
@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from typing import Awaitable, Callable
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -23,9 +22,12 @@ from agent.events import (
     ProtocolEvent,
     to_protocol,
 )
-from agent.session import AgentSession
-
-SessionFactory = Callable[[str], Awaitable[AgentSession]]
+from agent.session import (
+    AgentSession,
+    SessionFactory,
+    _get_or_create_session_store,
+    build_session_factory,
+)
 
 
 def create_ws_router(session_factory: SessionFactory | None = None) -> APIRouter:
@@ -33,7 +35,7 @@ def create_ws_router(session_factory: SessionFactory | None = None) -> APIRouter
     router = APIRouter()
 
     if session_factory is None:
-        session_factory = _default_session_factory()
+        session_factory = build_session_factory()
 
     @router.websocket("/agent/ws")
     async def agent_ws(ws: WebSocket) -> None:
@@ -53,6 +55,8 @@ def create_ws_router(session_factory: SessionFactory | None = None) -> APIRouter
 
         async def run_agent(text: str) -> None:
             """消费 AgentSession 事件流并放入发送队列。"""
+            if session is None:
+                return
             try:
                 async for event in session.submit(text):
                     await queue.put(event)
@@ -86,7 +90,7 @@ def create_ws_router(session_factory: SessionFactory | None = None) -> APIRouter
                 await ws.send_json(data)
 
         async def recv_loop() -> None:
-            nonlocal agent_task
+            nonlocal agent_task, session
             while True:
                 raw = await ws.receive_text()
                 try:
@@ -105,8 +109,12 @@ def create_ws_router(session_factory: SessionFactory | None = None) -> APIRouter
                         continue
                     agent_task = asyncio.create_task(run_agent(text))
                 elif mtype == "stop":
+                    if session is None:
+                        continue
                     session.interrupt()
                 elif mtype == "confirm_response":
+                    if session is None:
+                        continue
                     await session.loop.resolve_confirmation(
                         str(data.get("call_id", "")),
                         allowed=bool(data.get("allowed", False)),
@@ -114,6 +122,8 @@ def create_ws_router(session_factory: SessionFactory | None = None) -> APIRouter
                 elif mtype == "ping":
                     await queue.put(ProtocolEvent(type="pong", payload={}))
                 elif mtype == "get_token_usage":
+                    if session is None:
+                        continue
                     usage = session.service.usage
                     await queue.put(
                         ProtocolEvent(
@@ -126,7 +136,71 @@ def create_ws_router(session_factory: SessionFactory | None = None) -> APIRouter
                         )
                     )
                 elif mtype == "get_emotion_state":
-                    pass  # M1 无情绪引擎，返回空
+                    if session is None:
+                        continue
+                    state = session.loop.emotion_engine.current_state if session.loop.emotion_engine else None
+                    await queue.put(
+                        ProtocolEvent(
+                            type="emotion_state_changed",
+                            payload={
+                                "dominant": state.dominant if state else "neutral",
+                                "scores": state.scores if state else {},
+                            },
+                        )
+                    )
+                elif mtype == "list_sessions":
+                    store = _get_or_create_session_store()
+                    items = store.list_all()
+                    await queue.put(
+                        ProtocolEvent(
+                            type="session_list",
+                            payload={
+                                "sessions": [
+                                    {
+                                        "id": s.id,
+                                        "title": s.title_or_default,
+                                        "updated_at": s.updated_at,
+                                        "message_count": s.message_count,
+                                        "pinned": s.pinned,
+                                    }
+                                    for s in items
+                                ]
+                            },
+                        )
+                    )
+                elif mtype == "switch_session":
+                    target_id = str(data.get("session_id", ""))
+                    if not target_id:
+                        continue
+                    # 切换会话需要创建新的 AgentSession
+                    try:
+                        new_session = await session_factory(target_id)
+                        session = new_session
+                        await queue.put(
+                            ProtocolEvent(
+                                type="session_switched",
+                                payload={"session_id": target_id},
+                            )
+                        )
+                    except Exception as exc:
+                        await queue.put(
+                            ProtocolEvent(
+                                type=ERROR,
+                                payload={"message": f"切换会话失败: {exc}"},
+                            )
+                        )
+                elif mtype == "delete_session":
+                    target_id = str(data.get("session_id", ""))
+                    if not target_id:
+                        continue
+                    store = _get_or_create_session_store()
+                    deleted = store.delete(target_id)
+                    await queue.put(
+                        ProtocolEvent(
+                            type="session_deleted",
+                            payload={"session_id": target_id, "deleted": deleted},
+                        )
+                    )
                 elif mtype == "close":
                     break
 
@@ -138,50 +212,7 @@ def create_ws_router(session_factory: SessionFactory | None = None) -> APIRouter
             if agent_task is not None:
                 agent_task.cancel()
             queue.put_nowait(None)
-            await session.service.aclose()
+            if session is not None:
+                await session.service.aclose()
 
     return router
-
-
-def _default_session_factory() -> SessionFactory:
-    """生产装配：真实 LLM 服务 + GRAG 记忆 + 内置工具。"""
-
-    async def factory(conversation_id: str) -> AgentSession:
-        from agent.context import ContextBuilder
-        from agent.loop import AgentLoop
-        from agent.tools import PermissionChecker, ToolRegistry
-        from agent.tools.builtin import register_builtin_tools
-        from core.config import get_config_instance
-        from core.llm import create_from_config
-        from core.logger import get_logger
-        from core.memory.memory_manager import GRAGMemoryManager
-
-        logger = get_logger(__name__)
-        cfg = get_config_instance("data/config/main.yml")
-
-        service = create_from_config("data/config/main.yml", conversation_id=conversation_id)
-
-        memory = None
-        try:
-            memory = GRAGMemoryManager()
-        except Exception as exc:  # pragma: no cover - 记忆不可用不阻塞
-            logger.warning("GRAG 记忆初始化失败，工具将降级: %s", exc)
-
-        registry = ToolRegistry()
-        register_builtin_tools(registry)
-
-        perm_path = cfg.get(
-            "cosmos.service.agent.permissions.config_path", "data/config/Permissions.yml"
-        )
-        checker = PermissionChecker(perm_path)
-
-        loop = AgentLoop(
-            service=service,
-            registry=registry,
-            checker=checker,
-            context=ContextBuilder(),
-            memory=memory,
-        )
-        return AgentSession(conversation_id, service, loop)
-
-    return factory

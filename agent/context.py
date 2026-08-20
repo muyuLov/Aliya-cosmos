@@ -13,6 +13,8 @@ class ContextBuilder:
 
     def __init__(self, prompts_dir: str = "data/prompts") -> None:
         self._dir = Path(prompts_dir)
+        # 已成功连接的 MCP 服务器名（由启动同步写入）
+        self.available_mcp_servers: list[str] = []
 
     def _read(self, name: str) -> str:
         return (self._dir / name).read_text(encoding="utf-8")
@@ -23,6 +25,16 @@ class ContextBuilder:
         工具列表不拼接进 system prompt——由 LLM API 的 tools schema 传递。
         """
         return self._read("tools_system.md")
+
+    def build_mcp_system(self) -> str:
+        """返回已连接 MCP 服务清单（与 build_tool_system 并列的注入点）。
+
+        无已连接服务器时返回空字符串（不污染 prompt）。
+        """
+        if not self.available_mcp_servers:
+            return ""
+        names = "、".join(self.available_mcp_servers)
+        return f"## 可用外部服务（MCP）\n当前可调用以下 MCP 服务提供的工具：{names}。"
 
     def build_soul_system(
         self,

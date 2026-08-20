@@ -129,6 +129,10 @@ def to_protocol(event: AgentEvent, **_ctx) -> ProtocolEvent | None:
 # ── EventSink 接口 ──────────────────────────────────────────────────────────
 
 class EventSink(Protocol):
-    """事件订阅接口：任何实现者都可订阅进程内事件"""
+    """事件订阅接口：任何实现者都可订阅进程内事件
 
-    async def emit(self, event: AgentEvent) -> None: ...
+    广播方会同时派发 AgentEvent 与 ProtocolEvent（后者含 CONFIRM_REQUEST），
+    实现方自行挑选关心的类型。
+    """
+
+    async def emit(self, event: AgentEvent | ProtocolEvent) -> None: ...

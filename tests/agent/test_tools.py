@@ -162,9 +162,14 @@ class TestBuiltinTools:
         result = await reg.execute("query_recent_conversation", ToolContext("hi", "c1", memory=mem), {"question": "q"})
         assert result == "[无相关记忆]"
 
-    def test_registry_has_three_tools(self):
+    def test_registry_has_all_builtin_tools(self):
         reg = ToolRegistry()
         register_builtin_tools(reg)
-        assert len(reg.enabled_definitions()) == 3
         names = {d.name for d in reg.enabled_definitions()}
-        assert names == {"get_current_time", "memory_query", "query_recent_conversation"}
+        assert names == {
+            "get_current_time",
+            "memory_query",
+            "query_recent_conversation",
+            "search_knowledge",
+            "roll_dice",
+        }

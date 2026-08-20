@@ -1,4 +1,4 @@
-"""测试 AgentSession 与会话管理器"""
+"""测试 AgentSession 与会话装配"""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from agent.events import RunStarted
-from agent.session import AgentSession, SessionManager
+from agent.session import AgentSession, build_session_factory
 
 
 def make_session(conversation_id="s1"):
@@ -57,37 +57,8 @@ class TestAgentSession:
         assert session.loop is session._loop
 
 
-class TestSessionManager:
-    def test_get_or_create_same_instance(self):
-        mgr = SessionManager()
-        created = []
+class TestSessionFactory:
+    def test_build_session_factory_returns_callable(self):
+        factory = build_session_factory()
+        assert callable(factory)
 
-        def factory():
-            s = make_session("s1")
-            created.append(s)
-            return s
-
-        a = mgr.get_or_create("s1", factory)
-        b = mgr.get_or_create("s1", factory)
-        assert a is b
-        assert len(created) == 1
-
-    def test_get_and_remove(self):
-        mgr = SessionManager()
-        session = make_session("s1")
-        mgr._sessions["s1"] = session
-        assert mgr.get("s1") is session
-        mgr.remove("s1")
-        assert mgr.get("s1") is None
-
-    def test_remove_missing_no_error(self):
-        mgr = SessionManager()
-        mgr.remove("nope")  # 不应抛异常
-
-    def test_close_all(self):
-        mgr = SessionManager()
-        mgr._sessions["s1"] = make_session("s1")
-        mgr._sessions["s2"] = make_session("s2")
-        mgr.close_all()
-        assert mgr.get("s1") is None
-        assert mgr.get("s2") is None

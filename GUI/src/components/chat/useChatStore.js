@@ -13,6 +13,9 @@ export const chatStore = reactive({
   messages: [],              // { id, role: 'user'|'ai'|'system', text }
   confirm: null,             // 待决工具确认 { tool, params }
   streaming: null,           // 流式回复中 { messageId, text }
+  // ── 会话管理 ──
+  sessions: [],              // { id, title, updated_at, message_count, pinned }
+  activeSessionId: null,     // 当前活跃会话 ID
 });
 
 function pushMessage(role, text) {
@@ -122,4 +125,44 @@ export function onToolStart(data) {
 
 export function onToolEnd() {
   // 工具执行结束无需额外 UI 动作
+}
+
+// ---------- 会话管理 ----------
+
+export function onSessionList(data) {
+  if (Array.isArray(data?.sessions)) {
+    chatStore.sessions = data.sessions;
+  }
+}
+
+export function onSessionSwitched(data) {
+  if (data?.session_id) {
+    chatStore.activeSessionId = data.session_id;
+    chatStore.messages = [];  // 切换后消息列表由后端推送
+  }
+}
+
+export function onSessionDeleted(data) {
+  if (data?.deleted && data?.session_id) {
+    chatStore.sessions = chatStore.sessions.filter(s => s.id !== data.session_id);
+    if (chatStore.activeSessionId === data.session_id) {
+      chatStore.activeSessionId = null;
+      chatStore.messages = [];
+    }
+  }
+}
+
+/** 请求会话列表 */
+export function fetchSessionList() {
+  api?.send(JSON.stringify({ type: 'list_sessions' }));
+}
+
+/** 切换会话 */
+export function switchSession(sessionId) {
+  api?.send(JSON.stringify({ type: 'switch_session', session_id: sessionId }));
+}
+
+/** 删除会话 */
+export function deleteSession(sessionId) {
+  api?.send(JSON.stringify({ type: 'delete_session', session_id: sessionId }));
 }

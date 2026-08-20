@@ -34,6 +34,57 @@ cosmos:
       # ── Agent 权限配置 ──────────────────────────────────
       permissions:
         config_path: data/config/Permissions.yml  # 权限配置文件
+
+      # ── 情绪引擎配置 ──────────────────────────────────
+      emotion:
+        enabled: true                       # 启用情绪引擎
+        fallback: neutral                   # 无结果时的默认情绪
+        fast_rise: ["sad", "anxiety", "anger", "disgusted"]  # 负面快速上升
+        observer_weight: 0.3                # 常规观测权重
+        fast_rise_weight: 0.62              # 快速上升权重
+        scene_match_threshold: 0.72         # 场景匹配阈值
+
+      # ── 主动聊天配置 ──────────────────────────────────
+      proactive:
+        enabled: false                      # 默认关闭，GUI 设置页可开
+        check_interval_seconds: 60          # 调度轮询间隔
+        quiet_hours:
+          start: "23:00"                    # 不打搅开始
+          end: "07:00"                      # 不打搅结束
+        idle_timeout_minutes: 30            # 用户无操作静默超时
+        triggers:
+          - type: schedule                  # 定时触发
+            at: "20:00"
+            message: "晚上好呀，今天过得怎么样？"
+          - type: idle                      # 静默超时触发
+            message: "看你半天没说话，是在忙吗？"
+
+      # ── 知识库配置（M3 RAG）──────────────────────────────
+      knowledge:
+        dir: data/knowledge                # 启动索引目录（存放 .md 文档，RAG 检索来源）
+
+      # ── MCP 服务器配置（M3）─────────────────────────────
+      mcp:
+        config_path: data/config/MCPServers.json  # MCP 服务器列表文件（JSON 数组，每项含 name/transport/command/url/enabled）
+
+      # ── 渠道配置（M4 多渠道接入）─────────────────────────
+      channels:
+        feishu:
+          enabled: false              # 默认关闭，显式开启
+          app_id: ""                  # 飞书应用 app_id
+          app_secret: ""              # 飞书应用 app_secret（不落盘明文密钥文件）
+          verification_token: ""      # 事件订阅校验 token
+          event_path: "/channels/feishu"   # 接收 webhook 的路由路径
+          confirm_via_feishu: true    # 高风险工具是否经飞书交互确认
+        wechat:
+          enabled: false
+          corp_id: ""                 # 企业微信 corp_id（或本地桥接标识）
+          agent_id: ""
+          secret: ""                  # 应用 secret
+          token: ""                   # 回调校验 token
+          aes_key: ""                 # 消息加密 aes_key
+          event_path: "/channels/wechat"
+          confirm_via_wechat: true
     # ── GRAG 图记忆系统 ────────────────────────────────
     grag:
       enabled: true                    # 启用记忆系统
