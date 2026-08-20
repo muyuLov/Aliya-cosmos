@@ -21,7 +21,7 @@ if __name__ == "__main__":
         sys.path.insert(0, str(project_root))
 
 from core.exception import get_default_handler
-from core.llm import ContextCache, ConversationService, create_from_config
+from core.llm import ContextCache, create_from_config
 from core.llm.exceptions import LLMRequestError
 
 

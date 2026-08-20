@@ -13,23 +13,45 @@ class Message(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    role: Literal["system", "user", "assistant"]
+    role: Literal["system", "user", "assistant", "tool"]
     content: str
     reasoning_content: str = ""
     metadata: dict[str, Any] | None = None
+    # 当 role == "tool" 时必填，关联 assistant 消息中的 tool_call.id
+    tool_call_id: str | None = None
+    # assistant 消息携带的工具调用数组（OpenAI 格式）
+    tool_calls: list[dict] | None = None
 
-    def to_api_dict(self) -> dict[str, str]:
-        """返回仅含 role 与 content 的字典，用于构造 API 请求体。"""
-        return {"role": self.role, "content": self.content}
+    def to_api_dict(self) -> dict[str, Any]:
+        """返回用于构造 API 请求体的字典。
 
-    def to_full_api_dict(self) -> dict[str, str]:
+        - 普通消息：{"role", "content"}
+        - tool 角色消息：{"role": "tool", "tool_call_id", "content"}
+        - 带工具调用的 assistant 消息：{"role": "assistant", "content", "tool_calls"}
+        """
+        if self.role == "tool":
+            return {
+                "role": "tool",
+                "tool_call_id": self.tool_call_id,
+                "content": self.content,
+            }
+        result: dict[str, Any] = {"role": self.role, "content": self.content}
+        if self.tool_calls:
+            result["tool_calls"] = self.tool_calls
+        return result
+
+    def to_full_api_dict(self) -> dict[str, Any]:
         """返回完整 API 字典，含 reasoning_content（如有）。
 
         根据 DeepSeek 思考模式规范：
         - 有工具调用时：必须回传 reasoning_content，否则 API 返回 400
         - 无工具调用时：可省略 reasoning_content
         """
-        result: dict[str, str] = {"role": self.role, "content": self.content}
+        result: dict[str, Any] = {"role": self.role, "content": self.content}
+        if self.role == "tool":
+            result["tool_call_id"] = self.tool_call_id
+        if self.tool_calls:
+            result["tool_calls"] = self.tool_calls
         if self.reasoning_content:
             result["reasoning_content"] = self.reasoning_content
         return result
@@ -48,7 +70,7 @@ class ConversationContext(BaseModel):
 class ChatRequest(BaseModel):
     """提供商无关的对话请求结构。"""
 
-    messages: list[dict[str, str]]
+    messages: list[dict[str, Any]]
     model: str
     # None 表示使用提供商/模型的默认温度，不显式传递
     temperature: float | None = None
@@ -58,6 +80,10 @@ class ChatRequest(BaseModel):
     thinking: dict | None = None
     # 思考强度控制："high" / "max" / "low"
     reasoning_effort: str | None = None
+    # OpenAI tools schema 数组（原生 function calling）
+    tools: list[dict] | None = None
+    # 工具选择策略："auto" / "required" / {"type": "function", "function": {...}}
+    tool_choice: str | dict | None = None
 
 
 class TokenUsage(BaseModel):
@@ -120,3 +146,5 @@ class ChatResponse(BaseModel):
     finish_reason: str = "stop"
     usage: TokenUsage = Field(default_factory=TokenUsage)
     raw_response: Any | None = None
+    # 模型请求的工具调用数组（OpenAI 格式）
+    tool_calls: list[dict] | None = None

@@ -39,6 +39,50 @@ function connectAgentWebSocket() {
 
     // WS 消息分发映射表（按 type 路由到对应处理函数）
     const WS_HANDLERS = {
+      // ── 新协议：两阶段事件流（AG-UI 风格）─────────────────────
+      run_started(data) {
+        logger.debug('回复回合开始', { sessionId: data.session_id });
+      },
+      step_started(data) {
+        logger.debug('阶段开始', { phase: data.phase });
+      },
+      step_finished(data) {
+        logger.debug('阶段结束', { phase: data.phase });
+      },
+      text_message_start(data) {
+        state.chatWindow?.webContents.send('chat:stream-start', {
+          messageId: data.message_id,
+        });
+      },
+      text_message_content(data) {
+        state.chatWindow?.webContents.send('chat:stream-delta', {
+          messageId: data.message_id,
+          text: data.text,
+        });
+      },
+      text_message_end(data) {
+        state.chatWindow?.webContents.send('chat:stream-end', {
+          messageId: data.message_id,
+          fullText: data.full_text,
+        });
+      },
+      run_finished(data) {
+        logger.debug('回复回合结束', { sessionId: data.session_id });
+        state.chatWindow?.webContents.send('chat:run-finished', {
+          sessionId: data.session_id,
+        });
+      },
+      // 工具调用过程 → 聊天窗口状态（可选展示）
+      tool_call_start(data) {
+        state.chatWindow?.webContents.send('chat:tool-start', {
+          tool: data.tool_name || '',
+          arguments: data.arguments || {},
+        });
+      },
+      tool_call_end(data) {
+        state.chatWindow?.webContents.send('chat:tool-end', { callId: data.call_id });
+      },
+      // ── 旧协议（brain_complete）兼容 ───────────────────────────
       emotion_state(data) {
         const feeling = data.dominant || '';
         if (typeof feeling !== 'string' || !feeling) return;
@@ -82,6 +126,7 @@ function connectAgentWebSocket() {
         state.chatWindow?.webContents.send('chat:confirm-request', {
           tool: data.tool || '',
           params: data.params || {},
+          callId: data.call_id || '',
         });
       },
       // 后端错误 / 通知（含 stop 打断后的"已停止回复"）→ 聊天窗口

@@ -12,6 +12,7 @@ export const chatStore = reactive({
   busy: false,               // agent 处理中（思考指示 + 停止按钮）
   messages: [],              // { id, role: 'user'|'ai'|'system', text }
   confirm: null,             // 待决工具确认 { tool, params }
+  streaming: null,           // 流式回复中 { messageId, text }
 });
 
 function pushMessage(role, text) {
@@ -45,11 +46,12 @@ export async function fetchConnectionState() {
   }
 }
 
-/** 响应工具确认请求 */
+/** 响应工具确认请求（携带 callId 让后端匹配挂起的确认） */
 export function respondConfirm(allowed) {
   if (!chatStore.confirm) return;
+  const { callId } = chatStore.confirm;
   chatStore.confirm = null;
-  api?.confirmResponse(allowed);
+  api?.confirmResponse(allowed, callId);
 }
 
 // ---------- 主进程推送事件处理 ----------
@@ -72,12 +74,52 @@ export function onNotice(data) {
 
 export function onConfirmRequest(data) {
   if (!data?.tool) return;
-  chatStore.confirm = { tool: data.tool, params: data.params || {} };
+  chatStore.confirm = { tool: data.tool, params: data.params || {}, callId: data.callId || '' };
 }
 
 export function onStateSnapshot(snap) {
   if (!snap) return;
   if (typeof snap.connected === 'boolean') chatStore.connected = snap.connected;
   // 连接断开时，进行中的回复不会再有结果
-  if (snap.connected === false) chatStore.busy = false;
+  if (snap.connected === false) {
+    chatStore.busy = false;
+    chatStore.streaming = null;
+  }
+}
+
+// ---------- 流式回复（新协议 text_message_* 系列） ----------
+
+export function onStreamStart(data) {
+  chatStore.streaming = { messageId: data?.messageId, text: '' };
+}
+
+export function onStreamDelta(data) {
+  if (!chatStore.streaming) {
+    chatStore.streaming = { messageId: data?.messageId, text: '' };
+  }
+  if (data?.text) chatStore.streaming.text += data.text;
+}
+
+export function onStreamEnd(data) {
+  if (!chatStore.streaming) return;
+  const fullText = data?.fullText || chatStore.streaming.text;
+  if (fullText) pushMessage('ai', fullText);
+  chatStore.streaming = null;
+  chatStore.busy = false;
+}
+
+// 回复回合结束（run_finished）：流式已结束，兜底解除 busy
+export function onRunFinished() {
+  chatStore.streaming = null;
+  chatStore.busy = false;
+}
+
+// ---------- 工具调用过程 ----------
+
+export function onToolStart(data) {
+  if (data?.tool) pushMessage('system', `🔧 Aliya 正在调用工具：${data.tool}`);
+}
+
+export function onToolEnd() {
+  // 工具执行结束无需额外 UI 动作
 }

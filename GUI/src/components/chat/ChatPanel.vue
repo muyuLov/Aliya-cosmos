@@ -24,8 +24,15 @@
         <div class="chat-bubble__text">{{ msg.text }}</div>
       </div>
 
+      <!-- 流式回复中（新协议 text_message_*） -->
+      <div v-if="chatStore.streaming" class="chat-bubble chat-bubble--ai">
+        <div class="chat-bubble__text">
+          {{ chatStore.streaming.text }}<span class="chat-caret" />
+        </div>
+      </div>
+
       <!-- 思考中指示 -->
-      <div v-if="chatStore.busy" class="chat-thinking">
+      <div v-if="chatStore.busy && !chatStore.streaming" class="chat-thinking">
         <span class="chat-thinking__dot" />
         <span class="chat-thinking__dot" />
         <span class="chat-thinking__dot" />
@@ -95,6 +102,12 @@ import {
   onNotice,
   onConfirmRequest,
   onStateSnapshot,
+  onStreamStart,
+  onStreamDelta,
+  onStreamEnd,
+  onRunFinished,
+  onToolStart,
+  onToolEnd,
 } from './useChatStore.js';
 
 const api = window.chatAPI;
@@ -135,6 +148,8 @@ function scrollToBottom() {
 
 watch(() => chatStore.messages.length, scrollToBottom);
 watch(() => chatStore.busy, scrollToBottom);
+// 流式回复逐 token 更新时持续滚动
+watch(() => chatStore.streaming?.text, scrollToBottom);
 
 onMounted(() => {
   // 诊断：preload 注入状态（经 console 捕获写入主进程日志）
@@ -144,6 +159,13 @@ onMounted(() => {
   api?.onNotice?.(onNotice);
   api?.onConfirmRequest?.(onConfirmRequest);
   api?.onStateSnapshot?.(onStateSnapshot);
+  // 流式回复订阅
+  api?.onStreamStart?.(onStreamStart);
+  api?.onStreamDelta?.(onStreamDelta);
+  api?.onStreamEnd?.(onStreamEnd);
+  api?.onRunFinished?.(onRunFinished);
+  api?.onToolStart?.(onToolStart);
+  api?.onToolEnd?.(onToolEnd);
   // 主动拉取当前连接状态（事件驱动快照可能遗漏初始状态）
   fetchConnectionState();
   inputEl.value?.focus();
@@ -246,6 +268,23 @@ onMounted(() => {
   font: var(--rb-text-micro);
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid var(--rb-border-faint);
+}
+
+/* ---------- 流式光标 ---------- */
+
+.chat-caret {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: -0.15em;
+  background: var(--rb-pink-400);
+  animation: chat-caret-blink 0.9s steps(1) infinite;
+}
+
+@keyframes chat-caret-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
 }
 
 /* ---------- 思考指示 ---------- */

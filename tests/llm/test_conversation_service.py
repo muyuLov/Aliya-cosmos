@@ -130,6 +130,51 @@ class TestConversationService:
         assert history[0].metadata == {"injected": True}
 
     @pytest.mark.asyncio
+    async def test_append_tool_message(self, service):
+        await service.append_message("tool", "查询结果", tool_call_id="call_1")
+        history = await service.get_history()
+        assert len(history) == 1
+        assert history[0].role == "tool"
+        assert history[0].tool_call_id == "call_1"
+        assert history[0].content == "查询结果"
+
+    @pytest.mark.asyncio
+    async def test_append_tool_calls_assistant(self, service):
+        tool_calls = [{"id": "call_1", "type": "function", "function": {"name": "memory_query", "arguments": "{}"}}]
+        await service.append_message("assistant", "", tool_calls=tool_calls)
+        history = await service.get_history()
+        assert history[0].role == "assistant"
+        assert history[0].tool_calls == tool_calls
+
+    @pytest.mark.asyncio
+    async def test_asend_passes_tools(self, service, mock_provider):
+        tools = [{"type": "function", "function": {"name": "memory_query", "parameters": {"type": "object"}}}]
+        await service.asend("hi", tools=tools, tool_choice="auto")
+        call = mock_provider.async_chat_completion.call_args
+        request = call[0][0]
+        assert request.tools == tools
+        assert request.tool_choice == "auto"
+
+    @pytest.mark.asyncio
+    async def test_asend_chat_returns_tool_calls(self, service, mock_provider):
+        tool_calls = [{"id": "call_1", "type": "function", "function": {"name": "memory_query", "arguments": "{}"}}]
+        mock_provider.async_chat_completion = AsyncMock(
+            return_value=ChatResponse(content="", finish_reason="tool_calls", tool_calls=tool_calls)
+        )
+        resp = await service.asend_chat("hi", store_history=False, tools=[{"type": "function", "function": {}}])
+        assert resp.tool_calls == tool_calls
+        # assistant（含 tool_calls）消息应写入历史
+        history = await service.get_history()
+        assert history[-1].role == "assistant"
+        assert history[-1].tool_calls == tool_calls
+
+    @pytest.mark.asyncio
+    async def test_asend_chat_plain_reply(self, service):
+        resp = await service.asend_chat("你好")
+        assert resp.content == "你好！"
+        assert resp.tool_calls is None
+
+    @pytest.mark.asyncio
     async def test_discard_messages(self, service):
         await service.append_message(
             "assistant", "工具结果", metadata={"injected": True, "prefix": "tool_result"}

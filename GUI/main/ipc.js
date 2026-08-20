@@ -177,10 +177,14 @@ function registerIpcHandlers() {
     if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'stop' }));
   });
 
-  ipcMain.handle('chat:confirm', (_evt, allowed) => {
+  ipcMain.handle('chat:confirm', (_evt, allowed, callId) => {
     const ws = state.agentWebSocket;
     if (ws && ws.readyState === 1) {
-      ws.send(JSON.stringify({ type: 'confirm_response', allowed: Boolean(allowed) }));
+      ws.send(JSON.stringify({
+        type: 'confirm_response',
+        allowed: Boolean(allowed),
+        call_id: String(callId || ''),
+      }));
     }
   });
 

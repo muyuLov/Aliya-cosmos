@@ -126,6 +126,22 @@ class TestChatRequest:
         assert req.thinking == {"type": "enabled"}
         assert req.reasoning_effort == "high"
 
+    def test_tools_default_none(self):
+        req = ChatRequest(messages=[], model="m")
+        assert req.tools is None
+        assert req.tool_choice is None
+
+    def test_with_tools(self):
+        tools = [{"type": "function", "function": {"name": "memory_query", "parameters": {"type": "object"}}}]
+        req = ChatRequest(messages=[], model="m", tools=tools, tool_choice="auto")
+        assert req.tools == tools
+        assert req.tool_choice == "auto"
+
+    def test_with_tool_choice_dict(self):
+        choice = {"type": "function", "function": {"name": "memory_query"}}
+        req = ChatRequest(messages=[], model="m", tool_choice=choice)
+        assert req.tool_choice == choice
+
 
 class TestMessageReasoning:
     """测试 Message 的 reasoning_content 与 to_full_api_dict"""
@@ -146,6 +162,47 @@ class TestMessageReasoning:
         assert d["role"] == "assistant"
         assert d["content"] == "最终回复"
         assert d["reasoning_content"] == "逐步推理..."
+
+
+class TestMessageToolCall:
+    """测试 Message 的 tool 角色与工具调用字段"""
+
+    def test_tool_role_message(self):
+        msg = Message(role="tool", content="查询结果", tool_call_id="call_1")
+        d = msg.to_api_dict()
+        assert d["role"] == "tool"
+        assert d["content"] == "查询结果"
+        assert d["tool_call_id"] == "call_1"
+
+    def test_tool_role_to_full_api_dict(self):
+        msg = Message(role="tool", content="查询结果", tool_call_id="call_1")
+        d = msg.to_full_api_dict()
+        assert d["role"] == "tool"
+        assert d["tool_call_id"] == "call_1"
+
+    def test_assistant_with_tool_calls(self):
+        tool_calls = [{"id": "call_1", "type": "function", "function": {"name": "memory_query", "arguments": "{}"}}]
+        msg = Message(role="assistant", content="", tool_calls=tool_calls)
+        d = msg.to_api_dict()
+        assert d["tool_calls"] == tool_calls
+        assert d["content"] == ""
+
+    def test_tool_calls_in_full_api_dict(self):
+        tool_calls = [{"id": "call_1", "type": "function", "function": {"name": "memory_query", "arguments": "{}"}}]
+        msg = Message(role="assistant", content="", tool_calls=tool_calls)
+        d = msg.to_full_api_dict()
+        assert d["tool_calls"] == tool_calls
+
+    def test_default_fields_none(self):
+        msg = Message(role="user", content="hi")
+        assert msg.tool_call_id is None
+        assert msg.tool_calls is None
+
+    def test_plain_messages_unchanged(self):
+        user = Message(role="user", content="你好").to_api_dict()
+        assistant = Message(role="assistant", content="你好！").to_api_dict()
+        assert user == {"role": "user", "content": "你好"}
+        assert assistant == {"role": "assistant", "content": "你好！"}
 
 
 class TestChatResponse:
@@ -171,3 +228,13 @@ class TestChatResponse:
         resp = ChatResponse(content="最终回复", reasoning_content="逐步推理过程")
         assert resp.reasoning_content == "逐步推理过程"
         assert resp.content == "最终回复"
+
+    def test_tool_calls_default_none(self):
+        resp = ChatResponse(content="hello")
+        assert resp.tool_calls is None
+
+    def test_with_tool_calls(self):
+        tool_calls = [{"id": "call_1", "type": "function", "function": {"name": "memory_query", "arguments": "{}"}}]
+        resp = ChatResponse(content="", finish_reason="tool_calls", tool_calls=tool_calls)
+        assert resp.finish_reason == "tool_calls"
+        assert resp.tool_calls == tool_calls

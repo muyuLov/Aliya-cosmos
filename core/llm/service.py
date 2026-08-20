@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, AsyncGenerator, Literal
 from core.llm.cache import ContextCache
 from core.llm.context_manager import ConversationContextManager
 from core.llm.exceptions import LLMRequestError
-from core.llm.models import ChatRequest, ConversationContext, Message, TokenUsage
+from core.llm.models import ChatRequest, ChatResponse, ConversationContext, Message, TokenUsage
 from core.logger import get_logger
 
 if TYPE_CHECKING:
@@ -216,26 +216,32 @@ class ConversationService:
 
     async def append_message(
         self,
-        role: Literal["system", "user", "assistant"],
+        role: Literal["system", "user", "assistant", "tool"],
         content: str,
         *,
         reasoning_content: str = "",
         metadata: dict[str, Any] | None = None,
+        tool_call_id: str | None = None,
+        tool_calls: list[dict] | None = None,
     ) -> None:
         """手动追加一条消息到历史，用于 brain 推理循环中注入中间结果。
 
         Args:
-            role: 消息角色。
+            role: 消息角色（支持 tool 角色）。
             content: 消息内容。
             reasoning_content: 思维链推理内容（DeepSeek 思考模式专有）。
                               有工具调用时必须回传，否则 API 返回 400。
             metadata: 附加元数据。
+            tool_call_id: tool 角色消息关联的工具调用 ID。
+            tool_calls: assistant 消息携带的工具调用数组（OpenAI 格式）。
         """
         await self._context_manager.append_message(
             role,
             content,
             reasoning_content=reasoning_content,
             metadata=metadata,
+            tool_call_id=tool_call_id,
+            tool_calls=tool_calls,
         )
 
     async def discard_messages(self, content_marker: str, max_count: int) -> None:
@@ -361,6 +367,106 @@ class ConversationService:
                     )
 
                     return response.content
+
+                except LLMRequestError as e:
+                    last_error = e
+                    await self._rollback_user_message()
+                    if attempt < max_retries - 1:
+                        delay = 1.0 * (2 ** attempt)
+                        logger.warning(
+                            "LLM 调用失败，准备重试 | attempt=%d/%d | delay=%.1fs | error=%s",
+                            attempt + 1,
+                            max_retries,
+                            delay,
+                            e,
+                        )
+                        await asyncio.sleep(delay)
+                        # 重试时重新构建请求（用户消息已回滚，thinking 等参数保持一致）
+                        messages = await self._prepare_request(user_input, add_to_history=add_to_history)
+                        request = self._make_request(messages, **kwargs)
+
+            # 所有重试均失败
+            assert last_error is not None
+            logger.error("LLM 调用最终失败 | attempts=%d | provider=%s | model=%s | error=%s",
+                         max_retries, self._provider.provider_name, self._provider.model, last_error)
+            raise last_error
+
+        finally:
+            # 确保补丁在本轮结束后始终清除，不残留到下一轮
+            await self._clear_patches()
+
+    async def asend_chat(
+        self, user_input: str, max_retries: int = 3, store_history: bool = True, commit_content: bool = True, **kwargs
+    ) -> ChatResponse:
+        """异步发送并返回完整响应（含 tool_calls），供工具调度阶段使用。
+
+        与 :meth:`asend` 的区别：
+        - 返回完整的 ``ChatResponse``（含 ``tool_calls`` / ``finish_reason`` / usage），
+          而 ``asend`` 仅返回回复文本，工具阶段无法读取工具调用数组。
+        - 当模型返回 ``tool_calls`` 时，assistant 消息（携带 tool_calls）写入历史；
+          否则当 ``commit_content=True`` 时回退为普通回复提交（同 ``asend``）。
+
+        Args:
+            user_input: 用户输入文本。
+            max_retries: 最大重试次数，默认 3。
+            store_history: 为 True（默认）将用户消息写入历史；
+                           为 False 则不写入，仅用现有历史继续对话。
+            commit_content: 为 True 时，无 tool_calls 的响应作为 assistant 消息写入历史；
+                            为 False 时仅累计 usage，不写历史（工具阶段临时决策用）。
+            **kwargs: 透传给 ChatRequest 的额外参数（如 tools、tool_choice）。
+
+        Returns:
+            完整对话响应（含 tool_calls，可空）。
+
+        Raises:
+            LLMRequestError: 所有重试均失败时抛出。
+        """
+        add_to_history = store_history
+        messages = await self._prepare_request(user_input, add_to_history=add_to_history)
+        request = self._make_request(messages, **kwargs)
+
+        # 每次调用开始时清除上一轮思考内容，避免失败重试场景下残留旧值
+        self._last_reasoning_content = ""
+
+        logger.debug(
+            "异步发送对话请求（完整响应） | provider=%s | messages=%d | max_retries=%d",
+            self._provider.provider_name,
+            len(messages),
+            max_retries,
+        )
+
+        last_error: LLMRequestError | None = None
+
+        try:
+            for attempt in range(max_retries):
+                try:
+                    response = await self._provider.async_chat_completion(request)
+                    self._last_reasoning_content = response.reasoning_content
+                    if response.tool_calls:
+                        # 工具调用：assistant 消息携带 tool_calls 入历史
+                        await self._context_manager.append_message(
+                            "assistant",
+                            response.content or "",
+                            reasoning_content=response.reasoning_content,
+                            tool_calls=response.tool_calls,
+                        )
+                        if response.usage.prompt_tokens or response.usage.total_tokens:
+                            async with self._lock:
+                                self._usage += response.usage
+                    elif commit_content:
+                        await self._commit_response(response.content, response.usage)
+                    else:
+                        # 临时决策：不写历史，仅累计 usage
+                        if response.usage.prompt_tokens or response.usage.total_tokens:
+                            async with self._lock:
+                                self._usage += response.usage
+                    logger.debug(
+                        "收到异步对话响应（完整） | attempt=%d | finish_reason=%s | tool_calls=%s",
+                        attempt + 1,
+                        response.finish_reason,
+                        bool(response.tool_calls),
+                    )
+                    return response
 
                 except LLMRequestError as e:
                     last_error = e

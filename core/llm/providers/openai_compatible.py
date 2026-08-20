@@ -35,6 +35,7 @@ class OpenAICompatibleProvider(LLMProvider):
     _RESERVED_EXTRA_KEYS: frozenset[str] = frozenset({
         "model", "messages", "temperature", "max_tokens",
         "stream", "stream_options", "thinking", "reasoning_effort",
+        "tools", "tool_choice",
     })
 
     def __init__(self, config: dict[str, Any]) -> None:
@@ -114,6 +115,11 @@ class OpenAICompatibleProvider(LLMProvider):
             kwargs.setdefault("extra_body", {}).update(thinking=request.thinking)
         if request.reasoning_effort is not None:
             kwargs["reasoning_effort"] = request.reasoning_effort
+        # 原生 function calling：tools / tool_choice 直接透传给 API
+        if request.tools:
+            kwargs["tools"] = request.tools
+        if request.tool_choice is not None:
+            kwargs["tool_choice"] = request.tool_choice
         return kwargs
 
     async def async_chat_completion(self, request: ChatRequest) -> ChatResponse:
@@ -131,6 +137,17 @@ class OpenAICompatibleProvider(LLMProvider):
             choice = response.choices[0]
             usage = extract_openai_usage(response.usage)
             reasoning_raw = getattr(choice.message, "reasoning_content", None) or ""
+            tool_calls = None
+            raw_tool_calls = getattr(choice.message, "tool_calls", None)
+            if raw_tool_calls:
+                tool_calls = [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                    }
+                    for tc in raw_tool_calls
+                ]
             self._log_response(choice.finish_reason or "stop", len(choice.message.content or ""), usage)
             return ChatResponse(
                 content=choice.message.content or "",
@@ -138,6 +155,7 @@ class OpenAICompatibleProvider(LLMProvider):
                 finish_reason=choice.finish_reason or "stop",
                 usage=usage,
                 raw_response=response,
+                tool_calls=tool_calls,
             )
         except OPENAI_COMMON_EXCEPTIONS as exc:
             raise LLMRequestError(

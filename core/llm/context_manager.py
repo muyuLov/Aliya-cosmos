@@ -156,11 +156,13 @@ class ConversationContextManager:
 
     async def append_message(
         self,
-        role: Literal["system", "user", "assistant"],
+        role: Literal["system", "user", "assistant", "tool"],
         content: str,
         *,
         reasoning_content: str = "",
         metadata: dict[str, Any] | None = None,
+        tool_call_id: str | None = None,
+        tool_calls: list[dict] | None = None,
     ) -> None:
         """手动追加一条消息到历史。
 
@@ -170,10 +172,19 @@ class ConversationContextManager:
             reasoning_content: 思维链推理内容（DeepSeek 思考模式专有）。
                               有工具调用时必须回传，否则 API 返回 400。
             metadata: 附加元数据。
+            tool_call_id: tool 角色消息关联的工具调用 ID（role == "tool" 时必填）。
+            tool_calls: assistant 消息携带的工具调用数组（OpenAI 格式）。
         """
         async with self._lock:
             self._context.messages.append(
-                Message(role=role, content=content, reasoning_content=reasoning_content, metadata=metadata)
+                Message(
+                    role=role,
+                    content=content,
+                    reasoning_content=reasoning_content,
+                    metadata=metadata,
+                    tool_call_id=tool_call_id,
+                    tool_calls=tool_calls,
+                )
             )
             self._context.updated_at = time.time()
             # 裁剪发生时会内部保存上下文，避免重复写缓存
@@ -246,7 +257,7 @@ class ConversationContextManager:
         self,
         user_input: str,
         add_to_history: bool = True,
-    ) -> list[dict[str, str]]:
+    ) -> list[dict[str, Any]]:
         """
         追加用户消息（可选）并返回构建好的完整消息列表，供 LLM 调用使用。
 
@@ -324,7 +335,7 @@ class ConversationContextManager:
 
         return False
 
-    def _build_messages(self) -> list[dict[str, str]]:
+    def _build_messages(self) -> list[dict[str, Any]]:
         """
         构建 LLM 请求所需的完整消息列表。
 
@@ -333,7 +344,7 @@ class ConversationContextManager:
         调用方须在持锁状态下调用此方法（由 prepare_request 保证）。
         """
         self._trim_history()
-        messages: list[dict[str, str]] = []
+        messages: list[dict[str, Any]] = []
 
         system_parts = []
         if self._context.system_prompt:

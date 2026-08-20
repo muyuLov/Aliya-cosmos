@@ -25,11 +25,21 @@ contextBridge.exposeInMainWorld('chatAPI', {
   // 停止当前回复
   stop: () => ipcRenderer.invoke('chat:stop'),
 
-  // 工具执行确认（confirm_request 的响应）
-  confirmResponse: (allowed) => ipcRenderer.invoke('chat:confirm', Boolean(allowed)),
+  // 工具执行确认（confirm_request 的响应；callId 为后端挂起确认的标识）
+  confirmResponse: (allowed, callId) => ipcRenderer.invoke('chat:confirm', Boolean(allowed), callId),
 
-  // AI 回复（brain_complete.reply）
+  // AI 回复（旧协议 brain_complete.reply，兼容保留）
   onReply: makeSubscriber('chat:reply'),
+
+  // 流式回复（新协议 text_message_* 系列）
+  onStreamStart: makeSubscriber('chat:stream-start'),
+  onStreamDelta: makeSubscriber('chat:stream-delta'),
+  onStreamEnd: makeSubscriber('chat:stream-end'),
+  // 回复回合结束（run_finished，兜底解除 busy）
+  onRunFinished: makeSubscriber('chat:run-finished'),
+  // 工具调用过程
+  onToolStart: makeSubscriber('chat:tool-start'),
+  onToolEnd: makeSubscriber('chat:tool-end'),
 
   // 工具执行确认请求（tool/params）
   onConfirmRequest: makeSubscriber('chat:confirm-request'),
