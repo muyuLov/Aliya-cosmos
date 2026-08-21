@@ -5,10 +5,10 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING, Any, AsyncGenerator, Literal
 
-from core.llm.cache import ContextCache
 from core.llm.context_manager import ConversationContextManager
 from core.llm.exceptions import LLMRequestError
 from core.llm.models import ChatRequest, ChatResponse, ConversationContext, Message, TokenUsage
+from core.llm.retry import async_llm_retry
 from core.logger import get_logger
 
 if TYPE_CHECKING:
@@ -38,7 +38,6 @@ class ConversationService:
 
     Args:
         provider: LLM 提供商实例。
-        cache: 上下文缓存实例。
         history_max_chars: 触发自动清理的消息历史总字符数阈值，超限时移除最旧消息，默认 90000。
         conversation_id: 会话唯一标识符，为 None 时自动生成 UUID。
         system_prompt: 初始系统提示词，会覆盖缓存中的旧值。
@@ -63,7 +62,6 @@ class ConversationService:
     def __init__(
         self,
         provider: LLMProvider,
-        cache: ContextCache,
         history_max_chars: int = 90000,
         conversation_id: str | None = None,
         system_prompt: str | None = None,
@@ -77,7 +75,6 @@ class ConversationService:
         self._last_reasoning_content: str = ""
 
         self._context_manager = ConversationContextManager(
-            cache=cache,
             history_max_chars=history_max_chars,
             conversation_id=conversation_id,
             system_prompt=system_prompt,
@@ -155,14 +152,13 @@ class ConversationService:
         """
         释放底层 LLM 提供商资源。
 
-        保存当前对话上下文到缓存后，调用 provider.aclose() 释放连接等资源。
+        调用 provider.aclose() 释放连接等资源。
         幂等：多次调用安全，第二次起无操作。
         推荐使用 ``async with`` 自动管理，手动调用时确保不在持锁状态下执行。
         """
         if self._closed:
             return
         self._closed = True
-        await self._context_manager.persist()
         await self._provider.aclose()
         logger.debug("ConversationService 已释放资源 | conversation_id=%s", self.conversation_id)
 
@@ -338,70 +334,44 @@ class ConversationService:
             LLMRequestError: 所有重试均失败时抛出。
         """
         add_to_history = store_history
-        messages = await self._prepare_request(user_input, images=images, add_to_history=add_to_history)
-        request = self._make_request(messages, **kwargs)
 
         # 每次调用开始时清除上一轮思考内容，避免失败重试场景下残留旧值
         self._last_reasoning_content = ""
 
-        logger.debug(
-            "异步发送对话请求 | provider=%s | messages=%d | max_retries=%d | thinking=%s",
-            self._provider.provider_name,
-            len(messages),
-            max_retries,
-            request.thinking,
-        )
+        async def prepare():
+            messages = await self._prepare_request(user_input, images=images, add_to_history=add_to_history)
+            return self._make_request(messages, **kwargs)
 
-        last_error: LLMRequestError | None = None
+        async def execute(request):
+            response = await self._provider.async_chat_completion(request)
+            await self._commit_response(response.content, response.usage)
+            self._last_reasoning_content = response.reasoning_content
+
+            logger.debug(
+                "收到异步对话响应 | finish_reason=%s | length=%d"
+                " | prompt=%d | completion=%d | total=%d"
+                " | cache_hit=%d | cache_miss=%d | reasoning=%d | reasoning_content_len=%d",
+                response.finish_reason,
+                len(response.content),
+                response.usage.prompt_tokens,
+                response.usage.completion_tokens,
+                response.usage.total_tokens,
+                response.usage.prompt_cache_hit_tokens,
+                response.usage.prompt_cache_miss_tokens,
+                response.usage.reasoning_tokens,
+                len(response.reasoning_content),
+            )
+
+            return response.content
 
         try:
-            for attempt in range(max_retries):
-                try:
-                    response = await self._provider.async_chat_completion(request)
-                    await self._commit_response(response.content, response.usage)
-                    self._last_reasoning_content = response.reasoning_content
-
-                    logger.debug(
-                        "收到异步对话响应 | attempt=%d | finish_reason=%s | length=%d"
-                        " | prompt=%d | completion=%d | total=%d"
-                        " | cache_hit=%d | cache_miss=%d | reasoning=%d | reasoning_content_len=%d",
-                        attempt + 1,
-                        response.finish_reason,
-                        len(response.content),
-                        response.usage.prompt_tokens,
-                        response.usage.completion_tokens,
-                        response.usage.total_tokens,
-                        response.usage.prompt_cache_hit_tokens,
-                        response.usage.prompt_cache_miss_tokens,
-                        response.usage.reasoning_tokens,
-                        len(response.reasoning_content),
-                    )
-
-                    return response.content
-
-                except LLMRequestError as e:
-                    last_error = e
-                    await self._rollback_user_message()
-                    if attempt < max_retries - 1:
-                        delay = 1.0 * (2 ** attempt)
-                        logger.warning(
-                            "LLM 调用失败，准备重试 | attempt=%d/%d | delay=%.1fs | error=%s",
-                            attempt + 1,
-                            max_retries,
-                            delay,
-                            e,
-                        )
-                        await asyncio.sleep(delay)
-                        # 重试时重新构建请求（用户消息已回滚，thinking 等参数保持一致）
-                        messages = await self._prepare_request(user_input, images=images, add_to_history=add_to_history)
-                        request = self._make_request(messages, **kwargs)
-
-            # 所有重试均失败
-            assert last_error is not None
-            logger.error("LLM 调用最终失败 | attempts=%d | provider=%s | model=%s | error=%s",
-                         max_retries, self._provider.provider_name, self._provider.model, last_error)
-            raise last_error
-
+            return await async_llm_retry(
+                max_retries=max_retries,
+                prepare=prepare,
+                execute=execute,
+                on_failure=self._rollback_user_message,
+                operation_name="异步对话",
+            )
         finally:
             # 确保补丁在本轮结束后始终清除，不残留到下一轮
             await self._clear_patches()
@@ -434,75 +404,50 @@ class ConversationService:
             LLMRequestError: 所有重试均失败时抛出。
         """
         add_to_history = store_history
-        messages = await self._prepare_request(user_input, images=images, add_to_history=add_to_history)
-        request = self._make_request(messages, **kwargs)
 
         # 每次调用开始时清除上一轮思考内容，避免失败重试场景下残留旧值
         self._last_reasoning_content = ""
 
-        logger.debug(
-            "异步发送对话请求（完整响应） | provider=%s | messages=%d | max_retries=%d",
-            self._provider.provider_name,
-            len(messages),
-            max_retries,
-        )
+        async def prepare():
+            messages = await self._prepare_request(user_input, images=images, add_to_history=add_to_history)
+            return self._make_request(messages, **kwargs)
 
-        last_error: LLMRequestError | None = None
+        async def execute(request):
+            response = await self._provider.async_chat_completion(request)
+            self._last_reasoning_content = response.reasoning_content
+            if response.tool_calls:
+                # 工具调用：assistant 消息携带 tool_calls 入历史
+                await self._context_manager.append_message(
+                    "assistant",
+                    response.content or "",
+                    reasoning_content=response.reasoning_content,
+                    tool_calls=response.tool_calls,
+                )
+                if response.usage.prompt_tokens or response.usage.total_tokens:
+                    async with self._lock:
+                        self._usage += response.usage
+            elif commit_content:
+                await self._commit_response(response.content, response.usage)
+            else:
+                # 临时决策：不写历史，仅累计 usage
+                if response.usage.prompt_tokens or response.usage.total_tokens:
+                    async with self._lock:
+                        self._usage += response.usage
+            logger.debug(
+                "收到异步对话响应（完整） | finish_reason=%s | tool_calls=%s",
+                response.finish_reason,
+                bool(response.tool_calls),
+            )
+            return response
 
         try:
-            for attempt in range(max_retries):
-                try:
-                    response = await self._provider.async_chat_completion(request)
-                    self._last_reasoning_content = response.reasoning_content
-                    if response.tool_calls:
-                        # 工具调用：assistant 消息携带 tool_calls 入历史
-                        await self._context_manager.append_message(
-                            "assistant",
-                            response.content or "",
-                            reasoning_content=response.reasoning_content,
-                            tool_calls=response.tool_calls,
-                        )
-                        if response.usage.prompt_tokens or response.usage.total_tokens:
-                            async with self._lock:
-                                self._usage += response.usage
-                    elif commit_content:
-                        await self._commit_response(response.content, response.usage)
-                    else:
-                        # 临时决策：不写历史，仅累计 usage
-                        if response.usage.prompt_tokens or response.usage.total_tokens:
-                            async with self._lock:
-                                self._usage += response.usage
-                    logger.debug(
-                        "收到异步对话响应（完整） | attempt=%d | finish_reason=%s | tool_calls=%s",
-                        attempt + 1,
-                        response.finish_reason,
-                        bool(response.tool_calls),
-                    )
-                    return response
-
-                except LLMRequestError as e:
-                    last_error = e
-                    await self._rollback_user_message()
-                    if attempt < max_retries - 1:
-                        delay = 1.0 * (2 ** attempt)
-                        logger.warning(
-                            "LLM 调用失败，准备重试 | attempt=%d/%d | delay=%.1fs | error=%s",
-                            attempt + 1,
-                            max_retries,
-                            delay,
-                            e,
-                        )
-                        await asyncio.sleep(delay)
-                        # 重试时重新构建请求（用户消息已回滚，thinking 等参数保持一致）
-                        messages = await self._prepare_request(user_input, images=images, add_to_history=add_to_history)
-                        request = self._make_request(messages, **kwargs)
-
-            # 所有重试均失败
-            assert last_error is not None
-            logger.error("LLM 调用最终失败 | attempts=%d | provider=%s | model=%s | error=%s",
-                         max_retries, self._provider.provider_name, self._provider.model, last_error)
-            raise last_error
-
+            return await async_llm_retry(
+                max_retries=max_retries,
+                prepare=prepare,
+                execute=execute,
+                on_failure=self._rollback_user_message,
+                operation_name="异步对话（完整响应）",
+            )
         finally:
             # 确保补丁在本轮结束后始终清除，不残留到下一轮
             await self._clear_patches()
@@ -515,6 +460,7 @@ class ConversationService:
         调用方可在生成过程中并发处理（如实时 TTS），无需等待完整回复。
 
         失败时自动重试最多 max_retries 次，退避间隔为 1s / 2s / 4s ...
+        流式内容缓冲至完整后才写入历史，重试不会向调用方 yield 半截内容。
 
         Args:
             user_input: 用户输入文本。
@@ -531,41 +477,44 @@ class ConversationService:
             LLMRequestError: 所有重试均失败时抛出。
         """
         add_to_history = store_history
-        messages = await self._prepare_request(user_input, images=images, add_to_history=add_to_history)
-
-        logger.debug(
-            "异步流式对话请求 | provider=%s | messages=%d | max_retries=%d",
-            self._provider.provider_name,
-            len(messages),
-            max_retries,
-        )
+        last_error: LLMRequestError | None = None
 
         try:
             for attempt in range(max_retries):
                 try:
+                    messages = await self._prepare_request(user_input, images=images, add_to_history=add_to_history)
+                    request = self._make_request(messages, **kwargs)
+
+                    logger.debug(
+                        "异步流式对话请求 | provider=%s | messages=%d | attempt=%d/%d",
+                        self._provider.provider_name,
+                        len(messages),
+                        attempt + 1,
+                        max_retries,
+                    )
+
                     full_reply_parts: list[str] = []
-                    async for token in self._provider.stream_chat_completion(
-                        ChatRequest(messages=messages, model=self._provider.model, **kwargs)
-                    ):
+                    async for token in self._provider.stream_chat_completion(request):
                         full_reply_parts.append(token)
 
                     # 流式完成，无异常 — 缓冲区就绪后再 yield，防止重试时污染输出
                     full_reply = "".join(full_reply_parts)
-                    # 累计流式 token 用量：provider 已将 usage 存入 last_stream_usage
-                    stream_usage = self._provider.last_stream_usage
-                    await self._commit_response(full_reply, usage=stream_usage)
                     for part in full_reply_parts:
                         yield part
 
+                    stream_usage = self._provider.last_stream_usage
+                    await self._commit_response(full_reply, usage=stream_usage)
+
                     logger.debug(
-                        "异步流式对话完成 | attempt=%d | length=%d",
-                        attempt + 1,
+                        "异步流式对话完成 | length=%d",
                         len(full_reply),
                     )
-                    return
+                    return  # 成功，退出重试循环
 
                 except LLMRequestError as e:
+                    last_error = e
                     await self._rollback_user_message()
+
                     if attempt < max_retries - 1:
                         delay = 1.0 * (2 ** attempt)
                         logger.warning(
@@ -576,18 +525,20 @@ class ConversationService:
                             e,
                         )
                         await asyncio.sleep(delay)
-                        messages = await self._prepare_request(user_input, images=images, add_to_history=add_to_history)
-                    else:
-                        logger.error(
-                            "LLM 流式调用最终失败 | attempts=%d | provider=%s | model=%s | error=%s",
-                            max_retries,
-                            self._provider.provider_name,
-                            self._provider.model,
-                            e,
-                        )
-                        raise
+
+            # 所有重试均失败
+            assert last_error is not None
+            logger.error(
+                "LLM 流式调用最终失败 | attempts=%d | provider=%s | model=%s | error=%s",
+                max_retries,
+                self._provider.provider_name,
+                self._provider.model,
+                last_error,
+            )
+            raise last_error
 
         finally:
+            # 确保补丁在本轮结束后始终清除，不残留到下一轮
             await self._clear_patches()
 
     # ── 内部实现 ─────────────────────────────────────────────────────────────

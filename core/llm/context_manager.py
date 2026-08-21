@@ -7,7 +7,6 @@ import time
 import uuid
 from typing import Any, Literal
 
-from core.llm.cache import ContextCache
 from core.llm.models import ConversationContext, Message, make_multimodal_content
 from core.logger import get_logger
 
@@ -23,31 +22,26 @@ class ConversationContextManager:
     - 管理一次性注入补丁（情绪补丁、上下文注入），本轮对话后自动清除
     - 超长历史自动裁剪（history_max_chars 字符阈值）
     - 构建 LLM 请求所需的完整消息列表（合并 system + 注入 + 补丁）
-    - 上下文持久化到 ContextCache
 
     **线程模型**：所有公开方法内部持锁，保证并发安全；
     LLM 调用（provider 请求）由 ConversationService 在锁外执行，
     避免长时间持锁阻塞并发操作。
 
-    **资源生命周期**：本类不管理 provider 资源，仅负责上下文状态；
-    会话关闭时调用 :meth:`persist` 保存最终快照。
+    **资源生命周期**：本类不管理 provider 资源，仅负责上下文状态。
 
     Args:
-        cache: 上下文缓存实例。
         history_max_chars: 消息历史总字符数阈值，超限时移除最旧消息，默认 90000。
         conversation_id: 会话唯一标识符，为 None 时自动生成 UUID。
-        system_prompt: 初始系统提示词，会覆盖缓存中的旧值。
+        system_prompt: 初始系统提示词。
     """
 
     def __init__(
         self,
-        cache: ContextCache,
         *,
         history_max_chars: int = 90000,
         conversation_id: str | None = None,
         system_prompt: str | None = None,
     ) -> None:
-        self._cache = cache
         self._lock = asyncio.Lock()
         self._history_max_chars = history_max_chars
 
@@ -56,14 +50,11 @@ class ConversationContextManager:
         self._context_injection: str = ""
 
         self._conversation_id = conversation_id or str(uuid.uuid4())
-        self._context = cache.get(self._conversation_id) or ConversationContext(
+        self._context = ConversationContext(
             conversation_id=self._conversation_id,
             system_prompt=system_prompt,
             messages=[],
         )
-        if system_prompt is not None:
-            self._context.system_prompt = system_prompt
-            self._save()
 
     # ── 状态暴露 ─────────────────────────────────────────────────────────────
 
@@ -90,7 +81,6 @@ class ConversationContextManager:
         """设置或更新系统提示词。"""
         async with self._lock:
             self._context.system_prompt = prompt
-            self._save()
 
     # ── 一次性注入补丁 ───────────────────────────────────────────────────────
 
@@ -152,7 +142,6 @@ class ConversationContextManager:
         """清空消息历史，保留系统提示词。"""
         async with self._lock:
             self._context.messages = []
-            self._save()
 
     async def append_message(
         self,
@@ -187,9 +176,7 @@ class ConversationContextManager:
                 )
             )
             self._context.updated_at = time.time()
-            # 裁剪发生时会内部保存上下文，避免重复写缓存
-            if not self._trim_history():
-                self._save()
+            self._trim_history()
 
     async def discard_messages(self, content_marker: str, max_count: int) -> None:
         """
@@ -221,7 +208,6 @@ class ConversationContextManager:
                     removed += 1
             if removed:
                 self._context.updated_at = time.time()
-                self._save()
 
     async def replace_last_message(self, content: str, reasoning_content: str = "") -> None:
         """替换历史最后一条消息（通常为工具阶段生成的 JSON 决策消息）。
@@ -238,7 +224,6 @@ class ConversationContextManager:
             )
             self._context.messages[-1] = replaced
             self._context.updated_at = time.time()
-            self._save()
 
     async def truncate_messages(self, keep: int) -> None:
         """截断历史，仅保留最后 keep 条消息（压缩对话时使用）。"""
@@ -249,7 +234,6 @@ class ConversationContextManager:
                 return
             self._context.messages = self._context.messages[-keep:] if keep else []
             self._context.updated_at = time.time()
-            self._save()
 
     # ── 请求构建与事务 ───────────────────────────────────────────────────────
 
@@ -293,25 +277,15 @@ class ConversationContextManager:
         async with self._lock:
             self._context.messages.append(Message(role="assistant", content=content))
             self._context.updated_at = time.time()
-            self._save()
-
-    async def persist(self) -> None:
-        """保存当前上下文快照到缓存（会话关闭时调用）。"""
-        async with self._lock:
-            self._save()
 
     # ── 内部实现 ─────────────────────────────────────────────────────────────
-
-    def _save(self) -> None:
-        """将当前上下文写入缓存。调用方须在持锁状态下调用。"""
-        self._cache.set(self._context.conversation_id, self._context)
 
     def _trim_history(self) -> bool:
         """
         消息总字符数超限时移除最旧消息，至少保留 1 条。调用方须持锁。
 
         Returns:
-            是否发生了裁剪。裁剪发生时内部已保存上下文。
+            是否发生了裁剪。
         """
         if self._history_max_chars <= 0 or not self._context.messages:
             return False
@@ -331,7 +305,6 @@ class ConversationContextManager:
         if idx > 0:
             self._context.messages = self._context.messages[idx:]
             self._context.updated_at = time.time()
-            self._save()
             logger.info(
                 "历史消息清理 | 移除 %d 条 | 剩余 %d 条（%.1fK chars）| 阈值 %d",
                 idx, len(self._context.messages), total / 1000,

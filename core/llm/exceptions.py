@@ -46,21 +46,3 @@ class LLMRequestError(LLMError):
             details={"provider": provider, "reason": reason},
             cause=cause,
         )
-
-
-class ContextCacheError(LLMError):
-    """
-    上下文缓存操作失败。
-
-    Args:
-        reason: 失败原因描述。
-        cause: 原始异常，用于保留完整异常链。
-    """
-
-    def __init__(self, reason: str, cause: Exception | None = None) -> None:
-        super().__init__(
-            code="LLM_003",
-            message=f"上下文缓存错误: {reason}",
-            details={"reason": reason},
-            cause=cause,
-        )

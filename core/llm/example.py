@@ -5,7 +5,7 @@
 - 同步/异步调用
 - 流式对话
 - 补丁注入（情绪、技能、工具、记忆）
-- 多会话管理
+- 历史管理
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ if __name__ == "__main__":
         sys.path.insert(0, str(project_root))
 
 from core.exception import get_default_handler
-from core.llm import ContextCache, create_from_config
+from core.llm import create_from_config
 from core.llm.exceptions import LLMRequestError
 
 
@@ -71,8 +71,8 @@ async def example_stream_chat() -> None:
     
     try:
         async with create_from_config() as conv:
-            print("📝 用户: 讲一个三句话的故事")
-            print("🤖 助手: ", end="", flush=True)
+            print("用户: 讲一个三句话的故事")
+            print("助手: ", end="", flush=True)
             
             full_reply: list[str] = []
             async for token in conv.astream_send("讲一个三句话的故事"):
@@ -133,49 +133,43 @@ async def example_patch_injection() -> None:
 
 async def example_multi_conversation() -> None:
     """示例 4：多会话隔离管理。
-    
+
     通过不同的 conversation_id 实现会话隔离，
     每个会话有独立的历史记录和上下文。
     """
     print("\n=== 示例 4：多会话管理 ===")
-    
-    # 创建共享缓存
-    cache = ContextCache(ttl=3600)
-    
+
     try:
         # 会话 1：技术讨论
         async with create_from_config(
             conversation_id="tech_chat",
-            cache=cache,
             system_prompt="你是一个技术专家。"
         ) as conv1:
             reply1 = await conv1.asend("什么是异步编程？")
             print(f"会话1（技术）: {reply1[:80]}...")
-        
+
         # 会话 2：日常聊天
         async with create_from_config(
             conversation_id="casual_chat",
-            cache=cache,
             system_prompt="你是一个友好的聊天伙伴。"
         ) as conv2:
             reply2 = await conv2.asend("今天天气怎么样？")
             print(f"会话2（日常）: {reply2[:80]}...")
-        
-        # 重新进入会话 1（有上下文）
+
+        # 会话 3：新的技术讨论（独立会话）
         async with create_from_config(
-            conversation_id="tech_chat",
-            cache=cache,
+            conversation_id="tech_chat_2",
             system_prompt="你是一个技术专家。"
-        ) as conv1:
-            reply3 = await conv1.asend("能举个例子吗？")
-            print(f"会话1（续）: {reply3[:80]}...")
-            
+        ) as conv3:
+            reply3 = await conv3.asend("能举个例子吗？")
+            print(f"会话3（技术）: {reply3[:80]}...")
+
             # 查看会话历史
-            history = await conv1.get_history()
-            print(f"\n会话1的历史记录: {len(history)} 条消息")
+            history = await conv3.get_history()
+            print(f"\n会话3的历史记录: {len(history)} 条消息")
             for msg in history:
                 print(f"  {msg.role}: {msg.content[:50]}...")
-                
+
     except LLMRequestError as e:
         get_default_handler().handle(e)
 
@@ -233,7 +227,7 @@ async def example_manual_cleanup() -> None:
         # 必须手动释放资源
         if service is not None:
             await service.aclose()
-            print("✅ 资源已手动释放")
+            print("资源已手动释放")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -260,7 +254,7 @@ async def example_error_handling() -> None:
             
     except LLMRequestError as e:
         # 所有重试失败后抛出异常
-        print(f"❌ 请求失败: {e}")
+        print(f"请求失败: {e}")
         get_default_handler().handle(e)
 
 
@@ -296,7 +290,7 @@ async def example_history_management() -> None:
             
             # 清空历史
             await conv.clear_history()
-            print("\n✅ 历史已清空")
+            print("\n历史已清空")
             
             # 清空后的对话（无上下文）
             reply = await conv.asend("我叫什么名字？")
@@ -312,7 +306,7 @@ async def example_history_management() -> None:
 
 async def main() -> None:
     """运行所有示例。"""
-    print("🤖 LLM 模块功能演示")
+    print("LLM 模块功能演示")
     print("=" * 80)
     
     # 示例 1：上下文管理器（推荐）
@@ -329,12 +323,12 @@ async def main() -> None:
     
     
     print("\n" + "=" * 80)
-    print("🎉 所有示例执行完成！")
-    print("\n💡 最佳实践:")
+    print("所有示例执行完成！")
+    print("\n最佳实践:")
     print("  • 推荐使用 async with 自动管理资源")
     print("  • 异步应用中使用 asend() 而非 send()")
     print("  • 流式对话用 astream_send() 降低首字延迟")
-    print("  • 使用共享缓存实现多会话管理")
+    print("  • 使用不同的 conversation_id 实现多会话管理")
     print("  • 补丁机制用于动态上下文注入")
 
 

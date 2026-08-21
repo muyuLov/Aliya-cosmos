@@ -7,22 +7,22 @@
 ```
 __init__.py           ← 公共接口，工厂函数
 service.py            ← ConversationService：对话编排（调用、重试、流式、usage 统计）
-context_manager.py    ← ConversationContextManager：消息历史、提示词、注入补丁、请求构建、缓存持久化
+context_manager.py    ← ConversationContextManager：消息历史、提示词、注入补丁、请求构建
 models.py             ← Message / ConversationContext / ChatRequest / ChatResponse / TokenUsage
-cache.py              ← ContextCache：内存 LRU + TTL 会话缓存
-cache_backend.py      ← CacheBackend / MemoryBackend
+retry.py              ← 异步重试工具函数
 config_validator.py   ← ConfigValidator：配置字段合法性校验
-exceptions.py         ← 结构化异常（LLM_001~LLM_003）
+exceptions.py         ← 结构化异常（LLM_001~LLM_002）
 
 providers/
   base.py             ← LLMProvider 抽象基类
-  openai_compatible.py ← OpenAICompatibleProvider（通用 OpenAI 兼容接口）
+  openai_compatible.py ← OpenAICompatibleProvider（内部实现，自动注册到 ProviderRegistry）
+  registry.py         ← ProviderRegistry：提供商注册表
 ```
 
 **职责分工**：`ConversationService` 负责对话编排（provider 调用、重试、流式、usage 统计、资源管理），
-上下文管理（历史、系统提示词、注入补丁、请求构建、持久化）全部委托给 `ConversationContextManager`。
+上下文管理（历史、系统提示词、注入补丁、请求构建）全部委托给 `ConversationContextManager`。
 
-**调用链**：`ConversationService.asend()` → `ConversationContextManager.prepare_request()`（拼接 system + 历史） → `LLMProvider.async_chat_completion()` → `ConversationService._commit_response()`（写回历史 + 更新缓存 + 累计 usage）。
+**调用链**：`ConversationService.asend()` → `ConversationContextManager.prepare_request()`（拼接 system + 历史） → `LLMProvider.async_chat_completion()` → `ConversationService._commit_response()`（写回历史 + 累计 usage）。
 
 ---
 
@@ -131,7 +131,7 @@ await service.reset_usage()   # 重置累计统计
 
 ## 提供商
 
-所有 OpenAI 兼容接口统一使用 `OpenAICompatibleProvider`，不再需要为每个服务实现独立的提供商类。
+所有 OpenAI 兼容接口统一使用 `OpenAICompatibleProvider`（内部实现），通过 `ProviderRegistry` 注册表管理。
 
 配置存放在 `data/config/LLMProviders.json`，通过 `providers.config_path` 引用，支持 `${ENV_VAR}` 环境变量语法。
 
@@ -146,6 +146,7 @@ await service.reset_usage()   # 重置累计统计
 | `max_retries` | int | 最大重试次数，默认 3 |
 | `http2` | bool | 是否启用 HTTP/2，默认 true。LM Studio 须设为 false |
 | `provider_name` | string | 可选，用于日志标识，从配置文件 key 自动设置 |
+| `provider_type` | string | 可选，提供商类型，默认 "openai_compatible" |
 
 ```json
 {
@@ -169,6 +170,25 @@ await service.reset_usage()   # 重置累计统计
 
 添加新提供商只需在 `LLMProviders.json` 中新增一个条目即可，无需修改代码。
 
+### 提供商注册表
+
+通过 `ProviderRegistry` 支持动态注册新的提供商类型：
+
+```python
+from core.llm.providers import ProviderRegistry, LLMProvider
+
+class MyCustomProvider(LLMProvider):
+    # 实现抽象方法...
+    pass
+
+# 注册自定义提供商
+ProviderRegistry.register("my_provider", MyCustomProvider)
+
+# 在配置中使用
+# provider_config = {"provider_type": "my_provider", ...}
+# provider = ProviderRegistry.create("my_provider", config)
+```
+
 ---
 
 ## 配置
@@ -190,19 +210,6 @@ cosmos:
 
 ---
 
-## 上下文缓存
-
-`ContextCache` 以内存 LRU + TTL 方式存储 `ConversationContext`，默认参数：
-
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `ttl` | 86400 秒（24h） | 条目存活时间，0 表示永不过期 |
-| `max_size` | 500 | 最大条目数，超限时淘汰最久未使用的 |
-
-同一个 `conversation_id` 的上下文在多次 `asend()` 间自动持久化，重启程序后丢失（内存存储）。
-
----
-
 ## 异常
 
 所有异常继承 `LLMError`（`StructuredException` 子类），错误码前缀 `LLM_`。
@@ -211,7 +218,6 @@ cosmos:
 |------|--------|------|
 | `ProviderNotFoundError` | `LLM_001` | 提供商名称未注册，或配置文件缺失/格式错误 |
 | `LLMRequestError` | `LLM_002` | API 请求失败（网络、超时、鉴权、限流） |
-| `ContextCacheError` | `LLM_003` | 缓存读写发生意外错误 |
 
 ---
 

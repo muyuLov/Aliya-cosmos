@@ -37,13 +37,27 @@ docker compose --profile tts up -d
 
 运行后端前需在 `.env` 配置 `DEEPSEEK_API_KEY`（参考 `.env.example`）。Neo4j 图记忆、Milvus 向量库均为可选——对应服务未启动时相关能力会自动降级禁用，不阻塞主流程。
 
+## 环境变量配置
+
+项目使用 `.env` 文件管理环境变量，参考 `.env.example`：
+
+| 变量 | 必填 | 说明 |
+|------|------|------|
+| `DEEPSEEK_API_KEY` | 是 | DeepSeek API 密钥（用于 LLM 对话） |
+| `NEO4J_PASSWORD` | 否 | Neo4j 数据库密码（可选，默认使用 main.yml 中的值） |
+| `WS_HOST` | 否 | WebSocket 监听地址（默认 `0.0.0.0`，容器内使用） |
+| `WS_PORT` | 否 | WebSocket 监听端口（默认 `8765`） |
+| `NEO4J_HOST` | 否 | Neo4j 服务地址（默认 `127.0.0.1`，compose 网络内用 `neo4j`） |
+| `NEO4J_PORT` | 否 | Neo4j Bolt 端口（默认 `7687`） |
+| `ASTRA_PORT` | 否 | AstraTTS 服务端口（默认 `5000`，使用 edge TTS 时不需要） |
+
 ## 架构总览
 
 
 ### 核心服务（core/）
 
 - **config/** — YAML 配置管理器：`get_config_instance()` 单例，点路径读写（`cfg.get("cosmos.service.llm")`），支持 `${ENV_VAR}` / `${ENV_VAR:default}` 占位符解析与热重载。
-- **llm/** — `ConversationService` 管理单会话历史（`history_max_chars=90000` 超限清理最旧消息），异步优先（`asend`/`astream_send`）。提供商已收敛为单一 `OpenAICompatibleProvider`（`providers/openai_compatible.py`），通过 `LLMProviders.json` 区分 deepseek/ollama/lmstudio 等。`create_from_config()` 是从 YAML 创建服务的统一入口。
+- **llm/** — `ConversationService` 管理单会话历史（`history_max_chars=90000` 超限清理最旧消息），异步优先（`asend`/`astream_send`）。提供商通过 `ProviderRegistry` 注册表管理，默认注册 `OpenAICompatibleProvider`（`providers/openai_compatible.py`），通过 `LLMProviders.json` 区分 deepseek/ollama/lmstudio 等。支持动态注册新的提供商类型。`create_from_config()` 是从 YAML 创建服务的统一入口。
 - **memory/** — **两套并行记忆系统**（见下）。
 - **tts/** — `TTSService` 分段预取合成 + `AudioPlayer` 弹性播放。提供商工厂注册 `edge`（联网即用）/`astra`（自建服务，`docker compose --profile tts`）。播放失败自动降级到 WebSocket 音频流 / 文件 sink。
 - **vector/** — 余弦相似度向量库：内存计算 + 可选 Milvus 持久化，连接失败自动回退纯内存。用于情绪向量分类器。
@@ -77,3 +91,18 @@ docker compose --profile tts up -d
 - 类型检查：`pyright`（`pyrightconfig.json`，standard 模式）与 `mypy` 双轨；`core/config`、`core/logger`、`agent/tools` 已启用 mypy 严格模式。
 - 格式：Black（100 列）+ isort（black profile，first-party 为 agent/core/GUI/aliya_cosmos）。
 - 降级原则贯穿全项目：可选依赖（Neo4j、Milvus、AstraTTS、音频硬件）初始化失败一律告警降级，不使 Agent 主流程崩溃。
+
+## 常见问题
+
+### LLM 模块重构后注意事项
+- `OpenAICompatibleProvider` 现在通过 `ProviderRegistry` 注册表管理，不再直接导出
+- 添加新提供商需继承 `LLMProvider` 并调用 `ProviderRegistry.register()` 注册
+- 配置中可通过 `provider_type` 字段指定提供商类型（默认 `"openai_compatible"`）
+
+### 流式对话
+- `astream_send` 缓冲完整响应后再 yield，确保重试时不会污染输出
+- 调用方无需处理重复 token，重试逻辑完全透明
+
+### 记忆系统
+- GRAG 和层次化记忆系统并行工作，互相独立
+- Neo4j 和 Milvus 为可选依赖，未启动时自动降级禁用
