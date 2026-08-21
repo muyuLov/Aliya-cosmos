@@ -142,6 +142,20 @@ class LLMProvider(ABC):
         model_lower = self.model.lower()
         return "deepseek" in model_lower or "r1" in model_lower
 
+    @property
+    def supports_vision(self) -> bool:
+        """当前模型是否支持视觉（图片）输入。
+
+        默认实现基于模型名称启发式检测（vision/vl/gpt-4o/llava/gemini 等关键词），
+        子类可覆盖此属性以实现更精确的检测逻辑。
+        """
+        model_lower = self.model.lower()
+        vision_keywords = (
+            "vision", "vl", "multimodal", "omni", "gpt-4o", "gpt-4.1",
+            "llava", "gemini", "minicpm", "glm-4v",
+        )
+        return any(keyword in model_lower for keyword in vision_keywords)
+
     @abstractmethod
     async def async_chat_completion(self, request: ChatRequest) -> ChatResponse:
         """

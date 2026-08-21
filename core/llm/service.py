@@ -120,6 +120,14 @@ class ConversationService:
         return getattr(self._provider, "supports_thinking", False)
 
     @property
+    def supports_vision(self) -> bool:
+        """底层 LLM 提供商/模型是否支持视觉（图片）输入。
+
+        供上层（GUI 等）决定是否提供图片上传入口。
+        """
+        return getattr(self._provider, "supports_vision", False)
+
+    @property
     def last_reasoning_content(self) -> str:
         """上轮 LLM 响应的思维链推理内容（仅思考模式下有值）。"""
         return self._last_reasoning_content
@@ -217,7 +225,7 @@ class ConversationService:
     async def append_message(
         self,
         role: Literal["system", "user", "assistant", "tool"],
-        content: str,
+        content: str | list[dict[str, Any]],
         *,
         reasoning_content: str = "",
         metadata: dict[str, Any] | None = None,
@@ -274,7 +282,7 @@ class ConversationService:
 
     # ── 对话接口 ─────────────────────────────────────────────────────────────
 
-    def send(self, user_input: str, **kwargs) -> str:
+    def send(self, user_input: str, images: list[str] | None = None, **kwargs) -> str:
         """
         同步发送用户消息并获取回复（仅适用于无事件循环的上下文）。
 
@@ -284,6 +292,7 @@ class ConversationService:
 
         Args:
             user_input: 用户输入文本。
+            images: 图片 URL 或 base64 data URL 列表，用于多模态输入。
             **kwargs: 透传给 ChatRequest 的额外参数，如 temperature、max_tokens。
 
         Returns:
@@ -297,13 +306,13 @@ class ConversationService:
             asyncio.get_running_loop()
         except RuntimeError:
             # 无运行中循环：创建新循环驱动协程
-            return asyncio.run(self.asend(user_input, **kwargs))
+            return asyncio.run(self.asend(user_input, images=images, **kwargs))
         else:
             raise RuntimeError(
                 "send() 不能在已有运行中事件循环的上下文中调用，请改用 `await asend()`"
             )
 
-    async def asend(self, user_input: str, max_retries: int = 3, store_history: bool = True, **kwargs) -> str:
+    async def asend(self, user_input: str, images: list[str] | None = None, max_retries: int = 3, store_history: bool = True, **kwargs) -> str:
         """
         异步发送用户消息并获取回复（含指数退避重试）。
 
@@ -315,6 +324,8 @@ class ConversationService:
 
         Args:
             user_input: 用户输入文本。
+            images: 图片 URL 或 base64 data URL 列表，用于多模态输入；
+                    为空或 None 时按纯文本消息处理。
             max_retries: 最大重试次数，默认 3。
             store_history: 为 True（默认）将用户消息写入历史；
                            为 False 则不写入，仅用现有历史继续对话。
@@ -327,7 +338,7 @@ class ConversationService:
             LLMRequestError: 所有重试均失败时抛出。
         """
         add_to_history = store_history
-        messages = await self._prepare_request(user_input, add_to_history=add_to_history)
+        messages = await self._prepare_request(user_input, images=images, add_to_history=add_to_history)
         request = self._make_request(messages, **kwargs)
 
         # 每次调用开始时清除上一轮思考内容，避免失败重试场景下残留旧值
@@ -382,7 +393,7 @@ class ConversationService:
                         )
                         await asyncio.sleep(delay)
                         # 重试时重新构建请求（用户消息已回滚，thinking 等参数保持一致）
-                        messages = await self._prepare_request(user_input, add_to_history=add_to_history)
+                        messages = await self._prepare_request(user_input, images=images, add_to_history=add_to_history)
                         request = self._make_request(messages, **kwargs)
 
             # 所有重试均失败
@@ -396,7 +407,7 @@ class ConversationService:
             await self._clear_patches()
 
     async def asend_chat(
-        self, user_input: str, max_retries: int = 3, store_history: bool = True, commit_content: bool = True, **kwargs
+        self, user_input: str, images: list[str] | None = None, max_retries: int = 3, store_history: bool = True, commit_content: bool = True, **kwargs
     ) -> ChatResponse:
         """异步发送并返回完整响应（含 tool_calls），供工具调度阶段使用。
 
@@ -408,6 +419,7 @@ class ConversationService:
 
         Args:
             user_input: 用户输入文本。
+            images: 图片 URL 或 base64 data URL 列表，用于多模态输入。
             max_retries: 最大重试次数，默认 3。
             store_history: 为 True（默认）将用户消息写入历史；
                            为 False 则不写入，仅用现有历史继续对话。
@@ -422,7 +434,7 @@ class ConversationService:
             LLMRequestError: 所有重试均失败时抛出。
         """
         add_to_history = store_history
-        messages = await self._prepare_request(user_input, add_to_history=add_to_history)
+        messages = await self._prepare_request(user_input, images=images, add_to_history=add_to_history)
         request = self._make_request(messages, **kwargs)
 
         # 每次调用开始时清除上一轮思考内容，避免失败重试场景下残留旧值
@@ -482,7 +494,7 @@ class ConversationService:
                         )
                         await asyncio.sleep(delay)
                         # 重试时重新构建请求（用户消息已回滚，thinking 等参数保持一致）
-                        messages = await self._prepare_request(user_input, add_to_history=add_to_history)
+                        messages = await self._prepare_request(user_input, images=images, add_to_history=add_to_history)
                         request = self._make_request(messages, **kwargs)
 
             # 所有重试均失败
@@ -495,7 +507,7 @@ class ConversationService:
             # 确保补丁在本轮结束后始终清除，不残留到下一轮
             await self._clear_patches()
 
-    async def astream_send(self, user_input: str, max_retries: int = 3, store_history: bool = True, **kwargs) -> AsyncGenerator[str, None]:
+    async def astream_send(self, user_input: str, images: list[str] | None = None, max_retries: int = 3, store_history: bool = True, **kwargs) -> AsyncGenerator[str, None]:
         """
         异步流式发送用户消息，逐 token yield LLM 回复，完成后自动更新消息历史。
 
@@ -506,6 +518,7 @@ class ConversationService:
 
         Args:
             user_input: 用户输入文本。
+            images: 图片 URL 或 base64 data URL 列表，用于多模态输入。
             max_retries: 最大重试次数，默认 3。
             store_history: 为 True（默认）将用户消息写入历史；
                            为 False 则不写入，仅用现有历史继续对话。
@@ -518,7 +531,7 @@ class ConversationService:
             LLMRequestError: 所有重试均失败时抛出。
         """
         add_to_history = store_history
-        messages = await self._prepare_request(user_input, add_to_history=add_to_history)
+        messages = await self._prepare_request(user_input, images=images, add_to_history=add_to_history)
 
         logger.debug(
             "异步流式对话请求 | provider=%s | messages=%d | max_retries=%d",
@@ -563,7 +576,7 @@ class ConversationService:
                             e,
                         )
                         await asyncio.sleep(delay)
-                        messages = await self._prepare_request(user_input, add_to_history=add_to_history)
+                        messages = await self._prepare_request(user_input, images=images, add_to_history=add_to_history)
                     else:
                         logger.error(
                             "LLM 流式调用最终失败 | attempts=%d | provider=%s | model=%s | error=%s",
@@ -598,8 +611,9 @@ class ConversationService:
     async def _prepare_request(
         self,
         user_input: str,
+        images: list[str] | None = None,
         add_to_history: bool = True,
-    ) -> list[dict[str, str]]:
+    ) -> list[dict[str, Any]]:
         """
         追加用户消息（可选）并返回构建好的完整消息列表，供 LLM 调用使用。
 
@@ -607,13 +621,16 @@ class ConversationService:
 
         Args:
             user_input: 用户输入文本。
+            images: 图片 URL 或 base64 data URL 列表，用于多模态输入。
             add_to_history: 为 True 时将用户消息追加到历史（默认行为）；
                             为 False 时仅构建消息列表，不修改历史（transient 模式）。
 
         Returns:
             包含系统提示词与历史消息的完整消息列表。
         """
-        return await self._context_manager.prepare_request(user_input, add_to_history=add_to_history)
+        return await self._context_manager.prepare_request(
+            user_input, images=images, add_to_history=add_to_history
+        )
 
     async def _rollback_user_message(self) -> None:
         """LLM 调用失败时回滚最后一条用户消息，保持 user/assistant 交替结构。"""

@@ -8,7 +8,7 @@ import uuid
 from typing import Any, Literal
 
 from core.llm.cache import ContextCache
-from core.llm.models import ConversationContext, Message
+from core.llm.models import ConversationContext, Message, make_multimodal_content
 from core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -157,7 +157,7 @@ class ConversationContextManager:
     async def append_message(
         self,
         role: Literal["system", "user", "assistant", "tool"],
-        content: str,
+        content: str | list[dict[str, Any]],
         *,
         reasoning_content: str = "",
         metadata: dict[str, Any] | None = None,
@@ -168,7 +168,7 @@ class ConversationContextManager:
 
         Args:
             role: 消息角色。
-            content: 消息内容。
+            content: 消息内容（多模态消息传入 OpenAI 视觉格式 content 数组）。
             reasoning_content: 思维链推理内容（DeepSeek 思考模式专有）。
                               有工具调用时必须回传，否则 API 返回 400。
             metadata: 附加元数据。
@@ -256,6 +256,7 @@ class ConversationContextManager:
     async def prepare_request(
         self,
         user_input: str,
+        images: list[str] | None = None,
         add_to_history: bool = True,
     ) -> list[dict[str, Any]]:
         """
@@ -265,6 +266,8 @@ class ConversationContextManager:
 
         Args:
             user_input: 用户输入文本。
+            images: 图片 URL 或 base64 data URL 列表。传入时用户消息以
+                    OpenAI 视觉格式（content 数组）追加，实现多模态输入。
             add_to_history: 为 True 时将用户消息追加到历史（默认行为）；
                             为 False 时仅构建消息列表，不修改历史（transient 模式）。
 
@@ -273,7 +276,10 @@ class ConversationContextManager:
         """
         async with self._lock:
             if add_to_history:
-                self._context.messages.append(Message(role="user", content=user_input))
+                content: str | list[dict[str, Any]] = user_input
+                if images:
+                    content = make_multimodal_content(user_input, images)
+                self._context.messages.append(Message(role="user", content=content))
             return self._build_messages()
 
     async def rollback_user_message(self) -> None:
@@ -310,13 +316,13 @@ class ConversationContextManager:
         if self._history_max_chars <= 0 or not self._context.messages:
             return False
 
-        total = sum(len(m.content) for m in self._context.messages)
+        total = sum(self._content_length(m.content) for m in self._context.messages)
         if total <= self._history_max_chars:
             return False
 
         idx = 0
         while idx < len(self._context.messages) - 1:
-            length = len(self._context.messages[idx].content)
+            length = self._content_length(self._context.messages[idx].content)
             total -= length
             idx += 1
             if total <= self._history_max_chars:
@@ -334,6 +340,13 @@ class ConversationContextManager:
             return True
 
         return False
+
+    @staticmethod
+    def _content_length(content: str | list[dict[str, Any]]) -> int:
+        """计算消息内容字符数（兼容多模态 content 数组）。"""
+        if isinstance(content, str):
+            return len(content)
+        return sum(len(str(part)) for part in content)
 
     def _build_messages(self) -> list[dict[str, Any]]:
         """

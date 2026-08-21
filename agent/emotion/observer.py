@@ -83,11 +83,11 @@ class EmotionObserver:
         # 取最近 _WINDOW_SIZE 条消息
         window = messages[-_WINDOW_SIZE:] if len(messages) > _WINDOW_SIZE else messages
 
-        # 构造对话片段供观察
+        # 构造对话片段供观察（content 可能为多模态数组，需提取文本部分）
         conversation = "\n".join(
-            f"{m.get('role', 'unknown')}: {m.get('content', '')[:200]}"
+            f"{m.get('role', 'unknown')}: {self._content_text(m.get('content'))[:200]}"
             for m in window
-            if m.get("content")
+            if self._content_text(m.get("content"))
         )
 
         if not conversation.strip():
@@ -103,6 +103,21 @@ class EmotionObserver:
                 self._prev_scores = dict(_DEFAULT_SCORES)
 
         return self.current_state
+
+    @staticmethod
+    def _content_text(content: Any) -> str:
+        """将消息内容提取为纯文本（兼容多模态 content 数组）。"""
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts = []
+            for part in content:
+                if isinstance(part, dict):
+                    text = part.get("text")
+                    if isinstance(text, str):
+                        parts.append(text)
+            return " ".join(parts)
+        return str(content)
 
     async def _call_llm(self, conversation: str) -> dict[str, float]:
         """调用 LLM 获取原始情绪分数。"""

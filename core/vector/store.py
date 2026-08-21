@@ -115,15 +115,52 @@ class MilvusBackend:
         except Exception as e:
             logger.warning("Milvus 不可用，回退内存存储（无持久化）: %s", e)
 
+    def _ensure_index(self, dim: int) -> bool:
+        """确保集合已建向量索引，返回是否可用。
+
+        Milvus 的 ``load_collection`` 要求集合必须有索引，否则报
+        ``code=700 index not found``。集合可能已存在但索引缺失（如历史
+        数据或创建中断），此处检测并在缺失时补建 COSINE 索引。
+        """
+        if not self.enabled or self._client is None:
+            return False
+        try:
+            from pymilvus import MilvusException
+
+            if not self._client.has_collection(self._collection):
+                return False
+            # describe_index 在无索引时抛 MilvusException(code=700)
+            try:
+                self._client.describe_index(self._collection)
+                return True
+            except MilvusException as e:
+                if getattr(e, "code", None) != 700:
+                    raise
+            # 无索引 → 补建（维度来自集合 schema，不依赖外部参数）
+            self._client.create_index(
+                self._collection,
+                field_name="vector",
+                index_type="AUTO_INDEX",
+                metric_type="COSINE",
+            )
+            logger.info("Milvus 索引已补建: %s (dim=%d)", self._collection, dim)
+            return True
+        except Exception as e:
+            logger.warning("Milvus 索引检查/补建失败: %s", e)
+            return False
+
     def _ensure_collection(self, dim: int) -> bool:
-        """确保集合存在，返回是否可用。
+        """确保集合存在且已建索引，返回是否可用。
 
         集合创建成功后缓存 ``_collection_ready`` 标志，后续写入跳过
         ``has_collection`` 检查（减少网络往返）；并发写由锁串行化。
+        新建集合后立即补建索引，避免后续 ``load_collection`` 因无索引失败。
         """
         if not self.enabled or self._client is None:
             return False
         if self._collection_ready:
+            # 即使就绪也需保证索引存在（历史集合可能无索引）
+            self._ensure_index(dim)
             return True
         with self._lock:
             try:
@@ -151,6 +188,7 @@ class MilvusBackend:
                     logger.info(
                         "Milvus 集合已创建: %s (dim=%d)", self._collection, dim
                     )
+                self._ensure_index(dim)
                 self._collection_ready = True
                 return True
             except Exception as e:
@@ -204,6 +242,9 @@ class MilvusBackend:
         try:
             with self._lock:
                 if not self._client.has_collection(self._collection):
+                    return []
+                # 集合存在但可能无索引，load 前补建（见 _ensure_index 说明）
+                if not self._ensure_index(0):
                     return []
                 self._client.load_collection(self._collection)
                 results = self._client.query(

@@ -8,13 +8,36 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
+def make_multimodal_content(text: str, images: list[str]) -> list[dict[str, Any]]:
+    """构建 OpenAI 视觉格式（content 数组）的多模态消息内容。
+
+    Args:
+        text: 用户文本。
+        images: 图片 URL 或 base64 data URL 列表（如 ``data:image/png;base64,...``）。
+
+    Returns:
+        OpenAI content 数组，依次包含 text 与 image_url 两种类型。
+    """
+    content: list[dict[str, Any]] = []
+    if text:
+        content.append({"type": "text", "text": text})
+    for image in images:
+        content.append({"type": "image_url", "image_url": {"url": image}})
+    return content
+
+
 class Message(BaseModel):
-    """单条对话消息，不可变（frozen=True）。"""
+    """单条对话消息，不可变（frozen=True）。
+
+    ``content`` 支持两种形态：
+    - 纯文本字符串（常规消息）
+    - OpenAI 视觉格式 content 数组（多模态消息，见 :func:`make_multimodal_content`）
+    """
 
     model_config = ConfigDict(frozen=True)
 
     role: Literal["system", "user", "assistant", "tool"]
-    content: str
+    content: str | list[dict[str, Any]]
     reasoning_content: str = ""
     metadata: dict[str, Any] | None = None
     # 当 role == "tool" 时必填，关联 assistant 消息中的 tool_call.id

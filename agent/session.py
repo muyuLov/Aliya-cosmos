@@ -62,8 +62,8 @@ class AgentSession:
             except Exception as exc:  # pragma: no cover - sink 故障不阻断主流程
                 logger.warning("EventSink.emit 失败（已隔离）: %s", exc)
 
-    async def submit(self, text: str) -> AsyncGenerator[AgentEvent | ProtocolEvent, None]:
-        async for event in self._loop.submit_user_message(text):
+    async def submit(self, text: str, images: list[str] | None = None) -> AsyncGenerator[AgentEvent | ProtocolEvent, None]:
+        async for event in self._loop.submit_user_message(text, images):
             await self._emit_to_sinks(event)  # 全部事件广播给渠道 sink
             yield event
 

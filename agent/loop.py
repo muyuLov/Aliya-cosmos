@@ -92,8 +92,13 @@ class AgentLoop:
 
     # ── 主入口 ───────────────────────────────────────────────────────────────
 
-    async def submit_user_message(self, text: str) -> AsyncGenerator[AgentEvent | ProtocolEvent, None]:
-        """异步生成器：逐条产出事件，由 WS 网关/渠道消费。"""
+    async def submit_user_message(self, text: str, images: list[str] | None = None) -> AsyncGenerator[AgentEvent | ProtocolEvent, None]:
+        """异步生成器：逐条产出事件，由 WS 网关/渠道消费。
+
+        Args:
+            text: 用户输入文本。
+            images: 图片 URL 或 base64 data URL 列表，用于多模态输入。
+        """
         self.reset_abort()
         yield RunStarted(session_id=self.service.conversation_id)
 
@@ -102,7 +107,7 @@ class AgentLoop:
 
         # ── TOOL_PHASE ────────────────────────────────────────────────────────
         try:
-            async for event in self._tool_phase(text, tool_summary_parts):
+            async for event in self._tool_phase(text, images, tool_summary_parts):
                 yield event
         except Exception as exc:  # pragma: no cover - 兜底
             yield ProtocolEvent(type=ERROR, payload={"message": f"工具阶段异常: {exc}"})
@@ -112,7 +117,7 @@ class AgentLoop:
 
         # ── SOUL_PHASE ────────────────────────────────────────────────────────
         try:
-            async for event in self._soul_phase(text, tool_summary_parts, interrupted):
+            async for event in self._soul_phase(text, images, tool_summary_parts, interrupted):
                 yield event
         except Exception as exc:  # pragma: no cover - 兜底
             yield ProtocolEvent(type=ERROR, payload={"message": f"回复生成异常: {exc}"})
@@ -121,7 +126,7 @@ class AgentLoop:
     # ── TOOL_PHASE ───────────────────────────────────────────────────────────
 
     async def _tool_phase(
-        self, text: str, tool_summary_parts: list[str]
+        self, text: str, images: list[str] | None, tool_summary_parts: list[str]
     ) -> AsyncGenerator[AgentEvent | ProtocolEvent, None]:
         yield StepStarted(phase="tool")
         # 工具阶段 system：工具调度规则（tools_system.md）
@@ -135,6 +140,8 @@ class AgentLoop:
                 response = await asyncio.wait_for(
                     self.service.asend_chat(
                         text,
+                        # 图片仅在第一轮随用户消息写入历史；后续轮次复用历史
+                        images=images if _round == 0 else None,
                         store_history=(_round == 0),
                         tools=self.registry.build_tools_schema(),
                         tool_choice="auto",
@@ -237,13 +244,32 @@ class AgentLoop:
         text = text.strip()
         return text if len(text) <= limit else text[:limit] + "…"
 
+    @staticmethod
+    def _contains_image_content(content: Any) -> bool:
+        """判断消息内容是否包含图片（OpenAI 视觉格式 content 数组）。"""
+        return (
+            isinstance(content, list)
+            and any(isinstance(p, dict) and p.get("type") == "image_url" for p in content)
+        )
+
     # ── SOUL_PHASE ───────────────────────────────────────────────────────────
 
     async def _soul_phase(
-        self, text: str, tool_summary_parts: list[str], interrupted: bool
+        self, text: str, images: list[str] | None, tool_summary_parts: list[str], interrupted: bool
     ) -> AsyncGenerator[AgentEvent | ProtocolEvent, None]:
         yield StepStarted(phase="soul")
         tool_summary = "\n".join(tool_summary_parts) if tool_summary_parts else ""
+
+        # 多模态：图片通常已随 TOOL_PHASE 第一轮进入历史，SOUL_PHASE 复用即可；
+        # 仅当 TOOL_PHASE 失败回滚导致图片丢失时才补传（避免图片重复导致部分 API 400）。
+        soul_images = None
+        if images:
+            history = await self.service.get_history()
+            if not any(
+                m.role == "user" and self._contains_image_content(m.content)
+                for m in history
+            ):
+                soul_images = images
 
         # 记忆注入：调用 get_relevant_memories 检索相关五元组，格式化为可读文本；
         # memory 不可用或检索失败时降级为空，不阻塞主流程
@@ -270,7 +296,7 @@ class AgentLoop:
         yield TextMessageStart(message_id=message_id)
         full_parts: list[str] = []
         try:
-            async for token in self.service.astream_send(text, store_history=False):
+            async for token in self.service.astream_send(text, images=soul_images, store_history=False):
                 if self._abort:
                     break
                 full_parts.append(token)

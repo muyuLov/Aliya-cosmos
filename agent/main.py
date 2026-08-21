@@ -13,7 +13,11 @@ import argparse
 import uvicorn
 
 from core.config import get_config_instance
-from core.logger import get_logger
+from core.logger import get_logger, setup
+
+# 启动时先按 main.yml 的 cosmos.logger 配置初始化日志系统，
+# 否则首次 get_logger 会以空配置（仅控制台、INFO、无文件）初始化。
+setup()
 
 logger = get_logger(__name__)
 

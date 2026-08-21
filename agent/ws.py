@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -28,6 +29,18 @@ from agent.session import (
     _get_or_create_session_store,
     build_session_factory,
 )
+
+
+def _normalize_images(raw: Any) -> list[str] | None:
+    """归一化 user_message 的 images 字段为字符串列表，非法输入返回 None。"""
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list):
+        return None
+    images = [str(item).strip() for item in raw if str(item).strip()]
+    return images or None
 
 
 def create_ws_router(session_factory: SessionFactory | None = None) -> APIRouter:
@@ -53,12 +66,12 @@ def create_ws_router(session_factory: SessionFactory | None = None) -> APIRouter
         queue: asyncio.Queue[AgentEvent | ProtocolEvent | None] = asyncio.Queue()
         agent_task: asyncio.Task | None = None
 
-        async def run_agent(text: str) -> None:
+        async def run_agent(text: str, images: list[str] | None = None) -> None:
             """消费 AgentSession 事件流并放入发送队列。"""
             if session is None:
                 return
             try:
-                async for event in session.submit(text):
+                async for event in session.submit(text, images):
                     await queue.put(event)
             except Exception as exc:  # pragma: no cover - 兜底
                 await queue.put(ProtocolEvent(type=ERROR, payload={"message": f"Agent 运行异常: {exc}"}))
@@ -100,14 +113,15 @@ def create_ws_router(session_factory: SessionFactory | None = None) -> APIRouter
                 mtype = data.get("type")
                 if mtype == "user_message":
                     text = str(data.get("text") or "").strip()
-                    if not text:
+                    images = _normalize_images(data.get("images"))
+                    if not text and not images:
                         continue
                     if agent_task is not None and not agent_task.done():
                         await queue.put(
                             ProtocolEvent(type=NOTICE, payload={"message": "正在处理中，请稍候"})
                         )
                         continue
-                    agent_task = asyncio.create_task(run_agent(text))
+                    agent_task = asyncio.create_task(run_agent(text, images))
                 elif mtype == "stop":
                     if session is None:
                         continue

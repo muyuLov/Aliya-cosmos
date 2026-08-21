@@ -16,7 +16,13 @@ from core.llm.exceptions import (
     LLMRequestError,
     ProviderNotFoundError,
 )
-from core.llm.models import ChatRequest, ChatResponse, ConversationContext, Message
+from core.llm.models import (
+    ChatRequest,
+    ChatResponse,
+    ConversationContext,
+    Message,
+    make_multimodal_content,
+)
 from core.llm.providers import OpenAICompatibleProvider
 from core.llm.providers.base import LLMProvider
 from core.llm.service import ConversationService
@@ -194,6 +200,7 @@ __all__ = [
     "ConversationContext",
     "ChatRequest",
     "ChatResponse",
+    "make_multimodal_content",
     # 异常
     "LLMError",
     "LLMRequestError",
