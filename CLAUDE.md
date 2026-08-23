@@ -45,8 +45,6 @@ docker compose --profile tts up -d
 |------|------|------|
 | `DEEPSEEK_API_KEY` | 是 | DeepSeek API 密钥（用于 LLM 对话） |
 | `NEO4J_PASSWORD` | 否 | Neo4j 数据库密码（可选，默认使用 main.yml 中的值） |
-| `WS_HOST` | 否 | WebSocket 监听地址（默认 `0.0.0.0`，容器内使用） |
-| `WS_PORT` | 否 | WebSocket 监听端口（默认 `8765`） |
 | `NEO4J_HOST` | 否 | Neo4j 服务地址（默认 `127.0.0.1`，compose 网络内用 `neo4j`） |
 | `NEO4J_PORT` | 否 | Neo4j Bolt 端口（默认 `7687`） |
 | `ASTRA_PORT` | 否 | AstraTTS 服务端口（默认 `5000`，使用 edge TTS 时不需要） |
@@ -67,15 +65,6 @@ docker compose --profile tts up -d
 
 - **GRAG**（`core/memory/memory_manager.py` 等）— 借鉴 NagaAgent summer_memory：LLM 五元组提取（`extractor.py`，6 元素含类别契约；**放宽策略**：闲聊不再一刀切拒绝、未知实体类型降级「概念」、代词主体按说话人自动调整（`_detect_speaker` 解析文本说话人，"我"→当前说话人、"你"→对话另一方）、移除噪声宾语过滤；仍保留去重/截断/类别白名单）→ Neo4j 图存储（`graph.py`，Schema v4，去 APOC 依赖）→ RAG 召回（`rag_query.py`，检索支持 `include_source` 返回 6 元素元组含来源文本，回答生成引用「来源：…」）→ 并发任务管理（`task_manager.py`）。`get_memory_manager()` 返回集成层 `GRAGMemoryManager`，在 `after_turn` 保存对话记忆、在灵魂阶段注入相关记忆。
 - **层次化**（`core/memory/hierarchical.py`）— 参考 LAAP 第 10 章：感知/工作/情景/语义/程序五层 + 元记忆，跨层巩固（重复达阈值触发），JSON 持久化。已接入 `GRAGMemoryManager`：随 `add_conversation_memory()` 同步写入五层，五元组落库时经 `collect_entity_memory_attrs()` 聚合后把五层记忆属性（层/重要性/置信度等）挂载到 Entity 节点（`memory_*` 属性）。遗忘机制双层 + 向量联动：`apply_forgetting()` 按 Ebbinghaus 曲线永久衰减内存各层数值并清理低值条目（同时按 metadata/text 精确删除向量索引中的被遗忘条目及 pending 待同步文本，杜绝幽灵记忆；`add_conversation_memory` 按计数 20 次对话 + 时间 24h 双驱动自动触发，自动路径联动图节点属性衰减）；`graph.decay_memory_nodes` / `prune_memory_nodes`（UNWIND 批量）/ `query_memory_nodes` 支持对图节点执行衰减/清理/查询，`run_memory_forgetting()` 手动编排完整流程。`core/vector/store.py` 提供 `find_ids` / `delete_many` 供遗忘清理定位与批量删除。
-
-### 前端（GUI/）
-
-- **Electron 主进程**（`GUI/main/`）：`index.js` 组装生命周期；`windows.js` 创建透明无边框的 Live2D 窗口 + 状态侧栏；`ws.js` 连接后端 WS 并按 `type` 分发消息（含 5s 断线重连）；`ipc.js` 处理渲染进程交互；`state.js` 集中共享状态。
-- **渲染进程**（`GUI/src/`）：Vue 3 + Pinia；Live2D 用 pixi.js + pixi-live2d-display。
-- **WS 消息契约**（前后端协作关键，改协议需两侧同步）：
-  - 客户端→服务端：`user_message`、`stop`、`set_emotion`、`get_emotion_state`、`get_prompt_config`、`get_cognition_state`、`ping`、`confirm_response`（工具权限确认回复）。
-  - 服务端→客户端：`brain_start` / `brain_progress` / `brain_refine` / `brain_complete` / `brain_error`（思考与回复）、`status_changed` / `state_change`（阶段状态）、`emotion_changed` / `emotion_state`、`token_usage`、`tts_features`（口型同步音量数据）、`confirm_request`、`notice`。
-  - `stop` 可打断进行中的回复；`user_message` 处理期间收到新消息会返回错误提示。
 
 ### 配置体系
 
