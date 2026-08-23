@@ -45,6 +45,8 @@ docker compose --profile tts up -d
 |------|------|------|
 | `DEEPSEEK_API_KEY` | 是 | DeepSeek API 密钥（用于 LLM 对话） |
 | `NEO4J_PASSWORD` | 否 | Neo4j 数据库密码（可选，默认使用 main.yml 中的值） |
+| `WS_HOST` | 否 | WebSocket 监听地址（默认 `0.0.0.0`，容器内使用） |
+| `WS_PORT` | 否 | WebSocket 监听端口（默认 `8765`） |
 | `NEO4J_HOST` | 否 | Neo4j 服务地址（默认 `127.0.0.1`，compose 网络内用 `neo4j`） |
 | `NEO4J_PORT` | 否 | Neo4j Bolt 端口（默认 `7687`） |
 | `ASTRA_PORT` | 否 | AstraTTS 服务端口（默认 `5000`，使用 edge TTS 时不需要） |
