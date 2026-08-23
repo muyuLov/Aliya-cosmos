@@ -2,7 +2,7 @@
 
 参考 claude-code QueryEngine 模式：一个对话线程对应一个 AgentSession 实例，
 跨轮持有 ConversationService、usage 累计与中断控制。
-会话装配统一收敛到本模块（build_agent_session），WS / 飞书 / 微信共用；
+会话装配统一收敛到本模块（build_agent_session），飞书 / 微信共用；
 AgentSession 支持 EventSink 注册，进程内事件可被外部渠道订阅。
 共享单例（工具注册表、会话元数据）均在此处惰性创建与复用。
 """
@@ -10,7 +10,7 @@ AgentSession 支持 EventSink 注册，进程内事件可被外部渠道订阅�
 from __future__ import annotations
 
 import asyncio
-from typing import Any, AsyncGenerator, Awaitable, Callable
+from typing import Any, AsyncGenerator
 
 from agent.events import AgentEvent, EventSink, ProtocolEvent
 from agent.loop import AgentLoop
@@ -18,8 +18,6 @@ from core.llm.models import TokenUsage
 from core.logger import get_logger
 
 logger = get_logger(__name__)
-
-SessionFactory = Callable[[str], Awaitable["AgentSession"]]
 
 
 class AgentSession:
@@ -95,19 +93,6 @@ def _get_or_create_registry() -> Any:
     return _shared_registry
 
 
-_session_store: Any = None
-
-
-def _get_or_create_session_store() -> Any:
-    """进程内共享的会话元数据存储器（与工具注册表单例同模式）。"""
-    global _session_store
-    if _session_store is None:
-        from agent.session_store import SessionStore
-
-        _session_store = SessionStore()
-    return _session_store
-
-
 async def _ensure_shared_initialized(registry: Any, cfg: Any) -> None:
     """启动一次性：索引知识库目录 + 同步 MCP 服务器（各自失败隔离，互不阻断）。"""
     global _init_done, _connected_servers
@@ -134,7 +119,6 @@ async def _ensure_shared_initialized(registry: Any, cfg: Any) -> None:
 async def build_agent_session(conversation_id: str) -> AgentSession:
     """生产装配：真实 LLM 服务 + GRAG 记忆 + 共享工具注册表 + 情绪引擎。
 
-    从 agent/ws.py 的 _default_session_factory 迁移，行为完全一致：
     知识库索引 / MCP 同步在此处一次性 await，跨会话复用。
     """
     from agent.context import ContextBuilder
@@ -175,12 +159,3 @@ async def build_agent_session(conversation_id: str) -> AgentSession:
         emotion_engine=emotion_engine,
     )
     return AgentSession(conversation_id, service, loop)
-
-
-def build_session_factory() -> SessionFactory:
-    """返回兼容 WS 的 SessionFactory（无参工厂闭包）。"""
-
-    async def factory(cid: str) -> AgentSession:
-        return await build_agent_session(cid)
-
-    return factory

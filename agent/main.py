@@ -1,4 +1,4 @@
-"""Aliya Agent 服务入口：uvicorn 启动 WS 网关
+"""Aliya Agent 服务入口：uvicorn 启动 HTTP 服务（渠道 webhook）
 
 运行方式：
     python -m agent.main
@@ -23,7 +23,7 @@ logger = get_logger(__name__)
 
 
 def get_ws_server_config() -> tuple[str, int]:
-    """从 main.yml 读取 agent WS 服务监听配置（host / port）。"""
+    """从 main.yml 读取 agent 服务监听配置（host / port）。"""
     cfg = get_config_instance("data/config/main.yml")
     section = cfg.get("cosmos.service.agent.ws_server") or {}
     host = str(section.get("host", "127.0.0.1"))
@@ -35,7 +35,7 @@ def get_ws_server_config() -> tuple[str, int]:
 
 
 def main() -> None:
-    """启动 Agent WS 服务。"""
+    """启动 Aliya Agent 服务。"""
     parser = argparse.ArgumentParser(description="Aliya Agent 服务")
     parser.add_argument("--host", default=None, help="监听地址（默认读配置）")
     parser.add_argument("--port", type=int, default=None, help="监听端口（默认读配置）")
