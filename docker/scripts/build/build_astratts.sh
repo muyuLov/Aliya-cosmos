@@ -11,10 +11,14 @@ YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m' # No Color
 
+# 脚本所在目录 & 项目根目录
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+
 echo -e "${GREEN}开始构建 AstraTTS 镜像...${NC}"
 
-# 切换到 AstraTTS 目录
-cd AstraTTS
+# 切换到项目根目录下的 AstraTTS 目录
+cd "$PROJECT_ROOT/AstraTTS"
 
 # 构建镜像
 if docker build -t astratts-server:latest .; then
@@ -44,6 +48,3 @@ else
     echo -e "${RED}✗ 镜像构建失败，请检查错误信息${NC}"
     exit 1
 fi
-
-# 返回根目录
-cd ..
