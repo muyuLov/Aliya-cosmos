@@ -13,8 +13,10 @@ CYAN='\033[0;36m'
 WHITE='\033[1;37m'
 NC='\033[0m'
 
-# 项目根目录
-PROJECT_ROOT="$(cd "$(dirname "$0")" && pwd)"
+# 脚本所在目录 & 项目根目录
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+DOCKER_DIR="$PROJECT_ROOT/docker"
 
 # ── 工具函数 ──
 write_step() {
@@ -108,7 +110,7 @@ for svc in "${MILVUS_SERVICES[@]}"; do
                 write_fail "$image 镜像拉取失败"
                 exit 1
             fi
-            write_ok "$image 拋取完成"
+            write_ok "$image 拉取完成"
         fi
     fi
 done
@@ -143,7 +145,7 @@ fi
 
 # 5. Compose 启动
 write_step "创建并启动容器..."
-if ! docker compose -f "$PROJECT_ROOT/compose.yml" up -d; then
+if ! docker compose -f "$DOCKER_DIR/compose/compose.yml" up -d; then
     write_fail "Compose 启动失败"
     exit 1
 fi
