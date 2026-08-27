@@ -112,8 +112,8 @@ class AudioPlayer:
         self._header_buf = bytearray()
         self._is_wav: bool | None = None  # None=未检测, True=WAV, False=PCM
         self._is_mp3: bool | None = None  # None=未检测, True=MP3, False=其他
-        self._mp3_buffer = bytearray()    # MP3 格式检测累积缓冲
-        self._mp3_pending = bytearray()   # 后续 MP3 块累积缓冲（批量送入解码器）
+        self._mp3_buffer = bytearray()  # MP3 格式检测累积缓冲
+        self._mp3_pending = bytearray()  # 后续 MP3 块累积缓冲（批量送入解码器）
 
         # 当前流实际使用的格式信息（用于字节对齐）
         self._current_sample_rate: int | None = None
@@ -128,9 +128,9 @@ class AudioPlayer:
         self._drain_lock = asyncio.Lock()
 
         # 口型同步：音频特征（由播放线程写入，外部协程读取）
-        self._last_volume: float = 0.0       # 归一化 RMS 音量 (0~1)
-        self._last_centroid: float = 0.5     # 频谱质心比 (0~1)，低→元音(ah) 高→辅音(ss)
-        self._last_zcr: float = 0.0          # 过零率归一化 (0~1)，低→浊音 高→清音
+        self._last_volume: float = 0.0  # 归一化 RMS 音量 (0~1)
+        self._last_centroid: float = 0.5  # 频谱质心比 (0~1)，低→元音(ah) 高→辅音(ss)
+        self._last_zcr: float = 0.0  # 过零率归一化 (0~1)，低→浊音 高→清音
 
         # MP3 流式解码器（常驻 ffmpeg 进程，管道读写，零批次延迟）
         self._mp3_stream_decoder: Mp3StreamDecoder | None = None
@@ -176,13 +176,17 @@ class AudioPlayer:
                     probe_data = bytes(self._mp3_buffer) + chunk
                     decoder = Mp3StreamDecoder()
                     sr, ch = await loop.run_in_executor(
-                        None, decoder.start, probe_data,
+                        None,
+                        decoder.start,
+                        probe_data,
                     )
                     self._mp3_stream_decoder = decoder
                     self._mp3_buffer.clear()
                     self._open_stream(sr, ch, 2, "int16")
                     pcm = await loop.run_in_executor(
-                        None, decoder.decode, probe_data,
+                        None,
+                        decoder.decode,
+                        probe_data,
                     )
                 else:
                     self._mp3_pending += chunk
@@ -192,7 +196,9 @@ class AudioPlayer:
                     batch = bytes(self._mp3_pending)
                     self._mp3_pending.clear()
                     pcm = await loop.run_in_executor(
-                        None, decoder.decode, batch,
+                        None,
+                        decoder.decode,
+                        batch,
                     )
 
                 if pcm:
@@ -244,7 +250,10 @@ class AudioPlayer:
                             fmt_info.channels,
                         )
                         self._open_stream(
-                            fmt_info.sample_rate, fmt_info.channels, fmt_info.sample_width, fmt_info.pa_format
+                            fmt_info.sample_rate,
+                            fmt_info.channels,
+                            fmt_info.sample_width,
+                            fmt_info.pa_format,
                         )
                         self._is_wav = False
                         self._is_mp3 = False
@@ -317,12 +326,15 @@ class AudioPlayer:
                     pending = bytes(self._mp3_pending)
                     self._mp3_pending.clear()
                     pcm_data = await loop.run_in_executor(
-                        None, self._mp3_stream_decoder.decode, pending,
+                        None,
+                        self._mp3_stream_decoder.decode,
+                        pending,
                     )
                     if pcm_data:
                         await self._enqueue(pcm_data)
                 pcm_data = await loop.run_in_executor(
-                    None, self._mp3_stream_decoder.flush,
+                    None,
+                    self._mp3_stream_decoder.flush,
                 )
                 if pcm_data:
                     await self._enqueue(pcm_data)
@@ -444,9 +456,7 @@ class AudioPlayer:
                 except queue.Full:
                     await asyncio.sleep(0.005)
 
-    def _open_stream(
-        self, sample_rate: int, channels: int, sample_width: int, dtype: str
-    ) -> None:
+    def _open_stream(self, sample_rate: int, channels: int, sample_width: int, dtype: str) -> None:
         """打开 sounddevice OutputStream 并启动播放线程。"""
         self._stream = sd.OutputStream(
             samplerate=sample_rate,

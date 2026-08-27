@@ -86,9 +86,7 @@ class Mp3StreamDecoder:
             info = json.loads(stdout)
             for stream in info.get("streams", []):
                 if stream.get("codec_type") == "audio":
-                    return int(stream.get("sample_rate", 24000)), int(
-                        stream.get("channels", 1)
-                    )
+                    return int(stream.get("sample_rate", 24000)), int(stream.get("channels", 1))
             raise ValueError("未找到音频流")
         except Exception:
             _logger.warning("MP3 探查失败，回退到 24000Hz/1ch")
@@ -140,9 +138,7 @@ class Mp3StreamDecoder:
         )
         self._reader_thread.start()
         self._started = True
-        _logger.debug(
-            "MP3 流式解码器已启动 | sample_rate=%d | channels=%d", sr, ch
-        )
+        _logger.debug("MP3 流式解码器已启动 | sample_rate=%d | channels=%d", sr, ch)
         return sr, ch
 
     def _reader_loop(self) -> None:

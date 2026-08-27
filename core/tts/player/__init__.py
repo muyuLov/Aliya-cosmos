@@ -3,8 +3,8 @@
 from core.tts.player.audio_features import AudioFeatures
 from core.tts.player.core import AudioPlayer, AudioPlayerError
 from core.tts.player.format_detector import (
-    FormatInfo,
     RIFF_MAGIC,
+    FormatInfo,
     WavHeaderParseError,
     find_wav_data_offset,
     parse_wav_header,

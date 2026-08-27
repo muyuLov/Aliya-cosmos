@@ -42,7 +42,8 @@ def create_player(player_config: dict[str, Any] | None = None):
             **{
                 k: v
                 for k, v in cfg.items()
-                if k in (
+                if k
+                in (
                     "sample_rate",
                     "channels",
                     "pcm_format",
@@ -129,10 +130,7 @@ def create_from_config(
     # 获取 TTS 配置节点
     tts_section: dict = cfg.get(config_prefix, {})
     if not tts_section:
-        raise TTSConfigError(
-            "config_section",
-            f"配置节点 {config_prefix} 不存在或为空"
-        )
+        raise TTSConfigError("config_section", f"配置节点 {config_prefix} 不存在或为空")
 
     # 使用工厂的统一配置加载方法
     try:
