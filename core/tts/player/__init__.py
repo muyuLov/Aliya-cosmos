@@ -1,5 +1,6 @@
 """AudioPlayer 子包：流式音频播放器"""
 
+from core.tts.player.audio_features import AudioFeatures
 from core.tts.player.core import AudioPlayer, AudioPlayerError
 from core.tts.player.format_detector import (
     FormatInfo,
@@ -8,6 +9,7 @@ from core.tts.player.format_detector import (
     find_wav_data_offset,
     parse_wav_header,
 )
+from core.tts.player.mp3_decoder import Mp3StreamDecoder
 
 __all__ = [
     # 主类
@@ -19,4 +21,8 @@ __all__ = [
     "WavHeaderParseError",
     "find_wav_data_offset",
     "parse_wav_header",
+    # MP3 解码
+    "Mp3StreamDecoder",
+    # 音频特征
+    "AudioFeatures",
 ]
