@@ -1,9 +1,13 @@
-﻿# ============================================================
+# ============================================================
 # Aliya-cosmos Docker 服务启动脚本
 # ============================================================
 
 $ErrorActionPreference = "Continue"
-$ProjectRoot = $PSScriptRoot
+
+# 脚本所在目录 & 项目根目录
+$ScriptDir = $PSScriptRoot
+$ProjectRoot = (Get-Item $ScriptDir).Parent.Parent.Parent.FullName
+$DockerDir = Join-Path $ProjectRoot "docker"
 
 function Write-Step {
     param([string]$Text)
@@ -140,7 +144,7 @@ if (-not $astraDone) {
 
 # 5. Compose 启动
 Write-Step "创建并启动容器..."
-docker compose -f "$ProjectRoot\compose.yml" up -d
+docker compose -f "$DockerDir\compose\compose.yml" up -d
 if ($LASTEXITCODE -ne 0) {
     Write-Fail "Compose 启动失败"
     exit 1
