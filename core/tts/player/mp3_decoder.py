@@ -210,7 +210,7 @@ class Mp3StreamDecoder:
         except Exception:
             pass
         # 等待读取线程结束（最多 5 秒）
-        if self._reader_thread is not not self._reader_thread.is_alive():
+        if self._reader_thread is not None and self._reader_thread.is_alive():
             self._reader_thread.join(timeout=5)
         # 收集残留
         chunks: list[bytes] = []
