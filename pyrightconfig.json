@@ -3,8 +3,6 @@
     "agent",
     "core",
     "main.py",
-    "tests",
-    "GUI"
   ],
   "exclude": [
     "example",
