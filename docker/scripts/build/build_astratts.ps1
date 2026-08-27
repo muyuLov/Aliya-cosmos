@@ -1,9 +1,13 @@
 # 构建 AstraTTS Docker 镜像
 
+# 脚本所在目录 & 项目根目录
+$ScriptDir = $PSScriptRoot
+$ProjectRoot = (Get-Item $ScriptDir).Parent.Parent.Parent.FullName
+
 Write-Host "开始构建 AstraTTS 镜像..." -ForegroundColor Green
 
-# 切换到 AstraTTS 目录
-Set-Location AstraTTS
+# 切换到项目根目录下的 AstraTTS 目录
+Set-Location "$ProjectRoot\AstraTTS"
 
 # 构建镜像
 docker build -t astratts-server:latest .
@@ -23,6 +27,3 @@ if ($LASTEXITCODE -eq 0) {
     Write-Host "✗ 镜像构建失败，请检查错误信息" -ForegroundColor Red
     exit 1
 }
-
-# 返回根目录
-Set-Location ..
