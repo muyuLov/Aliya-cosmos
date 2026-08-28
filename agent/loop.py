@@ -53,6 +53,8 @@ class AgentLoop:
         checker: Any = None,
         memory: Any = None,
         emotion_engine: Any = None,
+        alter_state: Any = None,
+        agency_window: Any = None,
         max_tool_rounds: int = 20,
         tool_timeout: float = 30.0,
         confirm_timeout: float = 30.0,
@@ -73,6 +75,8 @@ class AgentLoop:
         self._narrator = narrator
         self._story_id = story_id
         self._participant_id = participant_id
+        self._alter_state = alter_state
+        self._agency_window = agency_window
 
         # 中断控制
         self._abort = False
@@ -111,6 +115,14 @@ class AgentLoop:
             participant_id=self._participant_id,
         )
 
+        # 注入 Alter 状态到上下文
+        if self._alter_state is not None:
+            context_json["alter"] = self._alter_state.to_dict()
+
+        # 注入 Agency 状态到上下文
+        if self._agency_window is not None:
+            context_json["agency"] = self._agency_window.to_dict()
+
         # ── Stage 2: 主叙事调用 ──
         output = await self._invoke_narrator(context_json)
 
@@ -144,6 +156,12 @@ class AgentLoop:
                 description="",
                 intensity=float(output.alter),
             )
+            # 将 alter delta 应用到状态机
+            if self._alter_state is not None and output.alter != 0:
+                self._alter_state.apply(
+                    float(output.alter),
+                    "warm" if output.alter > 0 else "cool",
+                )
 
         yield RunFinished(session_id="default")
 

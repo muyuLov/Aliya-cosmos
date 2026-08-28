@@ -1,220 +1,117 @@
-"""主动聊天调度器 + 护栏 + 渠道路由
+"""后台调度器重写（NarrativeScheduler）
 
-触发器定义"何时"、护栏定义"是否允许"、路由定义"投递到哪"。
+三来源调度：
+1. 自动推进（auto_advance）：定期触发生活推进
+2. 到期 intent（intent_due）：延迟意图到期
+3. proactive_check：主动联系重查
+
+全部经串行队列进入主叙事；替代旧 schedule/idle 触发式逻辑。
 """
 
 from __future__ import annotations
 
-import asyncio
-import logging
-from collections.abc import Awaitable, Callable
+import time
 from dataclasses import dataclass, field
-from datetime import datetime, time, timedelta
+from datetime import datetime, timezone
 from typing import Any
 
-logger = logging.getLogger(__name__)
-
 
 @dataclass
-class TriggerConfig:
-    """单条触发器配置。"""
-
-    type: str  # "schedule" | "idle"
-    at: str | None = None  # HH:MM，schedule 用
-    message: str = ""
-
-
-@dataclass
-class ProactiveConfig:
-    """主动聊天全局配置。"""
-
-    enabled: bool = False
-    check_interval_seconds: int = 60
-    quiet_hours_start: str = "23:00"
-    quiet_hours_end: str = "07:00"
-    idle_timeout_minutes: int = 30
-    triggers: list[TriggerConfig] = field(default_factory=list)
-    max_unanswered: int = 3  # 连续未回复触发次数上限
+class _IntentEntry:
+    """待调度 intent 条目。"""
+    intent_id: str
+    summary: str
+    participant_id: str
+    not_before: datetime
 
 
-def _parse_time(s: str) -> time:
-    """解析 HH:MM 格式时间，失败时返回午夜。"""
-    try:
-        parts = s.strip().split(":")
-        return time(int(parts[0]), int(parts[1]))
-    except (ValueError, IndexError):
-        logger.warning("时间格式无效: %s，使用默认 00:00", s)
-        return time(0, 0)
-
-
-def _in_quiet_hours(now: datetime, start: str, end: str) -> bool:
-    """判断当前时间是否在不打搅时段内。"""
-    t = now.time()
-    qs = _parse_time(start)
-    qe = _parse_time(end)
-
-    if qs <= qe:
-        # 正常时段：如 07:00 ~ 23:00
-        return qs <= t <= qe
-    else:
-        # 跨午夜：如 23:00 ~ 07:00
-        return t >= qs or t <= qe
-
-
-class ProactiveScheduler:
-    """主动聊天调度器：后台轮询 + 护栏 + 消息投递。
-
-    仅支持投递到当前 GUI 连接（通过 sink 回调）。
-    """
+class NarrativeScheduler:
+    """后台调度器：三来源 → 事件列表。"""
 
     def __init__(
         self,
-        config: ProactiveConfig,
-        sink: Callable[[str], Awaitable[None]],
+        *,
+        auto_advance_enabled: bool = False,
+        advance_interval_minutes: int = 180,
     ) -> None:
-        self._config = config
-        self._sink = sink
+        self._auto_advance_enabled = auto_advance_enabled
+        self._advance_interval_minutes = advance_interval_minutes
+        self._last_advance_at: float = 0.0
+        self._due_intents: list[_IntentEntry] = []
+        self._proactive_checks: list[dict[str, str]] = []
 
-        # 运行时状态
-        self._enabled = config.enabled
-        self._task: asyncio.Task | None = None
-        self._last_user_message_time: datetime | None = None
-        self._processing: bool = False
-        self._triggered_count: int = 0
-        self._schedule_triggered_today: dict[str, bool] = {}
-        self._today: str = ""  # YYYY-MM-DD，用于日切重置
+    def set_last_advance_at(self, timestamp: float) -> None:
+        """设置上次自动推进时间戳。"""
+        self._last_advance_at = timestamp
 
-    @property
-    def enabled(self) -> bool:
-        return self._enabled
+    def set_advance_interval_minutes(self, minutes: int) -> None:
+        """设置自动推进间隔。"""
+        self._advance_interval_minutes = minutes
 
-    async def set_enabled(self, enabled: bool) -> None:
-        """动态开关。"""
-        self._enabled = enabled
-        if enabled and self._task is None:
-            await self.start()
-        elif not enabled and self._task is not None:
-            await self.stop()
-
-    async def start(self) -> None:
-        """启动后台轮询任务。"""
-        if self._task is not None:
-            return
-        self._task = asyncio.create_task(self._loop())
-        logger.info("主动聊天调度器已启动")
-
-    async def stop(self) -> None:
-        """停止后台轮询任务。"""
-        if self._task is not None:
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
-            self._task = None
-        logger.info("主动聊天调度器已停止")
-
-    async def notify_user_message(self, session_id: str) -> None:
-        """用户发消息时调用：刷新计时 + 重置触发计数。"""
-        self._last_user_message_time = datetime.now()
-        self._triggered_count = 0
-        logger.debug("主动聊天：用户消息通知 session=%s", session_id)
-
-    def set_processing(self, processing: bool) -> None:
-        """设置是否正在处理对话（对话进行中不触发）。"""
-        self._processing = processing
-
-    def can_trigger(self, trigger: TriggerConfig, now: datetime | None = None) -> bool:
-        """判断指定触发器是否可以触发。"""
-        if not self._enabled:
-            return False
-
-        # 公共护栏
-        if _in_quiet_hours(now or datetime.now(), self._config.quiet_hours_start, self._config.quiet_hours_end):
-            return False
-        if self._processing:
-            return False
-        if self._triggered_count >= self._config.max_unanswered:
-            return False
-
-        # 日切重置
-        today = (now or datetime.now()).strftime("%Y-%m-%d")
-        if today != self._today:
-            self._today = today
-            self._schedule_triggered_today.clear()
-
-        if trigger.type == "schedule":
-            return self._can_trigger_schedule(trigger, now or datetime.now())
-        elif trigger.type == "idle":
-            return self._can_trigger_idle(trigger, now or datetime.now())
-        return False
-
-    def _can_trigger_schedule(self, trigger: TriggerConfig, now: datetime) -> bool:
-        """定时触发：分钟精度匹配且当天未触发过。"""
-        if not trigger.at:
-            return False
-        target = _parse_time(trigger.at)
-        if now.hour != target.hour or now.minute != target.minute:
-            return False
-        if self._schedule_triggered_today.get(trigger.at, False):
-            return False
-        self._schedule_triggered_today[trigger.at] = True
-        return True
-
-    def _can_trigger_idle(self, _trigger: TriggerConfig, now: datetime) -> bool:
-        """静默超时触发。"""
-        if self._last_user_message_time is None:
-            # 从未收到用户消息：视为长时间空闲
-            return True
-        elapsed = now - self._last_user_message_time
-        return elapsed >= timedelta(minutes=self._config.idle_timeout_minutes)
-
-    async def _loop(self) -> None:
-        """后台轮询主循环。"""
-        while True:
-            try:
-                await asyncio.sleep(self._config.check_interval_seconds)
-            except asyncio.CancelledError:
-                return
-
-            now = datetime.now()
-            for trigger in self._config.triggers:
-                if self.can_trigger(trigger, now):
-                    logger.info("主动聊天触发 | type=%s | message=%s", trigger.type, trigger.message[:50])
-                    try:
-                        await self._sink(trigger.message)
-                        self._triggered_count += 1
-                    except Exception:
-                        logger.exception("主动聊天消息投递失败")
-
-    def reset_daily(self) -> None:
-        """手动重置日切状态（用于测试）。"""
-        self._schedule_triggered_today.clear()
-        self._triggered_count = 0
-
-
-def create_proactive_scheduler(
-    config: dict[str, Any],
-    sink: Callable[[str], Awaitable[None]],
-) -> ProactiveScheduler:
-    """工厂函数：从配置字典创建 ProactiveScheduler。"""
-    proactive_cfg = config.get("proactive", {})
-
-    triggers = []
-    for t in proactive_cfg.get("triggers", []):
-        triggers.append(TriggerConfig(
-            type=t.get("type", "schedule"),
-            at=t.get("at"),
-            message=t.get("message", ""),
+    def add_intent(
+        self,
+        intent_id: str,
+        summary: str,
+        participant_id: str,
+        not_before: datetime,
+    ) -> None:
+        """注册到期 intent。"""
+        self._due_intents.append(_IntentEntry(
+            intent_id=intent_id,
+            summary=summary,
+            participant_id=participant_id,
+            not_before=not_before,
         ))
 
-    cfg = ProactiveConfig(
-        enabled=proactive_cfg.get("enabled", False),
-        check_interval_seconds=proactive_cfg.get("check_interval_seconds", 60),
-        quiet_hours_start=proactive_cfg.get("quiet_hours", {}).get("start", "23:00"),
-        quiet_hours_end=proactive_cfg.get("quiet_hours", {}).get("end", "07:00"),
-        idle_timeout_minutes=proactive_cfg.get("idle_timeout_minutes", 30),
-        triggers=triggers,
-    )
+    def add_proactive_check(
+        self, story_id: str, participant_id: str, reason: str
+    ) -> None:
+        """注册 proactive-check 候选。"""
+        self._proactive_checks.append({
+            "story_id": story_id,
+            "participant_id": participant_id,
+            "reason": reason,
+        })
 
-    return ProactiveScheduler(cfg, sink)
+    async def tick(self) -> list[dict[str, Any]]:
+        """扫描一次，返回到期事件列表。"""
+        events: list[dict[str, Any]] = []
+
+        # 1. 到期 intent
+        now = datetime.now(timezone.utc)
+        remaining: list[_IntentEntry] = []
+        for entry in self._due_intents:
+            if entry.not_before <= now:
+                events.append({
+                    "type": "intent_due",
+                    "intent_id": entry.intent_id,
+                    "summary": entry.summary,
+                    "participant_id": entry.participant_id,
+                })
+            else:
+                remaining.append(entry)
+        self._due_intents = remaining
+
+        # 2. 自动推进
+        if self._auto_advance_enabled:
+            now_ts = time.time()
+            interval_s = self._advance_interval_minutes * 60
+            if now_ts - self._last_advance_at >= interval_s:
+                events.append({
+                    "type": "auto_advance",
+                    "timestamp": now.isoformat(),
+                })
+                self._last_advance_at = now_ts
+
+        # 3. proactive-check
+        if self._proactive_checks:
+            for check in self._proactive_checks:
+                events.append({
+                    "type": "proactive_check",
+                    "story_id": check["story_id"],
+                    "participant_id": check["participant_id"],
+                    "reason": check["reason"],
+                })
+            self._proactive_checks.clear()
+
+        return events

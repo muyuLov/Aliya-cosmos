@@ -1,12 +1,14 @@
-"""主动聊天模块：调度器 + 护栏 + 渠道路由
+"""主动聊天模块：Agency Window + 休息窗口 + 调度器
 
-参考 Cyrene-Agent 的 scheduler + proactive 模块。
+替代旧 schedule/idle 触发式逻辑。
 """
 
-from agent.proactive.scheduler import ProactiveScheduler, TriggerConfig, create_proactive_scheduler
+from agent.proactive.agency import AgencyWindow
+from agent.proactive.rest_windows import RestWindow
+from agent.proactive.scheduler import NarrativeScheduler
 
 __all__ = [
-    "ProactiveScheduler",
-    "TriggerConfig",
-    "create_proactive_scheduler",
+    "AgencyWindow",
+    "RestWindow",
+    "NarrativeScheduler",
 ]

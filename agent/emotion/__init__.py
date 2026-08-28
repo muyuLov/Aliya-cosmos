@@ -1,24 +1,10 @@
-"""情绪引擎模块：状态平滑器 + LLM 心情观察器 + 语气注入器
+"""情绪/氛围模块
 
-参考 Cyrene-Agent 三层机制：
-1. runtime-state-smoother（状态平滑器）
-2. observeRuntimeState（LLM 心情观察器）
-3. tone-injector（embedding 场景匹配 + 语气注入）
+Alter 动态氛围阈值系统（替代旧固定情绪引擎）。
 """
 
-from agent.emotion.emotion_state import (
-    EMOTION_ALIASES,
-    VAD_EMOTIONS,
-    EmotionState,
-    FeelingScores,
-)
-from agent.emotion.engine import EmotionEngine, create_emotion_engine
+from agent.emotion.alter import AlterState
 
 __all__ = [
-    "VAD_EMOTIONS",
-    "EMOTION_ALIASES",
-    "EmotionState",
-    "FeelingScores",
-    "EmotionEngine",
-    "create_emotion_engine",
+    "AlterState",
 ]
