@@ -8,6 +8,7 @@ $ErrorActionPreference = "Continue"
 $ScriptDir = $PSScriptRoot
 $ProjectRoot = (Get-Item $ScriptDir).Parent.Parent.Parent.FullName
 $DockerDir = Join-Path $ProjectRoot "docker"
+$DockerData = Join-Path $DockerDir "data"
 
 function Write-Step {
     param([string]$Text)
@@ -86,31 +87,7 @@ if (-not $neo4jDone) {
     }
 }
 
-# 3. Milvus 向量数据库（etcd / MinIO / Milvus）
-Write-Step "检测 Milvus 向量数据库..."
-$milvusServices = @(
-    @{ Name = "aliya-cosmos-etcd";   Image = "quay.io/coreos/etcd:v3.7.1" },
-    @{ Name = "aliya-cosmos-minio";  Image = "minio/minio:RELEASE.2025-09-07T16-13-09Z" },
-    @{ Name = "aliya-cosmos-milvus"; Image = "milvusdb/milvus:v2.6.22" }
-)
-foreach ($svc in $milvusServices) {
-    $done = Start-ServiceContainer $svc.Name
-    if (-not $done) {
-        if (Test-ImageExists $svc.Image) {
-            Write-OK "$($svc.Image) 已存在"
-        } else {
-            Write-Host "      正在拉取 $($svc.Image)..." -ForegroundColor Yellow
-            docker pull $svc.Image
-            if ($LASTEXITCODE -ne 0) {
-                Write-Fail "$($svc.Image) 镜像拉取失败"
-                exit 1
-            }
-            Write-OK "$($svc.Image) 拉取完成"
-        }
-    }
-}
-
-# 4. AstraTTS
+# 3. AstraTTS
 Write-Step "检测 AstraTTS..."
 $astraDone = Start-ServiceContainer "aliya-cosmos-astratts"
 if (-not $astraDone) {
@@ -118,7 +95,7 @@ if (-not $astraDone) {
         Write-OK "astratts-server:latest 已存在"
     } else {
         Write-Host "      准备构建 astratts-server:latest..." -ForegroundColor Yellow
-        $AstraTTSDir = Join-Path $ProjectRoot "AstraTTS"
+        $AstraTTSDir = Join-Path $DockerData "AstraTTS"
         if (-not (Test-Path $AstraTTSDir)) {
             Write-Host "      正在克隆 AstraTTS 仓库..." -ForegroundColor Yellow
             git clone https://github.com/Blackwood416/AstraTTS.git "$AstraTTSDir"
@@ -142,7 +119,7 @@ if (-not $astraDone) {
     }
 }
 
-# 5. Compose 启动
+# 4. Compose 启动
 Write-Step "创建并启动容器..."
 docker compose -f "$DockerDir\compose\compose.yml" up -d
 if ($LASTEXITCODE -ne 0) {
@@ -157,7 +134,5 @@ Write-Host "  ║   所有服务已就绪                     ║" -ForegroundCo
 Write-Host "  ║                                      ║" -ForegroundColor Cyan
 Write-Host "  ║    Neo4j  : http://localhost:7474    ║" -ForegroundColor White
 Write-Host "  ║    AstraTTS: http://localhost:5000   ║" -ForegroundColor White
-Write-Host "  ║    Milvus : http://localhost:19530   ║" -ForegroundColor White
-Write-Host "  ║    MinIO  : http://localhost:9001    ║" -ForegroundColor White
 Write-Host "  ╚══════════════════════════════════════╝" -ForegroundColor Cyan
 Write-Host ""

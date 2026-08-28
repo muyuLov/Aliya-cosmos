@@ -5,10 +5,10 @@ services:
     image: neo4j:latest
     container_name: aliya-cosmos-neo4j
     volumes:
-      - ./data/Neo4j/logs:/logs
-      - ./data/Neo4j/data:/data
-      - ./data/Neo4j/plugins:/plugins
-      - ./data/Neo4j/config:/config
+      - ../data/Neo4j/logs:/logs
+      - ../data/Neo4j/data:/data
+      - ../data/Neo4j/plugins:/plugins
+      - ../data/Neo4j/config:/config
     environment:
         - NEO4J_AUTH=neo4j/Aliya_neo4j
     ports:
@@ -18,16 +18,16 @@ services:
 
   astratts:
     build:
-      context: ./data/AstraTTS
+      context: ../data/AstraTTS
       dockerfile: Dockerfile
     image: astratts-server:latest
     container_name: aliya-cosmos-astratts
     ports:
       - "5000:5000"
     volumes:
-      - ./data/AstraTTS/resources:/app/resources
+      - ../data/AstraTTS/resources:/app/resources
       - type: bind
-        source: ./data/AstraTTS/config.yaml
+        source: ../data/AstraTTS/config.yaml
         target: /app/config.yaml
     restart: unless-stopped
 
@@ -42,7 +42,7 @@ services:
       ETCD_QUOTA_BACKEND_BYTES: "4294967296"
       ETCD_SNAPSHOT_COUNT: "50000"
     volumes:
-      - ./data/etcd:/etcd
+      - ../data/etcd:/etcd
     command: etcd -advertise-client-urls=http://etcd:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
     ports:
       - "2379:2379"
@@ -61,7 +61,7 @@ services:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
     volumes:
-      - ./data/minio:/minio_data
+      - ../data/minio:/minio_data
     command: minio server /minio_data --console-address ":9001"
     ports:
       - "9000:9000"
@@ -84,7 +84,7 @@ services:
       ETCD_ENDPOINTS: etcd:2379
       MINIO_ADDRESS: minio:9000
     volumes:
-      - ./data/milvus:/var/lib/milvus
+      - ../data/milvus:/var/lib/milvus
     ports:
       - "19530:19530"
       - "9091:9091"

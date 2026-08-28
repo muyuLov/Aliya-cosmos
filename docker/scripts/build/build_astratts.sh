@@ -14,11 +14,12 @@ NC='\033[0m' # No Color
 # 脚本所在目录 & 项目根目录
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+DOCKER_DATA="$PROJECT_ROOT/docker/data"
 
 echo -e "${GREEN}开始构建 AstraTTS 镜像...${NC}"
 
-# 切换到项目根目录下的 AstraTTS 目录
-cd "$PROJECT_ROOT/AstraTTS"
+# 切换到 docker/data/AstraTTS 目录（构建上下文）
+cd "$DOCKER_DATA/AstraTTS"
 
 # 构建镜像
 if docker build -t astratts-server:latest .; then

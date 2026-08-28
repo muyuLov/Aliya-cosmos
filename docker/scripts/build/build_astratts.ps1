@@ -3,11 +3,12 @@
 # 脚本所在目录 & 项目根目录
 $ScriptDir = $PSScriptRoot
 $ProjectRoot = (Get-Item $ScriptDir).Parent.Parent.Parent.FullName
+$DockerData = Join-Path $ProjectRoot "docker\data"
 
 Write-Host "开始构建 AstraTTS 镜像..." -ForegroundColor Green
 
-# 切换到项目根目录下的 AstraTTS 目录
-Set-Location "$ProjectRoot\AstraTTS"
+# 切换到 docker/data/AstraTTS 目录（构建上下文）
+Set-Location "$DockerData\AstraTTS"
 
 # 构建镜像
 docker build -t astratts-server:latest .

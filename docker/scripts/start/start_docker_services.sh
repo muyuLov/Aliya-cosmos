@@ -17,6 +17,7 @@ NC='\033[0m'
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 DOCKER_DIR="$PROJECT_ROOT/docker"
+DOCKER_DATA="$DOCKER_DIR/data"
 
 # ── 工具函数 ──
 write_step() {
@@ -91,38 +92,14 @@ if ! start_service_container "aliya-cosmos-neo4j"; then
     fi
 fi
 
-# 3. Milvus 向量数据库（etcd / MinIO / Milvus）
-write_step "检测 Milvus 向量数据库..."
-MILVUS_SERVICES=("aliya-cosmos-etcd:quay.io/coreos/etcd:v3.7.1" "aliya-cosmos-minio:minio/minio:RELEASE.2025-09-07T16-13-09Z" "aliya-cosmos-milvus:milvusdb/milvus:v2.6.22")
-for svc in "${MILVUS_SERVICES[@]}"; do
-    IFS=':' read -r name image <<< "$svc"
-    # 处理镜像名中可能包含冒号的情况（如 quay.io/coreos/etcd:v3.7.1）
-    # 重新拼接镜像名
-    image="${svc#*:}"
-    name="${svc%%:*}"
-
-    if ! start_service_container "$name"; then
-        if test_image_exists "$image"; then
-            write_ok "$image 已存在"
-        else
-            echo -e "      正在拉取 $image..."
-            if ! docker pull "$image"; then
-                write_fail "$image 镜像拉取失败"
-                exit 1
-            fi
-            write_ok "$image 拉取完成"
-        fi
-    fi
-done
-
-# 4. AstraTTS
+# 3. AstraTTS
 write_step "检测 AstraTTS..."
 if ! start_service_container "aliya-cosmos-astratts"; then
     if test_image_exists "astratts-server:latest"; then
         write_ok "astratts-server:latest 已存在"
     else
         echo -e "      准备构建 astratts-server:latest..."
-        AstraTTSDir="$PROJECT_ROOT/AstraTTS"
+        AstraTTSDir="$DOCKER_DATA/AstraTTS"
         if [[ ! -d "$AstraTTSDir" ]]; then
             echo -e "      正在克隆 AstraTTS 仓库..."
             if ! git clone https://github.com/Blackwood416/AstraTTS.git "$AstraTTSDir"; then
@@ -143,7 +120,7 @@ if ! start_service_container "aliya-cosmos-astratts"; then
     fi
 fi
 
-# 5. Compose 启动
+# 4. Compose 启动
 write_step "创建并启动容器..."
 if ! docker compose -f "$DOCKER_DIR/compose/compose.yml" up -d; then
     write_fail "Compose 启动失败"
@@ -157,7 +134,5 @@ echo -e "${GREEN}  ║   所有服务已就绪                     ║${NC}"
 echo -e "${CYAN}  ║                                      ║${NC}"
 echo -e "${WHITE}  ║    Neo4j   : http://localhost:7474   ║${NC}"
 echo -e "${WHITE}  ║    AstraTTS: http://localhost:5000   ║${NC}"
-echo -e "${WHITE}  ║    Milvus  : http://localhost:19530  ║${NC}"
-echo -e "${WHITE}  ║    MinIO   : http://localhost:9001   ║${NC}"
 echo -e "${CYAN}  ╚══════════════════════════════════════╝${NC}"
 echo ""
