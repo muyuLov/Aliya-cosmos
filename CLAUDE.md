@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目简介
 
-《彼方的她-Aliya》—— 基于 LLM 的 AI 伴侣桌面应用。Python 后端提供 WebSocket 服务（LLM 对话、TTS 语音、记忆系统），Electron + Vue 3 前端负责 Live2D 角色呈现与状态面板。角色设定取材自瞳电游的文字冒险游戏《彼方的她-Aliya》。
+《彼方的她-Aliya》—— 基于 LLM 的 AI 伴侣桌面应用。Python 后端提供 WebSocket 服务（LLM 对话、记忆系统），Electron + Vue 3 前端负责 Live2D 角色呈现与状态面板。角色设定取材自瞳电游的文字冒险游戏《彼方的她-Aliya》。
 
 ## 常用命令
 
@@ -30,9 +30,8 @@ uv run black . && uv run isort .
 uv run flake8
 uv run mypy agent core
 
-# Docker 编排（app + neo4j；AstraTTS 需 --profile tts）
+# Docker 编排（app + neo4j + astratts）
 docker compose up
-docker compose --profile tts up -d
 ```
 
 运行后端前需在 `.env` 配置 `DEEPSEEK_API_KEY`（参考 `.env.example`）。Neo4j 图记忆为可选——对应服务未启动时相关能力会自动降级禁用，不阻塞主流程。
@@ -49,7 +48,6 @@ docker compose --profile tts up -d
 | `WS_PORT` | 否 | WebSocket 监听端口（默认 `8765`） |
 | `NEO4J_HOST` | 否 | Neo4j 服务地址（默认 `127.0.0.1`，compose 网络内用 `neo4j`） |
 | `NEO4J_PORT` | 否 | Neo4j Bolt 端口（默认 `7687`） |
-| `ASTRA_PORT` | 否 | AstraTTS 服务端口（默认 `5000`，使用 edge TTS 时不需要） |
 
 ## 架构总览
 
@@ -59,7 +57,6 @@ docker compose --profile tts up -d
 - **config/** — YAML 配置管理器：`get_config_instance()` 单例，点路径读写（`cfg.get("cosmos.service.llm")`），支持 `${ENV_VAR}` / `${ENV_VAR:default}` 占位符解析与热重载。
 - **llm/** — `ConversationService` 管理单会话历史（`history_max_chars=90000` 超限清理最旧消息），异步优先（`asend`/`astream_send`）。提供商通过 `ProviderRegistry` 注册表管理，默认注册 `OpenAICompatibleProvider`（`providers/openai_compatible.py`），通过 `LLMProviders.json` 区分 deepseek/ollama/lmstudio 等。支持动态注册新的提供商类型。`create_from_config()` 是从 YAML 创建服务的统一入口。
 - **memory/** — **两套并行记忆系统**（见下）。
-- **tts/** — `TTSService` 分段预取合成 + `AudioPlayer` 弹性播放。提供商工厂注册 `edge`（联网即用）/`astra`（自建服务，`docker compose --profile tts`）。播放失败自动降级到 WebSocket 音频流 / 文件 sink。
 - **vector/** — 余弦相似度内存向量库，用于情绪向量分类器。
 - **logger/**、**exception/** — 统一日志（YAML 配置：console/file/轮转）与异常体系。
 
@@ -70,18 +67,18 @@ docker compose --profile tts up -d
 
 ### 配置体系
 
-- 主配置 `data/config/main.yml` 为唯一配置源头（日志、WS 端口、情绪、认知、GRAG、向量、LLM、TTS、prompt）。所有服务通过 `core.config.get_config_instance()` 读取，各自用 `*_from_config()` 工厂构建。
-- 提供商配置分离：`data/config/LLMProviders.json`、`data/config/TTSProviders.json`；密钥走环境变量（`.env` → `${DEEPSEEK_API_KEY}`）。
+- 主配置 `data/config/main.yml` 为唯一配置源头（日志、WS 端口、情绪、认知、GRAG、向量、LLM、prompt）。所有服务通过 `core.config.get_config_instance()` 读取，各自用 `*_from_config()` 工厂构建。
+- 提供商配置分离：`data/config/LLMProviders.json`；密钥走环境变量（`.env` → `${DEEPSEEK_API_KEY}`）。
 - 工具权限：`data/config/Permissions.yml`。
 
 ## 关键约定
 
 - **代码注释与文档均为中文**，标识符/代码语法保留英文。
-- 全部异步优先：LLM/TTS/记忆均为 `async`，核心路径不得阻塞事件循环；同步包装仅用于脚本/REPL。
-- 单测按模块分目录（`tests/agent`、`tests/memory`、`tests/llm` 等）。pytest `asyncio_mode = "auto"`（无需 `@pytest.mark.asyncio`），默认开启 coverage，可用 `--no-cov` 关闭。markers：`slow`/`integration`/`unit`/`tts`/`memory`/`llm`。
+- 全部异步优先：LLM/记忆均为 `async`，核心路径不得阻塞事件循环；同步包装仅用于脚本/REPL。
+- 单测按模块分目录（`tests/agent`、`tests/memory`、`tests/llm` 等）。pytest `asyncio_mode = "auto"`（无需 `@pytest.mark.asyncio`），默认开启 coverage，可用 `--no-cov` 关闭。markers：`slow`/`integration`/`unit`/`memory`/`llm`。
 - 类型检查：`pyright`（`pyrightconfig.json`，standard 模式）与 `mypy` 双轨；`core/config`、`core/logger`、`agent/tools` 已启用 mypy 严格模式。
 - 格式：Black（100 列）+ isort（black profile，first-party 为 agent/core/GUI/aliya_cosmos）。
-- 降级原则贯穿全项目：可选依赖（Neo4j、AstraTTS、音频硬件）初始化失败一律告警降级，不使 Agent 主流程崩溃。
+- 降级原则贯穿全项目：可选依赖（Neo4j）初始化失败一律告警降级，不使 Agent 主流程崩溃。
 
 ## 常见问题
 

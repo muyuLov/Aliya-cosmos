@@ -129,23 +129,3 @@ cosmos:
       history_max_chars: 90000         # 消息历史字符数阈值，超限时移除最旧消息
       cot_enabled: true                # 思维链（CoT）模式: true=启用, false=禁用
       reasoning_effort: high           # 思考强度: high / max / low
-
-    # ── TTS 语音合成 ──────────────────────────────────
-    tts:
-      providers:
-        name: astra                    # 当前使用的提供商名
-        config_path: data/config/TTSProviders.json   # 提供商配置文件（支持 ${ENV_VAR} 语法）
-      voice:
-        languages: [zh, en]            # 支持的语言列表
-        speed: 1.0                     # 语速倍率（0.5-2.0）
-      service:
-        prefetch_queue_size: 16        # 预取队列大小（分段数）
-        prefetch_window: 3             # 滑动窗口预取段数，减少资源浪费
-        max_concurrent_creates: 10     # 最大并发创建会话数
-      player:
-        sample_rate: 32000             # 采样率（Hz）
-        channels: 1                    # 声道数（1=单声道）
-        pcm_format: float32            # PCM 格式
-        frames_per_buffer: 1024        # 缓冲区帧数
-        play_queue_size: 32            # 播放队列大小（段数）
-        queue_timeout: 300.0           # 播放队列超时（秒）

@@ -1,7 +1,7 @@
 """事件流模型：进程内事件（AgentEvent）与线上协议事件（ProtocolEvent）双层设计
 
 参考 Cyrene-Agent 的 "中性 TwoPhaseEvent + AG-UI BaseEvent 包装" 双层模型：
-- 进程内事件（AgentEvent）：丰富，供本地副作用（记忆/情绪/TTS/日志）订阅
+- 进程内事件（AgentEvent）：丰富，供本地副作用（记忆/情绪/日志）订阅
 - 线上协议事件（ProtocolEvent）：精简，映射后转发给 WS 网关 / GUI / 渠道
 """
 
@@ -98,7 +98,6 @@ NOTICE = "notice"
 TOKEN_USAGE = "token_usage"
 STATUS_CHANGED = "status_changed"
 EMOTION_CHANGED = "emotion_changed"
-TTS_FEATURES = "tts_features"
 
 
 def to_protocol(event: AgentEvent, **_ctx) -> ProtocolEvent | None:

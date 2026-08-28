@@ -14,7 +14,7 @@ authors = [
 ]
 keywords = [
     "ai", "chatbot", "llm", "conversation", "memory", 
-    "tts", "neo4j", "voice-synthesis", "knowledge-graph"
+    "neo4j", "knowledge-graph"
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -26,7 +26,6 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: Communications :: Chat",
-    "Topic :: Multimedia :: Sound/Audio :: Speech",
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Operating System :: OS Independent",
 ]
@@ -43,13 +42,6 @@ dependencies = [
     "openai>=2.36.0,<3.0.0",
     # ========== 图数据库和记忆系统 ==========
     "py2neo>=2021.2.4,<2022.0.0",
-    # ========== TTS 语音合成系统 ==========
-    "numpy>=2.4.0,<3.0.0",
-    "sounddevice>=0.5.5,<1.0.0",
-    "edge-tts>=7.2.8,<8.0.0",
-    # FFmpeg工具链：优先使用portable-ffmpeg（提供完整工具集）
-    "portable-ffmpeg>=0.2.0,<1.0.0",
-    "imageio-ffmpeg>=0.6.0,<1.0.0",  # 备用FFmpeg支持
     # ========== Web 服务框架 ==========
     "fastapi>=0.136.0,<1.0.0",
     "uvicorn[standard]>=0.46.0,<1.0.0",
