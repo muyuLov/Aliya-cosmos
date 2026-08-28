@@ -49,6 +49,8 @@ class ConfigManager:
         self._callbacks: dict[str, list[Callable[[str, Any], None]]] = {}
         self._global_callbacks: list[Callable[[str, Any], None]] = []
         self._resolve_env = resolve_env
+        # 环境变量解析结果缓存：reload() 时整体失效
+        self._env_cache: dict[str, Any] = {}
         if config_path:
             self.load_config(config_path)
 
@@ -111,7 +113,11 @@ class ConfigManager:
                 return default
             node = node[key]
         if self._resolve_env:
-            return _resolve_env_vars(node)
+            if path in self._env_cache:
+                return self._env_cache[path]
+            resolved = _resolve_env_vars(node)
+            self._env_cache[path] = resolved
+            return resolved
         return node
 
     def get_raw(self, path: str, default: Any = None) -> Any:
@@ -139,6 +145,7 @@ class ConfigManager:
         if not self._config_path:
             raise RuntimeError("尚未加载任何配置文件")
         self.load_config(self._config_path)
+        self._env_cache.clear()  # 环境变量解析缓存随 reload 失效
         self._notify_callbacks("__reload__", None)
 
     def get_all_fields(self) -> dict[str, Any]:
