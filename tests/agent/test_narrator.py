@@ -17,7 +17,7 @@ class FakeLLMService:
         self._delay = delay
         self.call_count = 0
 
-    async def create_completion(self, messages, **kwargs):
+    async def create_completion(self, messages, **kwargs):  # pyright: ignore[reportUnusedParameter]
         self.call_count += 1
         if self._delay > 0:
             await asyncio.sleep(self._delay)
@@ -64,7 +64,7 @@ async def test_narrator_retries_on_empty_script():
 
     class ScriptThenEmpty:
         """第一次返回有 script，第二次返回空"""
-        async def create_completion(self, messages, **kwargs):
+        async def create_completion(self, messages, **kwargs):  # pyright: ignore[reportUnusedParameter]
             nonlocal call_count
             call_count += 1
             if call_count == 1:
@@ -144,7 +144,7 @@ async def test_narrator_prompt_has_json_format():
     captured_messages = []
 
     class CapturingLLM:
-        async def create_completion(self, messages, **kwargs):
+        async def create_completion(self, messages, **kwargs):  # pyright: ignore[reportUnusedParameter]
             captured_messages.extend(messages)
             return type("FakeResponse", (), {
                 "choices": [type("Choice", (), {

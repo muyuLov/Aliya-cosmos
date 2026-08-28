@@ -4,7 +4,6 @@
 """
 
 import json
-import pytest
 
 
 def test_parse_script_from_json():

@@ -3,8 +3,6 @@
 验证 shareParticipantDetails 开关与参与者隔离行为。
 """
 
-import pytest
-
 
 def test_participant_payload_baseline_fields():
     """Participant 应包含所有基线 payload 字段"""
@@ -31,10 +29,7 @@ def test_participant_payload_baseline_fields():
 
 def test_share_participant_details_default_false():
     """shareParticipantDetails 默认 False，别参与者内容应被占位"""
-    from agent.story.participant import Participant
     from agent.story.canonical import CanonicalStory
-    from agent.story.entry import ScriptEntry
-    from agent.story.script_store import ScriptStore
 
     # 验证 CanonicalStory 上可存 share_participant_details
     story = CanonicalStory(story_id="s1", setting="日常")

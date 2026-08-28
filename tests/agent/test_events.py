@@ -3,10 +3,7 @@
 验证新事件类型（TurnMetadata / AlterTriggered 等）与 to_protocol 映射。
 """
 
-import pytest
 from agent.events import (
-    AgentEvent,
-    ProtocolEvent,
     RunStarted,
     RunFinished,
     TextMessageStart,
@@ -18,7 +15,6 @@ from agent.events import (
     SceneClosed,
     AgencyDecision,
     to_protocol,
-    EventSink,
     RUN_STARTED,
     RUN_FINISHED,
     TEXT_MESSAGE_START,
@@ -158,12 +154,4 @@ def test_to_protocol_agency_decision():
     assert proto.payload["allowed"] is False
 
 
-def test_old_step_types_deprecated():
-    """旧 StepStarted/StepFinished/ToolCall* 事件类型仍存在但标记为向后兼容（loop 重写后移除）"""
-    import agent.events as mod
 
-    assert hasattr(mod, "StepStarted")
-    assert hasattr(mod, "StepFinished")
-    assert hasattr(mod, "ToolCallStart")
-    assert hasattr(mod, "ToolCallResult")
-    assert hasattr(mod, "ToolCallEnd")

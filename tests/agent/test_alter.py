@@ -3,8 +3,6 @@
 验证 AlterState 状态机 + 动态阈值 + 权重生命周期 + 侧端分析不阻塞。
 """
 
-import pytest
-from datetime import datetime, timezone
 
 
 def test_alter_state_create():

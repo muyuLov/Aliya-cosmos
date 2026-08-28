@@ -3,7 +3,6 @@
 验证三来源调度（自动推进/到期 intent/proactive-check）。
 """
 
-import asyncio
 import pytest
 
 

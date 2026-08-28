@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 from core.logger.formatter import JSONFormatter, StructuredFormatter
 from core.logger.manager import LogManager
@@ -20,33 +19,29 @@ def _ensure_manager() -> LogManager:
     return _manager
 
 
-def setup(config: dict[str, Any] | str | None = None) -> LogManager:
+def setup(config: str | None = None) -> LogManager:
     """
     初始化全局日志管理器。
 
     应在应用启动时调用一次，后续通过 ``get_logger`` 获取 Logger。
 
-    支持三种调用方式：
+    支持两种调用方式：
     1. ``setup()``：自动从默认配置路径 ``data/config/main.yml`` 加载 ``cosmos.logger`` 配置
     2. ``setup("path/to/config.yml")``：从指定配置路径加载 ``cosmos.logger`` 配置
-    3. ``setup({"level": "debug", ...})``：直接传入配置字典（向后兼容）
 
     Args:
-        config: 日志配置字典、配置文件路径，或 None（使用默认路径）。
+        config: 配置文件路径，或 None（使用默认路径）。
 
     Returns:
         全局 LogManager 实例。
     """
     global _manager
 
-    if isinstance(config, str) or config is None:
-        from core.config import get_config_instance
+    from core.config import get_config_instance
 
-        config_dict: dict[str, Any] | None = get_config_instance(
-            _DEFAULT_CONFIG_PATH if config is None else config
-        ).get("cosmos.logger")
-    else:
-        config_dict = config
+    config_dict: dict[str, Any] | None = get_config_instance(
+        _DEFAULT_CONFIG_PATH if config is None else config
+    ).get("cosmos.logger")
 
     if _manager is not None:
         _manager.shutdown()

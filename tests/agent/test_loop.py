@@ -3,7 +3,6 @@
 验证四阶段状态机：补写剧本 → 处理事件 → 投递 → 副作用。
 """
 
-import json
 import pytest
 
 
@@ -28,14 +27,12 @@ class FakeNarratorResponse:
 async def test_loop_produces_text_message():
     """主循环应产出 TextMessageStart/Delta/End 事件"""
     from agent.loop import AgentLoop
-    from agent.context import ContextBuilder
-    from agent.tools import PermissionChecker, ToolRegistry
-    from agent.events import TextMessageStart, TextMessageEnd
+    from agent.context import NarrativeContextBuilder
 
     narrator_output = FakeNarratorResponse()
     loop = AgentLoop(
         narrator=lambda *a, **kw: narrator_output,
-        context=ContextBuilder(),
+        context=NarrativeContextBuilder(),
     )
 
     events = []
@@ -51,13 +48,13 @@ async def test_loop_produces_text_message():
 async def test_loop_emits_run_started_finished():
     """主循环应产出 RunStarted 和 RunFinished"""
     from agent.loop import AgentLoop
-    from agent.context import ContextBuilder
+    from agent.context import NarrativeContextBuilder
     from agent.events import RunStarted, RunFinished
 
     narrator_output = FakeNarratorResponse()
     loop = AgentLoop(
         narrator=lambda *a, **kw: narrator_output,
-        context=ContextBuilder(),
+        context=NarrativeContextBuilder(),
     )
 
     events = []
@@ -72,13 +69,13 @@ async def test_loop_emits_run_started_finished():
 async def test_loop_with_no_reply_mode():
     """reply.mode=none 时不应产出 TextMessage"""
     from agent.loop import AgentLoop
-    from agent.context import ContextBuilder
+    from agent.context import NarrativeContextBuilder
     from agent.events import TextMessageStart
 
     narrator_output = FakeNarratorResponse(reply_mode="none")
     loop = AgentLoop(
         narrator=lambda *a, **kw: narrator_output,
-        context=ContextBuilder(),
+        context=NarrativeContextBuilder(),
     )
 
     events = []
@@ -93,12 +90,12 @@ async def test_loop_with_no_reply_mode():
 async def test_loop_interrupt_stops():
     """中断应停止循环"""
     from agent.loop import AgentLoop
-    from agent.context import ContextBuilder
+    from agent.context import NarrativeContextBuilder
 
     narrator_output = FakeNarratorResponse()
     loop = AgentLoop(
         narrator=lambda *a, **kw: narrator_output,
-        context=ContextBuilder(),
+        context=NarrativeContextBuilder(),
     )
 
     loop.interrupt()

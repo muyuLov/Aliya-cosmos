@@ -48,28 +48,11 @@ class AgentLoop:
         context: NarrativeContextBuilder,
         story_id: str = "default",
         participant_id: str = "user",
-        service: Any = None,
-        registry: Any = None,
-        checker: Any = None,
-        memory: Any = None,
-        emotion_engine: Any = None,
         alter_state: Any = None,
         agency_window: Any = None,
-        max_tool_rounds: int = 20,
-        tool_timeout: float = 30.0,
-        confirm_timeout: float = 30.0,
         narrator_response: Any = None,
     ) -> None:
-        # 向后兼容旧接口
-        self.service = service
-        self.registry = registry
-        self.checker = checker
         self.context = context
-        self.memory = memory
-        self.emotion_engine = emotion_engine
-        self.max_tool_rounds = max_tool_rounds
-        self.tool_timeout = tool_timeout
-        self.confirm_timeout = confirm_timeout
 
         # 新接口
         self._narrator = narrator

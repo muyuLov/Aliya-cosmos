@@ -1,7 +1,7 @@
 """事件流模型（重构版）：进程内事件（AgentEvent）与线上协议事件（ProtocolEvent）
 
-新事件类型承载主叙事副产物（TurnMetadata / AlterTriggered / ProactiveContact 等），
-移除旧两阶段残留事件（StepStarted / StepFinished / ToolCall*）。
+新事件类型承载主叙事副产物（TurnMetadata / AlterTriggered / ProactiveContact 等）。
+旧两阶段残留事件（StepStarted / StepFinished / ToolCall*）已移除。
 """
 
 from __future__ import annotations
@@ -105,36 +105,6 @@ CONFIRM_REQUEST = "confirm_request"
 ERROR = "error"
 NOTICE = "notice"
 TOKEN_USAGE = "token_usage"
-
-
-# ── 旧事件类型向后兼容别名（loop.py 重写后移除）─────────────────────
-
-@dataclass(frozen=True)
-class StepStarted(AgentEvent):
-    phase: str = ""
-
-
-@dataclass(frozen=True)
-class StepFinished(AgentEvent):
-    phase: str = ""
-
-
-@dataclass(frozen=True)
-class ToolCallStart(AgentEvent):
-    call_id: str = ""
-    tool_name: str = ""
-    arguments: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
-class ToolCallResult(AgentEvent):
-    call_id: str = ""
-    output: str = ""
-
-
-@dataclass(frozen=True)
-class ToolCallEnd(AgentEvent):
-    call_id: str = ""
 
 
 def to_protocol(event: AgentEvent, **_ctx) -> ProtocolEvent | None:

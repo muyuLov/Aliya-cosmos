@@ -208,7 +208,7 @@ class LayeredLogFormatter(logging.Formatter):
         message = record.getMessage()
 
         # ── 密度过滤 ──
-        min_level = self._DENSITY_LEVEL_MAP.get(self._density.value, logging.INFO)
+        min_level = self._DENSITY_LEVEL_MAP.get(self._density.name.lower(), logging.INFO)
         # diagnostic 模式不过滤任何级别
         if self._density != DensityLevel.DIAGNOSTIC and record.levelno < min_level:
             return ""

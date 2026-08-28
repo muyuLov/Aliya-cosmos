@@ -33,7 +33,7 @@ def test_script_entry_create():
 
 def test_script_entry_kinds():
     """ScriptEntry.kind 应支持四种类型"""
-    from agent.story.entry import ScriptEntry, ENTRY_KINDS
+    from agent.story.entry import ENTRY_KINDS
 
     assert "user_message" in ENTRY_KINDS
     assert "character_message" in ENTRY_KINDS

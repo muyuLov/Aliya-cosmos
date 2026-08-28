@@ -3,7 +3,6 @@
 验证 Alter/Agency/休息窗口注入主叙事上下文与受限行动门控。
 """
 
-import json
 import pytest
 
 
@@ -18,7 +17,7 @@ async def test_loop_injects_alter_into_context():
         def __init__(self):
             self.captured_context = None
 
-        async def invoke(self, system_prompt, context_json, **kw):
+        async def invoke(self, _system_prompt: str, context_json: dict, **_kw):
             self.captured_context = context_json
             from agent.metadata_parser import NarrativeOutput
             return NarrativeOutput(
@@ -57,7 +56,7 @@ async def test_loop_injects_agency_into_context():
         def __init__(self):
             self.captured_context = None
 
-        async def invoke(self, system_prompt, context_json, **kw):
+        async def invoke(self, _system_prompt: str, context_json: dict, **_kw):
             self.captured_context = context_json
             from agent.metadata_parser import NarrativeOutput
             return NarrativeOutput(
