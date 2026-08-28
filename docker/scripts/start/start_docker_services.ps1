@@ -108,6 +108,25 @@ if (-not $astraDone) {
             Write-OK "AstraTTS 目录已存在"
         }
         Push-Location $AstraTTSDir
+        # 准备核心资源 resources-minimal（上游已弃用 Git LFS，需从 GitHub Releases 下载）
+        if (-not (Test-Path "resources-minimal")) {
+            Write-Host "      正在从 GitHub Releases 下载资源包..." -ForegroundColor Yellow
+            Invoke-WebRequest -Uri "https://github.com/Blackwood416/AstraTTS/releases/latest/download/resources-minimal.zip" -OutFile "resources-minimal.zip"
+            if ($LASTEXITCODE -ne 0) {
+                Write-Fail "AstraTTS 资源包下载失败"
+                exit 1
+            }
+            Expand-Archive -Path "resources-minimal.zip" -DestinationPath . -Force
+            Remove-Item "resources-minimal.zip" -Force
+        }
+        # 运行时 compose 挂载 resources:/app/resources，需保证宿主 resources 目录存在
+        if (-not (Test-Path "resources")) {
+            Copy-Item -Path "resources-minimal" -Destination "resources" -Recurse -Force
+        }
+        # compose 以 bind mount 挂载 config.yaml，宿主该文件必须存在
+        if (-not (Test-Path "config.yaml")) {
+            Copy-Item -Path "config.template.yaml" -Destination "config.yaml" -Force
+        }
         docker build -t astratts-server:latest .
         $buildCode = $LASTEXITCODE
         Pop-Location

@@ -1,12 +1,10 @@
 """向量存储与检索模块
 
-提供基于余弦相似度的向量库（内存计算 + 可选 Milvus 持久化）：
+提供基于余弦相似度的内存向量库：
 - 内存存储（进程内数据，检索逻辑）
 - 增删查、批量添加、top-k 检索、阈值过滤
 - 向量维度一致性校验
 - 线程安全（读改写均加锁）
-- Milvus 持久化后端（storage=milvus 时启用）：跨会话保存与恢复，
-  连接失败自动回退纯内存模式（不崩溃）
 """
 
 from __future__ import annotations
@@ -16,7 +14,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence, cast
+from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
 
@@ -72,216 +70,14 @@ class SearchResult:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
-class MilvusBackend:
-    """Milvus 向量数据库持久化后端
-
-    作为内存存储的旁路持久化层：检索仍走内存（逻辑不变），
-    数据通过 Milvus 跨会话保存与恢复。
-
-    - 连接失败 / 服务不可用 → ``enabled=False``，调用方回退纯内存模式。
-    - 集合不存在时按首个向量维度自动创建（cosine 相似度）。
-    - 条目标签结构：``id``(VARCHAR 主键) / ``text`` / ``vector`` / ``metadata``(JSON)。
-    """
-
-    def __init__(self, config: VectorConfig) -> None:
-        self.enabled = False
-        self._client: Any | None = None
-        self._collection = config.milvus_collection
-        # 集合就绪标志：创建成功后缓存，避免每次写入都做 has_collection 网络往返
-        self._collection_ready = False
-        # 后端线程安全锁（写入经 asyncio.to_thread 在线程池并发执行）
-        self._lock = threading.RLock()
-        try:
-            from pymilvus import MilvusClient  # 延迟导入，pymilvus 不可用时优雅降级
-
-            client = MilvusClient(uri=config.milvus_uri, timeout=5)
-            # 列出已有集合：既验证连接可用，又避免重复查询——若目标集合已存在
-            # 则直接置就绪标志，首次写入时跳过 _ensure_collection 的 has_collection 往返。
-            # 说明：pymilvus 2.6.x 的 list_collections 类型存根误标为协程，但运行时返回
-            # 同步 list（不可 await），此处以实际运行行为为准，用 cast 纠正存根类型。
-            existing: list[str] = cast(
-                "list[str]", client.list_collections()
-            )
-            self._client = client
-            if self._collection in existing:
-                self._collection_ready = True
-            self.enabled = True
-            logger.info(
-                "Milvus 已连接: uri=%s, collection=%s (集合已存在=%s)",
-                config.milvus_uri,
-                self._collection,
-                self._collection in existing,
-            )
-        except Exception as e:
-            logger.warning("Milvus 不可用，回退内存存储（无持久化）: %s", e)
-
-    def _ensure_index(self, dim: int) -> bool:
-        """确保集合已建向量索引，返回是否可用。
-
-        Milvus 的 ``load_collection`` 要求集合必须有索引，否则报
-        ``code=700 index not found``。集合可能已存在但索引缺失（如历史
-        数据或创建中断），此处检测并在缺失时补建 COSINE 索引。
-        """
-        if not self.enabled or self._client is None:
-            return False
-        try:
-            from pymilvus import MilvusException
-
-            if not self._client.has_collection(self._collection):
-                return False
-            # describe_index 在无索引时抛 MilvusException(code=700)
-            try:
-                self._client.describe_index(self._collection)
-                return True
-            except MilvusException as e:
-                if getattr(e, "code", None) != 700:
-                    raise
-            # 无索引 → 补建（维度来自集合 schema，不依赖外部参数）
-            self._client.create_index(
-                self._collection,
-                field_name="vector",
-                index_type="AUTO_INDEX",
-                metric_type="COSINE",
-            )
-            logger.info("Milvus 索引已补建: %s (dim=%d)", self._collection, dim)
-            return True
-        except Exception as e:
-            logger.warning("Milvus 索引检查/补建失败: %s", e)
-            return False
-
-    def _ensure_collection(self, dim: int) -> bool:
-        """确保集合存在且已建索引，返回是否可用。
-
-        集合创建成功后缓存 ``_collection_ready`` 标志，后续写入跳过
-        ``has_collection`` 检查（减少网络往返）；并发写由锁串行化。
-        新建集合后立即补建索引，避免后续 ``load_collection`` 因无索引失败。
-        """
-        if not self.enabled or self._client is None:
-            return False
-        if self._collection_ready:
-            # 即使就绪也需保证索引存在（历史集合可能无索引）
-            self._ensure_index(dim)
-            return True
-        with self._lock:
-            try:
-                if not self._client.has_collection(self._collection):
-                    from pymilvus import CollectionSchema, DataType, FieldSchema
-
-                    schema = CollectionSchema(
-                        [
-                            FieldSchema(
-                                name="id",
-                                dtype=DataType.VARCHAR,
-                                is_primary=True,
-                                max_length=64,
-                            ),
-                            FieldSchema(
-                                name="text", dtype=DataType.VARCHAR, max_length=65535
-                            ),
-                            FieldSchema(
-                                name="vector", dtype=DataType.FLOAT_VECTOR, dim=dim
-                            ),
-                            FieldSchema(name="metadata", dtype=DataType.JSON),
-                        ]
-                    )
-                    self._client.create_collection(self._collection, schema=schema)
-                    logger.info(
-                        "Milvus 集合已创建: %s (dim=%d)", self._collection, dim
-                    )
-                self._ensure_index(dim)
-                self._collection_ready = True
-                return True
-            except Exception as e:
-                logger.warning("Milvus 集合创建失败: %s", e)
-                return False
-
-    def upsert_many(self, items: Sequence[VectorItem]) -> None:
-        """批量写入 / 更新条目到 Milvus（同步阻塞，调用方用线程执行）。"""
-        if not self.enabled or not items or self._client is None:
-            return
-        if not self._ensure_collection(len(items[0].vector)):
-            return
-        rows = [
-            {
-                "id": it.id,
-                "text": it.text,
-                "vector": it.vector,
-                "metadata": {**it.metadata, "created_at": it.created_at},
-            }
-            for it in items
-        ]
-        try:
-            with self._lock:
-                self._client.upsert(self._collection, rows)
-        except Exception as e:
-            logger.warning("Milvus upsert 失败: %s", e)
-
-    def delete(self, item_id: str) -> None:
-        if not self.enabled or self._client is None:
-            return
-        try:
-            with self._lock:
-                self._client.delete(self._collection, filter=f'id == "{item_id}"')
-        except Exception as e:
-            logger.warning("Milvus delete 失败: %s", e)
-
-    def clear(self) -> None:
-        if not self.enabled or self._client is None:
-            return
-        try:
-            with self._lock:
-                self._client.drop_collection(self._collection)
-            self._collection_ready = False
-        except Exception as e:
-            logger.warning("Milvus clear 失败: %s", e)
-
-    def load_all(self) -> List[VectorItem]:
-        """从 Milvus 读取全部条目（启动跨会话恢复用）。"""
-        if not self.enabled or self._client is None:
-            return []
-        try:
-            with self._lock:
-                if not self._client.has_collection(self._collection):
-                    return []
-                # 集合存在但可能无索引，load 前补建（见 _ensure_index 说明）
-                if not self._ensure_index(0):
-                    return []
-                self._client.load_collection(self._collection)
-                results = self._client.query(
-                    self._collection,
-                    filter='id != ""',
-                    output_fields=["id", "text", "vector", "metadata"],
-                    limit=16384,
-                )
-            items: List[VectorItem] = []
-            for r in results:
-                meta = dict(r.get("metadata") or {})
-                created_at = float(meta.pop("created_at", time.time()))
-                items.append(
-                    VectorItem(
-                        id=str(r["id"]),
-                        text=r["text"],
-                        vector=list(r["vector"]),
-                        metadata=meta,
-                        created_at=created_at,
-                    )
-                )
-            return items
-        except Exception as e:
-            logger.warning("Milvus 加载失败: %s", e)
-            return []
-
-
 class VectorStore:
-    """内存向量存储与检索引擎（可选 Milvus 持久化）
+    """内存向量存储与检索引擎
 
-    检索基于进程内存（余弦相似度，逻辑快且一致）；
-    当配置 ``storage=milvus`` 时，写入同步持久化到 Milvus 向量数据库，
-    构造时自动恢复历史条目，实现跨会话记忆；Milvus 不可用则回退纯内存模式。
+    检索基于进程内存（余弦相似度，逻辑快且一致）。
 
     Args:
         embedding: 向量化提供者。
-        config:    向量模块配置（相似度阈值、top_k、storage 等）。
+        config:    向量模块配置（相似度阈值、top_k 等）。
     """
 
     def __init__(self, embedding: EmbeddingProvider, config: VectorConfig) -> None:
@@ -290,13 +86,6 @@ class VectorStore:
         self._items: Dict[str, VectorItem] = {}
         self._dimension: Optional[int] = embedding.dimension or None
         self._lock = threading.RLock()
-        # Milvus 持久化后端（可选，storage=milvus 时启用；连接失败静默降级为纯内存）
-        self._milvus: MilvusBackend | None = None
-        if getattr(config, "storage", "memory") == "milvus":
-            backend = MilvusBackend(config)
-            if backend.enabled:
-                self._milvus = backend
-                self._restore_from_milvus()
 
     # ── 基础信息 ────────────────────────────────────────────
 
@@ -341,9 +130,7 @@ class VectorStore:
         if not text.strip():
             raise StoreError("文本为空白，拒绝添加")
         vector = (await self._embedding.embed([text]))[0]
-        iid = self._add_with_vector(text, vector, metadata=metadata, item_id=item_id)
-        await self._persist_async([self._items[iid]])
-        return iid
+        return self._add_with_vector(text, vector, metadata=metadata, item_id=item_id)
 
     async def add_many(
         self,
@@ -390,8 +177,6 @@ class VectorStore:
                     vector=vector,
                     metadata=dict(item.get("metadata") or {}),
                 )
-            persisted = [self._items[iid] for iid in ids]
-        await self._persist_async(persisted)
         return ids
 
     def _add_with_vector(
@@ -420,33 +205,6 @@ class VectorStore:
             self._dimension = len(vector)
         elif len(vector) != self._dimension:
             raise DimensionMismatchError(self._dimension, len(vector))
-
-    # ── Milvus 持久化 ─────────────────────────────────────────
-
-    async def _persist_async(self, items: Sequence[VectorItem]) -> None:
-        """将内存条目异步持久化到 Milvus（线程池执行，不阻塞事件循环）。"""
-        if self._milvus is None or not self._milvus.enabled:
-            return
-        try:
-            await asyncio.to_thread(self._milvus.upsert_many, list(items))
-        except Exception as e:
-            logger.warning("Milvus 持久化失败: %s", e)
-
-    def _restore_from_milvus(self) -> None:
-        """启动时从 Milvus 恢复全部条目（跨会话恢复）。"""
-        if self._milvus is None:
-            return
-        items = self._milvus.load_all()
-        if not items:
-            return
-        with self._lock:
-            for it in items:
-                if it.id in self._items:
-                    continue
-                self._items[it.id] = it
-                if self._dimension is None:
-                    self._dimension = len(it.vector)
-        logger.info("从 Milvus 恢复向量记忆 %d 条", len(items))
 
     # ── 读取与检索 ──────────────────────────────────────────
 
@@ -548,7 +306,7 @@ class VectorStore:
     # ── 删除与清理 ──────────────────────────────────────────
 
     def delete(self, item_id: str) -> bool:
-        """删除指定 ID 的条目（同步同步到 Milvus）。
+        """删除指定 ID 的条目。
 
         Returns:
             删除成功返回 True，条目不存在返回 False。
@@ -557,8 +315,6 @@ class VectorStore:
             if item_id not in self._items:
                 return False
             del self._items[item_id]
-        if self._milvus is not None and self._milvus.enabled:
-            self._milvus.delete(item_id)
         return True
 
     def find_ids(
@@ -590,7 +346,7 @@ class VectorStore:
             ]
 
     def delete_many(self, item_ids: Sequence[str]) -> int:
-        """批量删除条目（同步同步到 Milvus）。
+        """批量删除条目。
 
         Args:
             item_ids: 待删除条目 ID 列表。
@@ -604,18 +360,13 @@ class VectorStore:
                 if iid in self._items:
                     del self._items[iid]
                     deleted += 1
-        if deleted and self._milvus is not None and self._milvus.enabled:
-            for iid in item_ids:
-                self._milvus.delete(iid)
         return deleted
 
     def clear(self) -> None:
-        """清空全部条目并重置维度（同步清空 Milvus 集合）。"""
+        """清空全部条目并重置维度。"""
         with self._lock:
             self._items.clear()
             self._dimension = None
-        if self._milvus is not None and self._milvus.enabled:
-            self._milvus.clear()
 
     async def aclose(self) -> None:
         """关闭底层向量化提供者资源（如 API 客户端连接池）。"""

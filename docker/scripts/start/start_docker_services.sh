@@ -111,6 +111,27 @@ if ! start_service_container "aliya-cosmos-astratts"; then
             write_ok "AstraTTS 目录已存在"
         fi
         cd "$AstraTTSDir"
+        # 准备核心资源 resources-minimal（上游已弃用 Git LFS，需从 GitHub Releases 下载）
+        if [[ ! -d "resources-minimal" ]]; then
+            echo -e "      正在从 GitHub Releases 下载资源包..."
+            if ! curl -fL --retry 3 -o resources-minimal.zip "https://github.com/Blackwood416/AstraTTS/releases/latest/download/resources-minimal.zip"; then
+                write_fail "AstraTTS 资源包下载失败"
+                exit 1
+            fi
+            if ! unzip -q resources-minimal.zip; then
+                write_fail "AstraTTS 资源包解压失败"
+                exit 1
+            fi
+            rm -f resources-minimal.zip
+        fi
+        # 运行时 compose 挂载 resources:/app/resources，需保证宿主 resources 目录存在
+        if [[ ! -d "resources" ]]; then
+            cp -r resources-minimal resources
+        fi
+        # compose 以 bind mount 挂载 config.yaml，宿主该文件必须存在
+        if [[ ! -f "config.yaml" ]]; then
+            cp config.template.yaml config.yaml
+        fi
         if ! docker build -t astratts-server:latest .; then
             write_fail "AstraTTS 镜像构建失败"
             exit 1

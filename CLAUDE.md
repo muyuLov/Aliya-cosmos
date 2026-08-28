@@ -35,7 +35,7 @@ docker compose up
 docker compose --profile tts up -d
 ```
 
-运行后端前需在 `.env` 配置 `DEEPSEEK_API_KEY`（参考 `.env.example`）。Neo4j 图记忆、Milvus 向量库均为可选——对应服务未启动时相关能力会自动降级禁用，不阻塞主流程。
+运行后端前需在 `.env` 配置 `DEEPSEEK_API_KEY`（参考 `.env.example`）。Neo4j 图记忆为可选——对应服务未启动时相关能力会自动降级禁用，不阻塞主流程。
 
 ## 环境变量配置
 
@@ -60,7 +60,7 @@ docker compose --profile tts up -d
 - **llm/** — `ConversationService` 管理单会话历史（`history_max_chars=90000` 超限清理最旧消息），异步优先（`asend`/`astream_send`）。提供商通过 `ProviderRegistry` 注册表管理，默认注册 `OpenAICompatibleProvider`（`providers/openai_compatible.py`），通过 `LLMProviders.json` 区分 deepseek/ollama/lmstudio 等。支持动态注册新的提供商类型。`create_from_config()` 是从 YAML 创建服务的统一入口。
 - **memory/** — **两套并行记忆系统**（见下）。
 - **tts/** — `TTSService` 分段预取合成 + `AudioPlayer` 弹性播放。提供商工厂注册 `edge`（联网即用）/`astra`（自建服务，`docker compose --profile tts`）。播放失败自动降级到 WebSocket 音频流 / 文件 sink。
-- **vector/** — 余弦相似度向量库：内存计算 + 可选 Milvus 持久化，连接失败自动回退纯内存。用于情绪向量分类器。
+- **vector/** — 余弦相似度内存向量库，用于情绪向量分类器。
 - **logger/**、**exception/** — 统一日志（YAML 配置：console/file/轮转）与异常体系。
 
 ### 记忆系统：两套并行
@@ -81,7 +81,7 @@ docker compose --profile tts up -d
 - 单测按模块分目录（`tests/agent`、`tests/memory`、`tests/llm` 等）。pytest `asyncio_mode = "auto"`（无需 `@pytest.mark.asyncio`），默认开启 coverage，可用 `--no-cov` 关闭。markers：`slow`/`integration`/`unit`/`tts`/`memory`/`llm`。
 - 类型检查：`pyright`（`pyrightconfig.json`，standard 模式）与 `mypy` 双轨；`core/config`、`core/logger`、`agent/tools` 已启用 mypy 严格模式。
 - 格式：Black（100 列）+ isort（black profile，first-party 为 agent/core/GUI/aliya_cosmos）。
-- 降级原则贯穿全项目：可选依赖（Neo4j、Milvus、AstraTTS、音频硬件）初始化失败一律告警降级，不使 Agent 主流程崩溃。
+- 降级原则贯穿全项目：可选依赖（Neo4j、AstraTTS、音频硬件）初始化失败一律告警降级，不使 Agent 主流程崩溃。
 
 ## 常见问题
 
@@ -96,4 +96,4 @@ docker compose --profile tts up -d
 
 ### 记忆系统
 - GRAG 和层次化记忆系统并行工作，互相独立
-- Neo4j 和 Milvus 为可选依赖，未启动时自动降级禁用
+- Neo4j 为可选依赖，未启动时自动降级禁用

@@ -1,10 +1,9 @@
 """core.vector - 向量模块
 
-向量化与向量检索能力（内存计算 + 可选 Milvus 持久化）：
+向量化与向量检索能力（内存计算）：
 
 - ``embedding.py``: 向量化提供者（OpenAI 兼容 Embedding API）
-- ``store.py``:     向量存储与检索（内存存储，余弦相似度；
-                    配置 ``storage=milvus`` 时启用 Milvus 持久化，连接失败回退内存）
+- ``store.py``:     向量存储与检索（内存存储，余弦相似度）
 - ``config.py``:    配置加载（``cosmos.service.vector``）
 - ``exceptions.py``: 异常定义（错误码 ``VEC_xxx``）
 

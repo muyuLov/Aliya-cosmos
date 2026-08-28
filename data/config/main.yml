@@ -110,9 +110,6 @@ cosmos:
     # ── 向量模块 ──────────────────────────────────────────
     vector:
       enabled: true                    # 启用向量模块
-      storage: milvus                  # 存储后端: memory（进程内存，重启即清空）/ milvus（Milvus 向量库持久化）
-      milvus_uri: http://127.0.0.1:19530  # Milvus 服务地址（docker/compose.yml 部署，standalone 默认端口 19530）
-      milvus_collection: aliya_memory  # Milvus 集合名（向量记忆持久化容器，自动创建）
       similarity_threshold: 0.5        # 检索相似度阈值（0-1）
       top_k: 5                         # 默认检索返回条数
       embedding:
