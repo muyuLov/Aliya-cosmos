@@ -1,60 +1,64 @@
-"""两阶段 FC 对话循环（TOOL_PHASE + SOUL_PHASE）
+"""主叙事循环（AgentLoop）：四阶段状态机
 
-参考 Cyrene-Agent 的 two-phase-fc-loop.ts：
-- TOOL_PHASE：携带 tools schema 让 LLM 决策工具调用，逐轮执行直至无工具调用
-- SOUL_PHASE：注入人设 + 记忆 + 情绪 + 工具结果摘要，流式产出最终回复
+补写剧本 → 处理当前事件与行为决策 → 按模式投递 → 副作用。
+
+替代旧两阶段 FC 循环（_tool_phase + _soul_phase），由主叙事器一次调用产出
+script + 行为决策 + 结构化副产物。
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 import uuid
-from typing import TYPE_CHECKING, Any, AsyncGenerator
+from typing import Any, AsyncGenerator, Protocol
 
-from agent.context import ContextBuilder, inject_soul_context
+from agent.context import NarrativeContextBuilder
 from agent.events import (
-    CONFIRM_REQUEST,
-    ERROR,
-    NOTICE,
     AgentEvent,
+    AlterTriggered,
     ProtocolEvent,
     RunFinished,
     RunStarted,
-    StepFinished,
-    StepStarted,
     TextMessageDelta,
     TextMessageEnd,
     TextMessageStart,
-    ToolCallEnd,
-    ToolCallResult,
-    ToolCallStart,
+    TurnMetadata,
 )
-from agent.tools import Permission, PermissionChecker, ToolContext, ToolRegistry
+from agent.metadata_parser import NarrativeOutput
 
-if TYPE_CHECKING:
-    from agent.emotion.engine import EmotionEngine
 
-_CONFIRM_REJECT_TEXT = "[已拒绝] 用户未授权执行该工具"
-_NOT_REGISTERED_TEXT = "[工具未注册]"
+class NarratorProtocol(Protocol):
+    """主叙事器协议。"""
+
+    async def invoke(
+        self,
+        system_prompt: str,
+        context_json: dict[str, Any],
+        **kwargs: Any,
+    ) -> NarrativeOutput: ...
 
 
 class AgentLoop:
-    """单个会话的两阶段循环，逐条产出事件（AgentEvent 或 ProtocolEvent）。"""
+    """单个会话的主叙事循环：四阶段状态机。"""
 
     def __init__(
         self,
-        service,
-        registry: ToolRegistry,
-        checker: PermissionChecker,
-        context: ContextBuilder,
         *,
+        narrator: Any = None,
+        context: NarrativeContextBuilder,
+        story_id: str = "default",
+        participant_id: str = "user",
+        service: Any = None,
+        registry: Any = None,
+        checker: Any = None,
+        memory: Any = None,
+        emotion_engine: Any = None,
         max_tool_rounds: int = 20,
         tool_timeout: float = 30.0,
         confirm_timeout: float = 30.0,
-        memory: Any = None,
-        emotion_engine: EmotionEngine | None = None,
+        narrator_response: Any = None,
     ) -> None:
+        # 向后兼容旧接口
         self.service = service
         self.registry = registry
         self.checker = checker
@@ -64,14 +68,20 @@ class AgentLoop:
         self.max_tool_rounds = max_tool_rounds
         self.tool_timeout = tool_timeout
         self.confirm_timeout = confirm_timeout
-        self._abort = False
-        # 工具确认挂起表：call_id -> Future[bool]
-        self.pending_confirmations: dict[str, asyncio.Future[bool]] = {}
-        # 绑定 emotion_engine 到 service（如果提供了）
-        if self.emotion_engine is not None:
-            self.emotion_engine.bind_service(service)
 
-    # ── 中断控制 ────────────────────────────────────────────────────────────
+        # 新接口
+        self._narrator = narrator
+        self._story_id = story_id
+        self._participant_id = participant_id
+
+        # 中断控制
+        self._abort = False
+        self.pending_confirmations: dict[str, asyncio.Future[bool]] = {}
+
+        # 测试注入的预设回复
+        self._narrator_response_override = narrator_response
+
+    # ── 中断控制 ──────────────────────────────────────────
 
     def interrupt(self) -> None:
         self._abort = True
@@ -85,249 +95,77 @@ class AgentLoop:
         if fut is not None and not fut.done():
             fut.set_result(allowed)
 
-    def _new_confirmation(self, call_id: str) -> asyncio.Future[bool]:
-        fut = asyncio.get_running_loop().create_future()
-        self.pending_confirmations[call_id] = fut
-        return fut
+    # ── 主入口 ────────────────────────────────────────────
 
-    # ── 主入口 ───────────────────────────────────────────────────────────────
-
-    async def submit_user_message(self, text: str, images: list[str] | None = None) -> AsyncGenerator[AgentEvent | ProtocolEvent, None]:
-        """异步生成器：逐条产出事件，由 WS 网关/渠道消费。
-
-        Args:
-            text: 用户输入文本。
-            images: 图片 URL 或 base64 data URL 列表，用于多模态输入。
-        """
+    async def submit_user_message(
+        self, text: str, images: list[str] | None = None  # noqa: ARG002
+    ) -> AsyncGenerator[AgentEvent | ProtocolEvent, None]:
+        """异步生成器：四阶段状态机，逐条产出事件。"""
         self.reset_abort()
-        yield RunStarted(session_id=self.service.conversation_id)
+        yield RunStarted(session_id="default")
 
-        tool_summary_parts: list[str] = []
-        interrupted = False
-
-        # ── TOOL_PHASE ────────────────────────────────────────────────────────
-        try:
-            async for event in self._tool_phase(text, images, tool_summary_parts):
-                yield event
-        except Exception as exc:  # pragma: no cover - 兜底
-            yield ProtocolEvent(type=ERROR, payload={"message": f"工具阶段异常: {exc}"})
-
-        if self._abort:
-            interrupted = True
-
-        # ── SOUL_PHASE ────────────────────────────────────────────────────────
-        try:
-            async for event in self._soul_phase(text, images, tool_summary_parts, interrupted):
-                yield event
-        except Exception as exc:  # pragma: no cover - 兜底
-            yield ProtocolEvent(type=ERROR, payload={"message": f"回复生成异常: {exc}"})
-            yield RunFinished(session_id=self.service.conversation_id)
-
-    # ── TOOL_PHASE ───────────────────────────────────────────────────────────
-
-    async def _tool_phase(
-        self, text: str, images: list[str] | None, tool_summary_parts: list[str]
-    ) -> AsyncGenerator[AgentEvent | ProtocolEvent, None]:
-        yield StepStarted(phase="tool")
-        # 工具阶段 system：工具调度规则（tools_system.md）
-        await self.service.set_system_prompt(self.context.build_tool_system())
-        timeout_count = 0
-
-        for _round in range(self.max_tool_rounds):
-            if self._abort:
-                break
-            try:
-                response = await asyncio.wait_for(
-                    self.service.asend_chat(
-                        text,
-                        # 图片仅在第一轮随用户消息写入历史；后续轮次复用历史
-                        images=images if _round == 0 else None,
-                        store_history=(_round == 0),
-                        tools=self.registry.build_tools_schema(),
-                        tool_choice="auto",
-                        commit_content=False,
-                    ),
-                    timeout=self.tool_timeout,
-                )
-            except asyncio.TimeoutError:
-                timeout_count += 1
-                if timeout_count >= 3:
-                    tool_summary_parts.append("[任务中断] LLM 工具决策连续超时")
-                    break
-                continue
-            except Exception as exc:  # pragma: no cover - 兜底
-                tool_summary_parts.append(f"[工具阶段失败] {exc}")
-                break
-
-            timeout_count = 0
-            tool_calls = response.tool_calls or []
-            if not tool_calls:
-                break
-
-            for call in tool_calls:
-                if self._abort:
-                    break
-                name = (call.get("function") or {}).get("name", "")
-                call_id = call.get("id", "")
-                arguments = self._safe_arguments(call)
-                tool_id = name  # 注册表按 name 匹配（内置工具 id == name）
-
-                # 权限检查
-                entry = self.registry.get(tool_id)
-                risk = entry[0].risk if entry else "safe"
-                permission = self.checker.check(tool_id, risk=risk)
-
-                if permission == Permission.DENY:
-                    denied = "[已拒绝] 该工具被禁止使用"
-                    await self.service.append_message("tool", denied, tool_call_id=call_id)
-                    tool_summary_parts.append(f"{name}: {denied}")
-                    continue
-
-                if permission == Permission.CONFIRM:
-                    # 发起确认请求并挂起等待用户响应；超时视为拒绝
-                    fut = self._new_confirmation(call_id)
-                    yield ProtocolEvent(
-                        type=CONFIRM_REQUEST,
-                        payload={"tool": name, "params": arguments, "call_id": call_id},
-                    )
-                    try:
-                        allowed = await asyncio.wait_for(fut, timeout=self.confirm_timeout)
-                    except asyncio.TimeoutError:
-                        allowed = False
-                    finally:
-                        self.pending_confirmations.pop(call_id, None)
-                    if not allowed:
-                        await self.service.append_message("tool", _CONFIRM_REJECT_TEXT, tool_call_id=call_id)
-                        tool_summary_parts.append(f"{name}: {_CONFIRM_REJECT_TEXT}")
-                        continue
-                    if self._abort:
-                        break
-
-                # 执行工具
-                yield ToolCallStart(call_id=call_id, tool_name=name, arguments=arguments)
-                ctx = ToolContext(
-                    user_query=text,
-                    conversation_id=self.service.conversation_id,
-                    memory=self.memory,
-                )
-                output = await self._execute_tool(tool_id, ctx, arguments)
-                yield ToolCallResult(call_id=call_id, output=output)
-                yield ToolCallEnd(call_id=call_id)
-                await self.service.append_message("tool", output, tool_call_id=call_id)
-                tool_summary_parts.append(f"{name}: {self._truncate(output)}")
-
-            if self._abort:
-                break
-
-        yield StepFinished(phase="tool")
-
-    def _safe_arguments(self, call: dict) -> dict[str, Any]:
-        raw = (call.get("function") or {}).get("arguments", "{}")
-        try:
-            parsed = json.loads(raw) if isinstance(raw, str) else raw
-            return parsed if isinstance(parsed, dict) else {}
-        except (json.JSONDecodeError, TypeError):
-            return {}
-
-    async def _execute_tool(self, tool_id: str, ctx: ToolContext, arguments: dict) -> str:
-        entry = self.registry.get(tool_id)
-        if not entry:
-            return _NOT_REGISTERED_TEXT
-        _, executor = entry
-        try:
-            return await executor(ctx, arguments)
-        except Exception as exc:
-            return f"[工具执行失败] {exc}"
-
-    @staticmethod
-    def _truncate(text: str, limit: int = 200) -> str:
-        text = text.strip()
-        return text if len(text) <= limit else text[:limit] + "…"
-
-    @staticmethod
-    def _contains_image_content(content: Any) -> bool:
-        """判断消息内容是否包含图片（OpenAI 视觉格式 content 数组）。"""
-        return (
-            isinstance(content, list)
-            and any(isinstance(p, dict) and p.get("type") == "image_url" for p in content)
+        # ── Stage 1: 构建上下文 ──
+        context_json = await self.context.build_context(
+            user_input=text,
+            story_id=self._story_id,
+            participant_id=self._participant_id,
         )
 
-    # ── SOUL_PHASE ───────────────────────────────────────────────────────────
+        # ── Stage 2: 主叙事调用 ──
+        output = await self._invoke_narrator(context_json)
 
-    async def _soul_phase(
-        self, text: str, images: list[str] | None, tool_summary_parts: list[str], interrupted: bool
-    ) -> AsyncGenerator[AgentEvent | ProtocolEvent, None]:
-        yield StepStarted(phase="soul")
-        tool_summary = "\n".join(tool_summary_parts) if tool_summary_parts else ""
-
-        # 多模态：图片通常已随 TOOL_PHASE 第一轮进入历史，SOUL_PHASE 复用即可；
-        # 仅当 TOOL_PHASE 失败回滚导致图片丢失时才补传（避免图片重复导致部分 API 400）。
-        soul_images = None
-        if images:
-            history = await self.service.get_history()
-            if not any(
-                m.role == "user" and self._contains_image_content(m.content)
-                for m in history
-            ):
-                soul_images = images
-
-        # 记忆注入：调用 get_relevant_memories 检索相关五元组，格式化为可读文本；
-        # memory 不可用或检索失败时降级为空，不阻塞主流程
-        memory_text = ""
-        if self.memory is not None:
-            try:
-                quintuples = await self.memory.get_relevant_memories(query=text, limit=3)
-                if quintuples:
-                    memory_text = "\n".join(
-                        f"- {h} {r} {t}" for h, _ht, r, t, _tt in quintuples
-                    )
-            except Exception:  # pragma: no cover - 记忆检索失败不阻塞
-                memory_text = ""
-
-        await inject_soul_context(
-            self.service,
-            self.context,
-            memory_text=memory_text,
-            emotion_patch="",
-            tool_summary=tool_summary,
-        )
-
+        # ── Stage 3: 按模式投递 ──
         message_id = str(uuid.uuid4())
-        yield TextMessageStart(message_id=message_id)
-        full_parts: list[str] = []
-        try:
-            async for token in self.service.astream_send(text, images=soul_images, store_history=False):
-                if self._abort:
-                    break
-                full_parts.append(token)
-                yield TextMessageDelta(message_id=message_id, text=token)
-        except Exception as exc:  # pragma: no cover - 兜底
-            yield ProtocolEvent(type=ERROR, payload={"message": f"流式生成失败: {exc}"})
-            yield TextMessageEnd(message_id=message_id, full_text="".join(full_parts))
-            yield RunFinished(session_id=self.service.conversation_id)
-            return
 
-        full_reply = "".join(full_parts)
-        if interrupted or self._abort:
-            full_reply = full_reply or "[已停止回复]"
-            yield ProtocolEvent(type=NOTICE, payload={"message": "已停止回复"})
-        yield TextMessageEnd(message_id=message_id, full_text=full_reply)
-        yield RunFinished(session_id=self.service.conversation_id)
+        if output.reply_mode == "immediate" and output.reply_content:
+            yield TextMessageStart(message_id=message_id)
+            # 一次性投递（非流式）
+            yield TextMessageDelta(message_id=message_id, text=output.reply_content)
+            yield TextMessageEnd(message_id=message_id, full_text=output.reply_content)
+        elif output.reply_mode == "immediate" and output.script:
+            yield TextMessageStart(message_id=message_id)
+            yield TextMessageDelta(message_id=message_id, text=output.script)
+            yield TextMessageEnd(message_id=message_id, full_text=output.script)
 
-        # 收尾副作用：写入长期记忆 + 情绪引擎更新（失败不抛异常）
-        if self.memory is not None:
-            try:
-                await self.memory.add_conversation_memory(
-                    text, full_reply, session_id=self.service.conversation_id
+        # ── Stage 4: 副作用 ──
+        # TurnMetadata
+        if output.memories or output.intents:
+            yield TurnMetadata(
+                emotion_delta=output.alter or 0,
+                memory_candidates=output.memories,
+                state_patches=[output.state_patch] if output.state_patch else [],
+                follow_up_intents=output.intents,
+            )
+
+        # AlterTriggered
+        if output.alter is not None:
+            yield AlterTriggered(
+                direction="",
+                description="",
+                intensity=float(output.alter),
+            )
+
+        yield RunFinished(session_id="default")
+
+    async def _invoke_narrator(
+        self, context_json: dict[str, Any]
+    ) -> NarrativeOutput:
+        """调用主叙事器。"""
+        # 测试注入的预设回复
+        if self._narrator_response_override is not None:
+            return self._narrator_response_override
+
+        if self._narrator is not None:
+            system_prompt = self.context.build_system_prompt()
+            # 支持两种调用方式：对象（.invoke）或可调用函数
+            if hasattr(self._narrator, "invoke"):
+                return await self._narrator.invoke(
+                    system_prompt=system_prompt,
+                    context_json=context_json,
                 )
-            except Exception:  # pragma: no cover - 记忆写入失败不阻塞
-                pass
+            else:
+                # 直接调用函数
+                return self._narrator(system_prompt, context_json)
 
-        # 情绪引擎：观察本轮对话 → 平滑 → 注入语气到下一轮
-        if self.emotion_engine is not None:
-            try:
-                history = await self.service.get_history()
-                messages = [{"role": m.role, "content": m.content} for m in history[-6:]]
-                await self.emotion_engine.on_turn_complete(messages)
-            except Exception:  # pragma: no cover - 情绪观察失败不阻塞
-                pass
+        # 兜底：返回空结果
+        return NarrativeOutput(reply_mode="none")

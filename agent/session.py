@@ -132,15 +132,14 @@ async def _ensure_shared_initialized(registry: Any, cfg: Any) -> None:
 
 
 async def build_agent_session(conversation_id: str) -> AgentSession:
-    """生产装配：真实 LLM 服务 + 分层记忆 + 共享工具注册表 + 情绪引擎。
+    """生产装配：真实 LLM 服务 + 分层记忆 + 共享工具注册表 + Narrator 主叙事器。
 
     从 agent/ws.py 的 _default_session_factory 迁移，行为完全一致：
     知识库索引 / MCP 同步在此处一次性 await，跨会话复用。
     """
-    from agent.context import ContextBuilder
-    from agent.emotion.engine import create_emotion_engine
+    from agent.context import NarrativeContextBuilder
     from agent.loop import AgentLoop
-    from agent.tools import PermissionChecker
+    from agent.narrator import Narrator
     from core.config import get_config_instance
     from core.llm import create_from_config
     from core.memory.memory_manager import get_memory_manager
@@ -155,24 +154,21 @@ async def build_agent_session(conversation_id: str) -> AgentSession:
         logger.warning("分层记忆初始化失败，工具将降级: %s", exc)
 
     registry = _get_or_create_registry()
-    builder = ContextBuilder()
+    builder = NarrativeContextBuilder()
     await _ensure_shared_initialized(registry, cfg)
     builder.available_mcp_servers = list(_connected_servers)
 
-    perm_path = cfg.get(
-        "cosmos.service.agent.permissions.config_path", "data/config/Permissions.yml"
-    )
-    checker = PermissionChecker(perm_path)
-
-    emotion_engine = create_emotion_engine(service.provider)
+    # 创建 Narrator（使用真实 LLM 服务）
+    narrator = Narrator(llm_service=service)
 
     loop = AgentLoop(
+        narrator=narrator,
+        context=builder,
         service=service,
         registry=registry,
-        checker=checker,
-        context=builder,
         memory=memory,
-        emotion_engine=emotion_engine,
+        story_id=conversation_id,
+        participant_id="user",
     )
     return AgentSession(conversation_id, service, loop)
 
