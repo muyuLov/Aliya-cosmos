@@ -132,7 +132,7 @@ async def _ensure_shared_initialized(registry: Any, cfg: Any) -> None:
 
 
 async def build_agent_session(conversation_id: str) -> AgentSession:
-    """生产装配：真实 LLM 服务 + GRAG 记忆 + 共享工具注册表 + 情绪引擎。
+    """生产装配：真实 LLM 服务 + 分层记忆 + 共享工具注册表 + 情绪引擎。
 
     从 agent/ws.py 的 _default_session_factory 迁移，行为完全一致：
     知识库索引 / MCP 同步在此处一次性 await，跨会话复用。
@@ -143,16 +143,16 @@ async def build_agent_session(conversation_id: str) -> AgentSession:
     from agent.tools import PermissionChecker
     from core.config import get_config_instance
     from core.llm import create_from_config
-    from core.memory.memory_manager import GRAGMemoryManager
+    from core.memory.memory_manager import get_memory_manager
 
     cfg = get_config_instance("data/config/main.yml")
     service = create_from_config("data/config/main.yml", conversation_id=conversation_id)
 
     memory = None
     try:
-        memory = GRAGMemoryManager()
+        memory = get_memory_manager()
     except Exception as exc:  # pragma: no cover - 记忆不可用不阻塞
-        logger.warning("GRAG 记忆初始化失败，工具将降级: %s", exc)
+        logger.warning("分层记忆初始化失败，工具将降级: %s", exc)
 
     registry = _get_or_create_registry()
     builder = ContextBuilder()

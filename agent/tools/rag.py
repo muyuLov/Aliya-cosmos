@@ -23,7 +23,7 @@ search_knowledge_def = ToolDefinition(
 
 
 async def search_knowledge(_ctx: ToolContext, args: dict) -> str:
-    # _ctx 真实字段：user_query / conversation_id / memory（GRAGMemoryManager | None）
+    # _ctx 真实字段：user_query / conversation_id / memory（UnifiedMemoryFacade | None）
     query = str(args.get("query", "")).strip()
     if not query:
         return "（知识库无相关片段）"

@@ -13,18 +13,26 @@ from core.exception import (
 #
 #   各模块已在自己的 exceptions.py 中定义好，无需重复定义：
 #     core/llm/exceptions.py   → LLMError / LLMRequestError / ProviderNotFoundError ...
-#     core/memory/exceptions.py → GRAGError / GraphConnectionError / ExtractionTimeoutError ...
 
 from core.llm.exceptions import LLMRequestError, ProviderNotFoundError
-from core.memory.exceptions import (
-    ExtractionTimeoutError,
-    GRAGConfigError,
-    GraphConnectionError,
-    RAGQueryError,
-    TaskQueueFullError,
-)
 
-# ── 2. 注册处理器 ─────────────────────────────────────────────────────────────
+# ── 2. 自定义异常（演示用途）──────────────────────────────────────────────────
+
+class ServiceConnectionError(StructuredException):
+    """服务连接失败（示例异常，替代已移除的 GRAG 异常）"""
+
+    def __init__(self, message: str, *, code: str = "SERVICE_CONN_ERR") -> None:
+        super().__init__(message, code=code)
+
+
+class ServiceConfigError(StructuredException):
+    """服务配置错误（示例异常，替代已移除的 GRAG 异常）"""
+
+    def __init__(self, message: str, *, code: str = "SERVICE_CFG_ERR") -> None:
+        super().__init__(message, code=code)
+
+
+# ── 3. 注册处理器 ─────────────────────────────────────────────────────────────
 
 handler = ExceptionHandler()
 
@@ -41,13 +49,13 @@ handler.register(
     lambda e: print(f"[LLM告警] {e.code} provider={e.details.get('provider')} → {e.details.get('reason')}"),
 )
 
-# Neo4j 连接失败：接管日志，附带时间戳
-@handler.on(GraphConnectionError, suppress_default=True)
-def handle_graph_conn(exc: GraphConnectionError) -> None:
-    print(f"[Neo4j] 连接失败 {exc.code} @ {exc.timestamp.isoformat()} — {exc.message}")
+# 服务连接失败：接管日志，附带时间戳
+@handler.on(ServiceConnectionError, suppress_default=True)
+def handle_conn(exc: ServiceConnectionError) -> None:
+    print(f"[服务] 连接失败 {exc.code} @ {exc.timestamp.isoformat()} — {exc.message}")
 
 
-# ── 3. 业务函数：try/except 结构化异常 ───────────────────────────────────────
+# ── 4. 业务函数：try/except 结构化异常 ───────────────────────────────────────
 
 
 def call_llm_provider(provider_name: str) -> str:
@@ -77,55 +85,53 @@ def send_llm_request(provider: str, prompt: str) -> str:
         raise LLMRequestError(provider, reason="请求超时", cause=e) from e
 
 
-def connect_neo4j(uri: str) -> None:
+def connect_service(uri: str) -> None:
     """
-    连接 Neo4j，演示 GraphConnectionError 包装底层连接错误。
+    连接服务，演示 ServiceConnectionError 包装底层连接错误。
 
     Raises:
-        GraphConnectionError: 数据库不可达时抛出。
+        ServiceConnectionError: 数据库不可达时抛出。
     """
     try:
         raise ConnectionRefusedError(f"无法连接到 {uri}")
     except ConnectionRefusedError as e:
-        raise GraphConnectionError(
-            message=f"Neo4j 不可达: {uri}", cause=e
+        raise ServiceConnectionError(
+            message=f"服务不可达: {uri}"
         ) from e
 
 
-def validate_grag_config(password: str | None) -> None:
+def validate_config(setting: str | None) -> None:
     """
-    校验 GRAG 配置，演示 with_details 链式追加上下文。
+    校验配置，演示 with_details 链式追加上下文。
 
     Raises:
-        GRAGConfigError: Neo4j 密码未配置时抛出。
+        ServiceConfigError: 配置未设置时抛出。
     """
-    if not password or not password.strip():
-        raise GRAGConfigError(
-            "启用 GRAG 时必须配置 Neo4j 密码"
-        ).with_details(config_key="cosmos.service.grag.neo4j.password")
+    if not setting or not setting.strip():
+        raise ServiceConfigError(
+            "必须配置服务参数"
+        ).with_details(config_key="cosmos.service.config.setting")
 
 
-# ── 4. propagate 责任链：GRAGError 子类先处理，再上报到基类 ──────────────────
+# ── 5. propagate 责任链：ServiceConnectionError 子类先处理，再上报到基类 ────
 
 chain_handler = ExceptionHandler()
 
-# 父类：通用上报（所有 GRAGError 均执行）
-from core.memory.exceptions import GRAGError
+# 父类：通用上报
 chain_handler.register(
-    GRAGError,
-    lambda e: print(f"[GRAG通用上报] code={e.code} message={e.message}"),
+    ServiceConnectionError,
+    lambda e: print(f"[服务通用上报] code={e.code} message={e.message}"),
 )
 
 # 子类：专属处理 + propagate=True 继续触发父类
 chain_handler.register(
-    GraphConnectionError,
-    lambda e: print(f"[Neo4j专属] 触发重连逻辑: {e.message}"),
+    ServiceConnectionError,
+    lambda e: print(f"[服务专属] 触发重连逻辑: {e.message}"),
     propagate=True,
 )
-# handle(GraphConnectionError) 依次执行：[Neo4j专属] → [GRAG通用上报]
 
 
-# ── 5. catch_context：对话轮次批量处理的兜底捕获 ─────────────────────────────
+# ── 6. catch_context：对话轮次批量处理的兜底捕获 ─────────────────────────────
 
 
 def process_conversation_batch(turns: list[dict]) -> None:
@@ -133,18 +139,18 @@ def process_conversation_batch(turns: list[dict]) -> None:
     批量处理对话轮次，演示 catch_context 在代码块边界的用法。
     业务逻辑内部仍用 try/except，catch_context 用于最外层兜底。
 
-    每条 turn 需包含 user / ai 字段，缺失时抛出 GRAGConfigError。
+    每条 turn 需包含 user / ai 字段，缺失时抛出 ServiceConfigError。
     """
-    with catch_context(handler=handler, re_raise=False, exc_types=(GRAGConfigError,)):
+    with catch_context(handler=handler, re_raise=False, exc_types=(ServiceConfigError,)):
         for i, turn in enumerate(turns):
             if not turn.get("user") or not turn.get("ai"):
-                raise GRAGConfigError(
+                raise ServiceConfigError(
                     f"第 {i} 条对话缺少必要字段"
                 ).with_details(turn_index=i, turn=turn)
         print(f"批量处理完成，共 {len(turns)} 条对话")
 
 
-# ── 6. 运行示例 ──────────────────────────────────────────────────────────────
+# ── 7. 运行示例 ──────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     import json
@@ -162,36 +168,24 @@ if __name__ == "__main__":
         handler.handle(e)
         print("cause:", type(e.cause).__name__, "→", e.cause)
 
-    print("\n=== Neo4j 连接失败 + to_dict 序列化 ===")
+    print("\n=== 服务连接失败 + to_dict 序列化 ===")
     try:
-        connect_neo4j("bolt://localhost:7687")
-    except GraphConnectionError as e:
+        connect_service("bolt://localhost:7687")
+    except ServiceConnectionError as e:
         handler.handle(e)
         print("to_dict:", json.dumps(e.to_dict(), ensure_ascii=False, indent=2))
 
-    print("\n=== GRAG 配置校验 + with_details ===")
+    print("\n=== 配置校验 + with_details ===")
     try:
-        validate_grag_config(None)
-    except GRAGConfigError as e:
+        validate_config(None)
+    except ServiceConfigError as e:
         print(f"[配置错误] {e.code}: {e.message}")
         print("details:", e.details)
-
-    print("\n=== 五元组提取超时（ExtractionTimeoutError）===")
-    timeout_exc = ExtractionTimeoutError(timeout=30.0, details={"attempt": 3})
-    print(repr(timeout_exc))
-    print("details:", timeout_exc.details)
-
-    print("\n=== 任务队列已满（TaskQueueFullError）===")
-    queue_exc = TaskQueueFullError(queue_size=100, max_size=100)
-    print(str(queue_exc))
-
-    print("\n=== propagate 责任链：GraphConnectionError → GRAGError ===")
-    chain_handler.handle(GraphConnectionError("bolt://localhost:7687 不可达"))
 
     print("\n=== catch_context 批量对话兜底 ===")
     process_conversation_batch([
         {"user": "你好", "ai": "你好！"},
-        {"user": "今天天气如何", "ai": ""},   # ai 字段为空，触发 GRAGConfigError
+        {"user": "今天天气如何", "ai": ""},   # ai 字段为空，触发 ServiceConfigError
     ])
 
     print("\n=== ExceptionHandler.__repr__ ===")

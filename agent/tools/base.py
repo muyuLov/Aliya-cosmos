@@ -24,7 +24,7 @@ class ToolContext:
 
     user_query: str
     conversation_id: str
-    memory: Any = None           # GRAGMemoryManager 或 None
+    memory: Any = None           # UnifiedMemoryFacade 或 None
 
 
 ToolExecutor = Callable[[ToolContext, dict[str, Any]], Awaitable[str]]
