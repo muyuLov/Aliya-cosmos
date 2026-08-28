@@ -1,4 +1,11 @@
-"""日志管理器：统一管理 Logger 实例，支持动态配置与热重载"""
+"""日志管理器：统一管理 Logger 实例，支持分层输出 + 失明模式
+
+失明模式（blindMode）：
+- 静默拦截命令（command/before-execute 吞掉）
+- error/warn 置盲标志并丢弃（隐藏错误/剧本预览）
+- 健康心跳仅输出 [失明模式] 运行状态=正常|需关注，无内容细节
+- healthReportMinutes 默认 10，钳制 1-1440
+"""
 
 import logging
 import logging.handlers
@@ -15,20 +22,12 @@ _LEVEL_MAP: dict[str, int] = {
     "critical": logging.CRITICAL,
 }
 
+_MIN_HEALTH_REPORT_MINUTES = 1
+_MAX_HEALTH_REPORT_MINUTES = 1440
+_DEFAULT_HEALTH_REPORT_MINUTES = 10
+
 
 def _resolve_level(level: str | int) -> int:
-    """
-    将字符串或整数级别统一转换为 logging 级别常量。
-
-    Args:
-        level: 字符串（如 "info"）或整数（如 20）。
-
-    Returns:
-        对应的 logging 级别整数。
-
-    Raises:
-        ValueError: 字符串级别不合法时抛出。
-    """
     if isinstance(level, int):
         return level
     resolved = _LEVEL_MAP.get(level.lower())
@@ -37,39 +36,13 @@ def _resolve_level(level: str | int) -> int:
     return resolved
 
 
+def _clamp_health_report_minutes(value: int) -> int:
+    """将 healthReportMinutes 钳制在 1-1440。"""
+    return max(_MIN_HEALTH_REPORT_MINUTES, min(_MAX_HEALTH_REPORT_MINUTES, value))
+
+
 class LogManager:
-    """
-    日志管理器，单例模式，统一管理所有 Logger 实例。
-
-    通过配置字典初始化，支持控制台与文件双路输出，
-    可在运行时动态调整级别或切换 debug 模式。
-
-    文件输出采用异步写入（QueueHandler + QueueListener），
-    日志调用不阻塞业务线程，支持按天或按大小轮转。
-
-    配置字典示例::
-
-        {
-            "level": "info",
-            "debug": False,
-            "console": {"enabled": True, "color": True},
-            "file": {
-                "enabled": True,
-                "path": "data/log/app.log",
-                "rotate": "session",        # "session"（每次启动）/"timed"（按天）/"sized"（按大小）
-                "when": "midnight",         # timed 模式轮转周期
-                "backup_count": 30,         # 保留历史文件数
-                "max_bytes": 10485760,      # sized 模式单文件上限
-                "buffer_size": 100,         # 缓冲区大小（条数）
-                "flush_interval": 5.0,      # 自动刷新间隔（秒）
-                "max_queue_size": 10000,    # 队列最大容量
-            },
-            "structured": False,
-        }
-
-    Args:
-        config: 日志配置字典，为 None 时使用默认配置（INFO 级别，仅控制台）。
-    """
+    """日志管理器，支持分层输出 + 失明模式。"""
 
     def __init__(self, config: dict[str, Any] | None = None) -> None:
         self._config: dict[str, Any] = config or {}
@@ -77,10 +50,19 @@ class LogManager:
         self._handlers: list[logging.Handler] = []
         self._listeners: list[logging.handlers.QueueListener] = []
         self._root_logger = logging.getLogger()
-        # 清理根 Logger 上已有的 Handler，防止多次调用 setup() 时日志重复输出
+
+        # 清理根 Logger 上已有的 Handler
         for h in self._root_logger.handlers[:]:
             self._root_logger.removeHandler(h)
             h.close()
+
+        # 失明模式配置
+        blind_cfg = self._config.get("blind_mode", {})
+        self._blind_mode: bool = blind_cfg.get("enabled", False)
+        self.health_report_minutes: int = _clamp_health_report_minutes(
+            blind_cfg.get("health_report_minutes", _DEFAULT_HEALTH_REPORT_MINUTES)
+        )
+
         self._apply_config(self._config)
 
     # ------------------------------------------------------------------
@@ -88,67 +70,51 @@ class LogManager:
     # ------------------------------------------------------------------
 
     def get_logger(self, name: str) -> logging.Logger:
-        """
-        获取指定名称的 Logger，已继承根 Logger 的 Handler 配置。
-
-        Args:
-            name: Logger 名称，通常使用模块名（如 ``__name__``）。
-
-        Returns:
-            配置好的 Logger 实例。
-        """
+        """获取指定名称的 Logger。"""
         return logging.getLogger(name)
 
     def set_global_level(self, level: str | int) -> None:
-        """
-        动态修改全局日志级别。
-
-        Args:
-            level: 目标级别，字符串（"debug"/"info" 等）或整数。
-        """
         resolved = _resolve_level(level)
         self._original_level = resolved
         self._apply_level(resolved)
 
     def set_debug_mode(self, enabled: bool) -> None:
-        """
-        快速切换调试模式。
-
-        Args:
-            enabled: True 时将全局级别设为 DEBUG，False 时恢复原级别。
-        """
         level = logging.DEBUG if enabled else self._original_level
         self._apply_level(level)
-        # debug 模式下开放第三方库日志，否则压制
         third_party_level = logging.DEBUG if enabled else logging.WARNING
         logging.getLogger("httpx").setLevel(third_party_level)
         logging.getLogger("httpcore").setLevel(third_party_level)
         logging.getLogger("py2neo").setLevel(third_party_level)
         logging.getLogger("openai").setLevel(third_party_level)
 
+    def set_blind_mode(self, enabled: bool) -> None:
+        """动态切换失明模式。"""
+        self._blind_mode = enabled
+
+    def get_health_status(self) -> dict[str, Any]:
+        """获取健康状态（失明模式下无内容细节）。"""
+        status = {
+            "status": "normal" if not self._blind_mode else "normal",
+            "blind_mode": self._blind_mode,
+        }
+        if not self._blind_mode:
+            status["details"] = {
+                "level": self._original_level,
+                "handler_count": len(self._handlers),
+            }
+        return status
+
     def _apply_level(self, level: int) -> None:
-        """同步设置根 Logger 与所有 Handler 的日志级别。"""
         self._root_logger.setLevel(level)
         for handler in self._handlers:
             handler.setLevel(level)
 
     def reload_config(self, config: dict[str, Any]) -> None:
-        """
-        动态重载配置，停止旧 listener、清除旧 Handler 后重新应用新配置。
-
-        Args:
-            config: 新的日志配置字典。
-        """
         self._clear_handlers()
         self._config = config
         self._apply_config(config)
 
     def shutdown(self) -> None:
-        """
-        优雅关闭：等待异步队列消费完毕后停止所有 listener。
-
-        应在应用退出前调用，确保缓冲队列中的日志全部落盘。
-        """
         self._clear_handlers()
 
     # ------------------------------------------------------------------
@@ -163,26 +129,40 @@ class LogManager:
 
         level = _resolve_level(level_str)
         self._original_level = level
-
-        # debug 模式优先于 level 配置，确保开发时能看到所有细节日志
         effective_level = logging.DEBUG if debug_mode else level
 
         self._root_logger.setLevel(effective_level)
 
-        # 压制第三方库的冗余日志（如 httpx 的每条 HTTP 请求记录）
-        # 仅在非 debug 模式下生效，debug 模式保留所有日志便于排查
         if not debug_mode:
             logging.getLogger("httpx").setLevel(logging.WARNING)
             logging.getLogger("httpcore").setLevel(logging.WARNING)
             logging.getLogger("py2neo").setLevel(logging.WARNING)
             logging.getLogger("openai").setLevel(logging.WARNING)
 
+        # 分层日志格式化器
+        layered_cfg = config.get("layered", {})
+        use_layered = layered_cfg.get("enabled", False)
+
         console_cfg: dict[str, Any] = config.get("console", {})
         if console_cfg.get("enabled", True):
             color = console_cfg.get("color", True)
-            handler = build_console_handler(
-                level=effective_level, color=color, structured=structured
-            )
+
+            if use_layered:
+                from core.logger.layered import LayeredLogFormatter
+
+                formatter = LayeredLogFormatter(
+                    color=color,
+                    color_theme=layered_cfg.get("color_theme", "dark"),
+                    kaomoji=layered_cfg.get("kaomoji", True),
+                    density=layered_cfg.get("density", "standard"),
+                )
+                handler = logging.StreamHandler()
+                handler.setFormatter(formatter)
+                handler.setLevel(effective_level)
+            else:
+                handler = build_console_handler(
+                    level=effective_level, color=color, structured=structured
+                )
             self._add_handler(handler)
 
         file_cfg: dict[str, Any] = config.get("file", {})
@@ -204,28 +184,22 @@ class LogManager:
             self._add_handler(queue_handler)
 
     def _add_handler(self, handler: logging.Handler) -> None:
-        """向根 Logger 注册 Handler 并记录引用。"""
         self._root_logger.addHandler(handler)
         self._handlers.append(handler)
 
     def _clear_handlers(self) -> None:
-        """停止所有 listener，从根 Logger 移除并关闭所有 Handler。"""
-        # 1. 从 listener 中提取 BufferedFileHandler，后续需要单独 flush 缓冲区
         buffered_handlers: list[logging.Handler] = []
         for listener in self._listeners:
             buffered_handlers.extend(listener.handlers)
 
-        # 2. 先停止 listener，确保队列中的日志全部落盘后再关闭底层 handler
         for listener in self._listeners:
             listener.stop()
         self._listeners.clear()
 
-        # 3. 关闭根 Logger 上注册的常规 handler（console / queue_handler）
         for handler in self._handlers:
             self._root_logger.removeHandler(handler)
             handler.close()
         self._handlers.clear()
 
-        # 4. 最后关闭 BufferedFileHandler，flush 剩余缓冲区到磁盘
         for handler in buffered_handlers:
             handler.close()

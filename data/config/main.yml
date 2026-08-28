@@ -10,6 +10,15 @@ cosmos:
     debug: true                        # 全局调试模式
     level: debug                       # 日志级别: debug/info/warning/error
     structured: false                  # 是否启用 JSON 结构化日志
+    layered:
+      enabled: true                    # 启用分层日志
+      colors: true                     # 启用颜色
+      color_theme: dark                # dark | light
+      kaomoji: true                    # 颜文字模式（false=符号模式）
+      density: standard                # summary | standard | diagnostic
+    blind_mode:
+      enabled: false                   # 失明模式
+      health_report_minutes: 10        # 健康报告间隔（钳制 1-1440）
     console:
       color: true                      # 控制台彩色输出
       enabled: true                    # 启用控制台日志
@@ -35,29 +44,43 @@ cosmos:
       permissions:
         config_path: data/config/Permissions.yml  # 权限配置文件
 
-      # ── 情绪引擎配置 ──────────────────────────────────
-      emotion:
-        enabled: true                       # 启用情绪引擎
-        fallback: neutral                   # 无结果时的默认情绪
-        fast_rise: ["sad", "anxiety", "anger", "disgusted"]  # 负面快速上升
-        observer_weight: 0.3                # 常规观测权重
-        fast_rise_weight: 0.62              # 快速上升权重
-        scene_match_threshold: 0.72         # 场景匹配阈值
+      # ── Alter 氛围配置 ──────────────────────────────────
+      alter:
+        enabled: true
+        base_threshold: 5.0             # 基础触发阈值
+        density_factor: 0.5             # 对话密度影响因子
+        cooldown_seconds: 300           # 冷却时间（秒）
 
-      # ── 主动聊天配置 ──────────────────────────────────
-      proactive:
-        enabled: false                      # 默认关闭，GUI 设置页可开
-        check_interval_seconds: 60          # 调度轮询间隔
-        quiet_hours:
-          start: "23:00"                    # 不打搅开始
-          end: "07:00"                      # 不打搅结束
-        idle_timeout_minutes: 30            # 用户无操作静默超时
-        triggers:
-          - type: schedule                  # 定时触发
-            at: "20:00"
-            message: "晚上好呀，今天过得怎么样？"
-          - type: idle                      # 静默超时触发
-            message: "看你半天没说话，是在忙吗？"
+      # ── Agency 容量配置 ──────────────────────────────────
+      agency:
+        enabled: true
+        max_window_minutes: 240         # 行动窗口上限
+        min_proactive_interval_minutes: 60
+
+      # ── 休息窗口配置 ──────────────────────────────────────
+      rest_windows:
+        - enabled: true
+          label: "夜间休息"
+          start_hour: 22
+          start_minute: 0
+          end_hour: 8
+          end_minute: 0
+          min_interval_minutes: 120
+          max_interval_minutes: 240
+
+      # ── 调度器配置 ──────────────────────────────────────────
+      scheduler:
+        sweep_interval_minutes: 5
+        advance_interval_minutes: 10
+        advance_jitter_minutes: 2
+        background_interval_minutes: 10
+
+      # ── 主叙事器配置 ──────────────────────────────────────────
+      narrator:
+        max_script_characters: 8000
+        max_retries: 3
+        timeout: 30.0
+        max_context_characters: 20000
 
       # ── 知识库配置（M3 RAG）──────────────────────────────
       knowledge:
@@ -85,27 +108,30 @@ cosmos:
           aes_key: ""                 # 消息加密 aes_key
           event_path: "/channels/wechat"
           confirm_via_wechat: true
-    # ── GRAG 图记忆系统 ────────────────────────────────
-    grag:
-      enabled: true                    # 启用记忆系统
-      auto_extract: true               # 自动提取五元组
-      context_length: 10               # 上下文窗口长度
-      similarity_threshold: 0.7        # 语义相似度阈值（0-1）
-      session_tracking: true            # 启用会话追踪
-      neo4j:
-        uri: bolt://${NEO4J_HOST:127.0.0.1}:${NEO4J_PORT:7687}   # Neo4j 连接地址（容器内环境覆盖为服务名）
-        user: neo4j                     # 用户名
-        password: ${NEO4J_PASSWORD:Aliya_neo4j}  # 密码（支持环境变量覆盖，默认 Aliya_neo4j）
-        database: neo4j                 # 数据库名
-      extractor:
-        max_retries: 2                 # 五元组提取最大重试次数
-        timeout: 30                    # 提取超时（秒）
-      task_manager:
-        max_workers: 3                 # 并发工作协程数
-        max_queue_size: 100            # 任务队列最大长度
-        task_timeout: 30               # 单任务超时（秒）
-        auto_cleanup_hours: 24         # 已完成任务保留时间（小时）
-        cleanup_interval_seconds: 3600 # 自动清理循环运行间隔（秒）
+    # ── 分层记忆配置 ────────────────────────────────────
+    memory:
+      layers:
+        overlay:
+          confidence_threshold: 0.82
+          major_confidence_threshold: 0.95
+          min_turns: 3
+          min_days: 2
+          cooldown_hours: 72
+        fact:
+          max_facts: 200
+          importance_weight: 0.5
+          confidence_weight: 0.35
+          recency_weight: 0.15
+      storage:
+        backend: "sqlite_vec"
+        sqlite_path: data/memory/memory.db
+        dimension: 4096
+      scenes:
+        entry_threshold: 16
+        char_threshold: 10000
+        silence_minutes: 30
+        hook_chars: 2000
+        summary_chars: 8000
 
     # ── 向量模块 ──────────────────────────────────────────
     vector:

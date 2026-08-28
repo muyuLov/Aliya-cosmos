@@ -599,3 +599,71 @@ class ConversationService:
         if usage is not None:
             async with self._lock:
                 self._usage += usage
+
+    # ── LLMService 协议兼容 ──────────────────────────────────────────────────
+
+    class CompletionResponse:
+        """简化响应结构，兼容 OpenAI 风格的 choices 嵌套访问。"""
+
+        def __init__(self, content: str, usage: TokenUsage) -> None:
+            self.choices = [self._Choice(content)]
+
+        class _Choice:
+            def __init__(self, content: str) -> None:
+                self.message = self._Message(content)
+
+            class _Message:
+                def __init__(self, content: str) -> None:
+                    self.content = content
+
+    async def create_completion(
+        self, messages: list[dict[str, Any]], **kwargs: Any
+    ) -> CompletionResponse:
+        """实现 LLMService 协议，供 Narrator 调用。
+
+        将 messages 转换为 asend_chat 调用，返回 OpenAI 风格响应。
+        """
+        # 提取 response_format 放入 extra
+        response_format = kwargs.pop("response_format", None)
+        if response_format is not None:
+            kwargs.setdefault("extra", {})["response_format"] = response_format
+
+        # 从 messages 中提取用户消息（最后一条用户消息）
+        user_input = ""
+        images = None
+        for msg in reversed(messages):
+            if msg.get("role") == "user":
+                content = msg.get("content", "")
+                if isinstance(content, str):
+                    user_input = content
+                elif isinstance(content, list):
+                    # 多模态内容：提取文本和图片
+                    for part in content:
+                        if part.get("type") == "text":
+                            user_input = part.get("text", "")
+                        elif part.get("type") == "image_url":
+                            if images is None:
+                                images = []
+                            images.append(part.get("image_url", {}).get("url", ""))
+                break
+
+        # 设置系统提示词（如果有）
+        system_prompt = None
+        for msg in messages:
+            if msg.get("role") == "system":
+                system_prompt = msg.get("content", "")
+                break
+
+        if system_prompt:
+            await self.set_system_prompt(system_prompt)
+
+        # 调用 asend_chat
+        response = await self.asend_chat(
+            user_input=user_input,
+            images=images,
+            store_history=False,  # 不写入历史，因为这是临时调用
+            **kwargs,
+        )
+
+        # 包装为 CompletionResponse
+        return self.CompletionResponse(response.content, response.usage)

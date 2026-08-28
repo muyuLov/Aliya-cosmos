@@ -102,7 +102,7 @@ class AgentLoop:
     # ── 主入口 ────────────────────────────────────────────
 
     async def submit_user_message(
-        self, text: str, images: list[str] | None = None  # noqa: ARG002
+        self, text: str, images: list[str] | None = None
     ) -> AsyncGenerator[AgentEvent | ProtocolEvent, None]:
         """异步生成器：四阶段状态机，逐条产出事件。"""
         self.reset_abort()
@@ -114,6 +114,10 @@ class AgentLoop:
             story_id=self._story_id,
             participant_id=self._participant_id,
         )
+
+        # 注入图片（如有）
+        if images:
+            context_json["images"] = images
 
         # 注入 Alter 状态到上下文
         if self._alter_state is not None:
